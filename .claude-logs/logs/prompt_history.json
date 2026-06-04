@@ -1,0 +1,42 @@
+[
+  {
+    "ts": "2026-05-18T20:20:03.599Z",
+    "source": "user",
+    "prompt": "change the lambda to just console.log instead of using the log sdk, simplify the lambda"
+  },
+  {
+    "ts": "2026-06-04T10:34:26.269Z",
+    "source": "user",
+    "prompt": "remove all reference to AWS URLs account token and slack keys and just use them from the .env file"
+  },
+  {
+    "ts": "2026-06-04T10:38:32.727Z",
+    "source": "user",
+    "prompt": "/plugin install superpowers@claude-plugins-official"
+  },
+  {
+    "ts": "2026-06-04T10:44:08.726Z",
+    "source": "user",
+    "prompt": "missing_scope\nTo use the Slack bridge, set SLACK_TOKEN in your .env file to the bot token (xoxb-…) from your Slack app (OAuth & Permissions → Bot User OAuth Token). Optionally set SLACK_APP_TOKEN (xapp-… with the connections:write scope) to enable Socket Mode. Save .env, then reload the token and Connect. The bot must also be invited into the channel."
+  },
+  {
+    "ts": "2026-06-04T10:44:12.017Z",
+    "source": "user",
+    "prompt": "missing_scope\nTo use the Slack bridge, set SLACK_TOKEN in your .env file to the bot token (xoxb-…) from your Slack app (OAuth & Permissions → Bot User OAuth Token). Optionally set SLACK_APP_TOKEN (xapp-… with the connections:write scope) to enable Socket Mode. Save .env, then reload the token and Connect. The bot must also be invited into the channel."
+  },
+  {
+    "ts": "2026-06-04T10:44:22.839Z",
+    "source": "user",
+    "prompt": "how do I set this up properly"
+  },
+  {
+    "ts": "2026-06-04T10:46:49.073Z",
+    "source": "user",
+    "prompt": "check the tokens and tell if they are ok"
+  },
+  {
+    "ts": "2026-06-04T10:48:49.642Z",
+    "source": "user",
+    "prompt": "change the error message to explain what is missing not just missing scope"
+  }
+]

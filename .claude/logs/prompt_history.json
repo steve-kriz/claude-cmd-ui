@@ -1,0 +1,17 @@
+[
+  {
+    "ts": "2026-05-13T23:06:59.934Z",
+    "source": "user",
+    "prompt": "claude"
+  },
+  {
+    "ts": "2026-05-13T23:07:46.150Z",
+    "source": "user",
+    "prompt": "change the logs to post into .claude-logs folder instead of .claude"
+  },
+  {
+    "ts": "2026-05-13T23:45:43.231Z",
+    "source": "queue",
+    "prompt": "add search ability to folder view, control-f can search within a file and also the folders"
+  }
+]

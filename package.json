@@ -1,0 +1,25 @@
+{
+  "name": "claude-cmd-ui",
+  "productName": "Claude CMD UI",
+  "version": "0.1.0",
+  "description": "Folder picker + embedded cmd (claude) and Git Bash terminals with AWS SSO Dev/Prod switcher",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron-forge start",
+    "package": "electron-forge package",
+    "make": "electron-forge make"
+  },
+  "author": "Steve Krizanovic",
+  "license": "UNLICENSED",
+  "private": true,
+  "dependencies": {
+    "@lydell/node-pty": "^1.1.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "^7.6.0",
+    "@electron-forge/plugin-auto-unpack-natives": "^7.6.0",
+    "electron": "^34.0.0"
+  }
+}

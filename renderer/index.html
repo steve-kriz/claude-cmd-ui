@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; connect-src 'self' wss://*.slack.com;" />
+  <title>Claude CMD UI</title>
+  <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
+  <link rel="stylesheet" href="styles.css" />
+  <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+</head>
+<body>
+  <header id="header">
+    <div id="workspaceTabs" class="workspace-tabs"></div>
+    <button id="newTabBtn" title="Open another folder in a new tab">+ Folder…</button>
+  </header>
+
+  <main id="empty-state">
+    <div class="empty-msg">
+      <h1>Claude CMD UI</h1>
+      <p>Pick a folder to open <code>cmd.exe</code> (with <code>claude</code>) and <code>Git Bash</code> side-by-side. Use <strong>+ Folder…</strong> to open more folders in their own tabs.</p>
+      <button id="browseBtn2">Browse Folder…</button>
+    </div>
+  </main>
+
+  <div id="workspaces"></div>
+
+  <div id="secretModal" class="secret-modal hidden">
+    <div class="secret-modal-card">
+      <div class="secret-modal-title">Enter value</div>
+      <div class="secret-modal-desc"></div>
+      <input class="secret-modal-input" type="text" spellcheck="false" autocomplete="off" />
+      <div class="secret-modal-error"></div>
+      <div class="secret-modal-actions">
+        <button class="secret-modal-cancel small-btn">Cancel</button>
+        <button class="secret-modal-save small-btn primary-btn">Save to .env</button>
+      </div>
+    </div>
+  </div>
+
+  <template id="workspaceTpl">
+    <main class="workspace">
+      <section class="cmdPane pane">
+        <div class="pane-header">
+          <span class="pane-title">cmd · claude <span class="claudeStatus pane-subtitle">(checking…)</span></span>
+          <div class="queue-controls">
+            <button class="logsToggleBtn logs-toggle" title="Show prompt history">
+              Logs <span class="logsCount logs-count">0</span>
+            </button>
+            <button class="queueToggleBtn queue-toggle" title="Show queued prompts">
+              Queue <span class="queueCount queue-count">0</span>
+            </button>
+            <button class="addPromptBtn small-btn add-prompt-btn">+ Queue Prompt</button>
+          </div>
+        </div>
+        <div class="queuePanel queue-panel hidden">
+          <div class="queue-panel-header">
+            <span class="queue-panel-title">Queued prompts <span class="queue-panel-hint">— auto-sent when claude becomes idle</span></span>
+            <button class="queueClearBtn small-btn">Clear all</button>
+          </div>
+          <ul class="queueList queue-list"></ul>
+          <div class="queue-editor hidden">
+            <textarea class="queueInput queue-input" rows="3" placeholder="Type the next prompt for claude…"></textarea>
+            <div class="queue-editor-actions">
+              <button class="queueCancelBtn small-btn">Cancel</button>
+              <button class="queueSaveBtn small-btn primary-btn">Add to queue</button>
+            </div>
+          </div>
+        </div>
+        <div class="logsPanel logs-panel hidden">
+          <div class="queue-panel-header">
+            <span class="queue-panel-title">Prompt history <span class="queue-panel-hint">— saved to .claude-logs/logs/prompt_history.json</span></span>
+            <button class="logsRefreshBtn small-btn">Refresh</button>
+            <button class="logsClearBtn small-btn">Clear</button>
+          </div>
+          <ul class="logsList logs-list"></ul>
+        </div>
+        <div class="claudeInstallBanner install-banner hidden">
+          <div class="install-banner-text">
+            <strong>claude CLI not found.</strong>
+            Install it to launch automatically when you open a folder.
+          </div>
+          <div class="install-banner-actions">
+            <button class="claudeInstallNpmBtn small-btn primary-btn">Install via npm</button>
+            <button class="claudeInstallPwshBtn small-btn">Install via PowerShell</button>
+            <button class="claudeOpenDocsBtn small-btn">Install docs…</button>
+            <button class="claudeRecheckBtn small-btn">Re-check</button>
+            <button class="claudeLaunchBtn small-btn" disabled>Launch claude</button>
+          </div>
+        </div>
+        <div class="cmdTerm term"></div>
+      </section>
+
+      <div class="splitter"></div>
+
+      <section class="bashPane pane">
+        <div class="pane-header tab-bar">
+          <button class="tab-btn active" data-tab="bash">Git Bash</button>
+          <button class="tab-btn" data-tab="files">File Explorer</button>
+          <button class="tab-btn" data-tab="slack">Slack <span class="slackTabDot slack-tab-dot hidden"></span></button>
+          <button class="tab-btn" data-tab="git">Git</button>
+          <button class="tab-btn" data-tab="diff">Change Viewer <span class="changeCount change-count hidden">0</span></button>
+          <button class="tab-btn" data-tab="tests">Tests</button>
+        </div>
+
+        <div class="tab-views">
+          <div class="tab-view active" data-view="bash">
+            <div class="bash-subtoolbar">
+              <div class="awsEnvMenu aws-env-menu">
+                <button class="awsEnvBtn small-btn primary-btn" title="Choose an AWS environment to sign in to">AWS environment ▾</button>
+                <div class="awsEnvPopup aws-env-popup hidden">
+                  <div class="aws-env-popup-head">
+                    <button class="envLoadBtn small-btn primary-btn" title="Sign in to AWS SSO and list every account you can access">List accounts ↻</button>
+                    <label class="profile-picker" title="Which ~/.aws/credentials profile the token is written to. Any profile other than default also updates default.">
+                      Profile
+                      <select class="profileSelect"><option value="default">default</option></select>
+                    </label>
+                    <button class="profileReloadBtn small-btn" title="Reload profiles from ~/.aws/credentials">↻</button>
+                  </div>
+                  <div class="envBtns env-btns"></div>
+                </div>
+              </div>
+              <span class="statusChip status-chip">—</span>
+            </div>
+            <div class="rolePicker role-picker hidden">
+              <div class="role-picker-title">Pick a role for <span class="rolePickerEnv"></span>:</div>
+              <div class="rolePickerList role-picker-list"></div>
+              <div class="role-picker-actions">
+                <button class="rolePickerCancel small-btn">Cancel</button>
+              </div>
+            </div>
+            <div class="bashTerm term"></div>
+          </div>
+
+          <div class="tab-view" data-view="files">
+            <div class="view-toolbar">
+              <span class="view-title">Files</span>
+              <label class="filter-check"><input type="checkbox" class="filterReadme" /> Readme</label>
+              <label class="filter-check"><input type="checkbox" class="filterChanges" /> Changes</label>
+              <span class="fileViewerPath file-viewer-path"></span>
+              <span class="fileDirtyChip file-dirty hidden">●&nbsp;unsaved</span>
+              <button class="fileSaveBtn small-btn" disabled>Save</button>
+              <button class="fileRenameBtn small-btn" disabled>Rename…</button>
+              <button class="fileReloadBtn small-btn" disabled>Reload</button>
+              <button class="filesRefresh small-btn">Refresh</button>
+            </div>
+            <div class="fileRenameRow file-rename hidden">
+              <span class="file-rename-label">Rename to:</span>
+              <input class="fileRenameInput" type="text" />
+              <button class="fileRenameConfirm small-btn primary-btn">Rename</button>
+              <button class="fileRenameCancel small-btn">Cancel</button>
+              <span class="fileRenameError file-rename-error"></span>
+            </div>
+            <div class="filesFindBar files-find-bar hidden">
+              <div class="files-find-scope">
+                <button class="filesFindScopeBtn small-btn active" data-scope="tree" title="Filter tree by file/folder name">Tree</button>
+                <button class="filesFindScopeBtn small-btn" data-scope="content" title="Search file names and contents in this folder">Content</button>
+                <button class="filesFindScopeBtn small-btn" data-scope="editor" title="Find within the open file">File</button>
+              </div>
+              <input class="filesFindInput files-find-input" type="text" placeholder="Find in file — Enter / → again to search all files" spellcheck="false" />
+              <span class="filesFindCount files-find-count"></span>
+              <button class="filesFindPrev small-btn" title="Previous match (Shift+Enter)">‹</button>
+              <button class="filesFindNext small-btn" title="Next match (Enter)">›</button>
+              <button class="filesFindClose small-btn" title="Close (Esc)">×</button>
+            </div>
+            <div class="files-layout">
+              <div class="filesTree tree scroll-area" tabindex="0"></div>
+              <div class="file-edit-area">
+                <div class="file-editor-wrap">
+                  <div class="fileFindOverlay file-find-overlay" aria-hidden="true"><div class="fileFindOverlayInner file-find-overlay-inner"></div></div>
+                  <textarea class="fileEditor file-editor scroll-area" spellcheck="false" placeholder="(click a file to view)"></textarea>
+                </div>
+                <pre class="fileBinaryMsg file-viewer scroll-area hidden"></pre>
+              </div>
+            </div>
+          </div>
+
+          <div class="tab-view" data-view="slack">
+            <div class="view-toolbar slack-toolbar">
+              <span class="view-title">Slack</span>
+              <span class="slackStatus slack-status">not connected</span>
+              <label class="filter-check slackPollLabel" title="Listen for new channel messages and push them to Claude (real-time via Socket Mode when an app token is set, otherwise polling)">
+                <input type="checkbox" class="slackPollToggle" /> Live
+              </label>
+              <button class="slackConnectBtn small-btn primary-btn">Connect…</button>
+              <button class="slackDisconnectBtn small-btn hidden">Disconnect</button>
+            </div>
+
+            <div class="slackConnectPanel slack-connect-panel">
+              <div class="slack-connect-intro">
+                Connect a Slack channel to this project. Messages posted in the channel are
+                pushed to the Claude window as prompts, and Claude's replies are posted back.
+                The bot token is read from the <code>SLACK_TOKEN</code> variable in your
+                <code>.env</code> file (the bot token, <code>xoxb-…</code>). The
+                bot must still be invited into the target channel.
+                When an app-level token (<code>SLACK_APP_TOKEN</code>,
+                an <code>xapp-…</code> with <code>connections:write</code>) is present, the channel
+                stays live over a persistent <strong>Socket Mode</strong> WebSocket; otherwise it
+                falls back to polling.
+              </div>
+
+              <div class="slack-secret-block">
+                <div class="git-form-actions">
+                  <button class="slackLoadTokenBtn small-btn primary-btn">Load token from .env</button>
+                  <span class="slackTokenStatus slack-signin-status"></span>
+                </div>
+                <div class="slack-oauth-hint">
+                  Set <code>SLACK_TOKEN</code> in <code>.env</code> first. If loading fails,
+                  add or fix the value and reload. You can also just hit <strong>Connect</strong>
+                  below — the token is loaded automatically.
+                </div>
+              </div>
+
+              <div class="git-form-row">
+                <label class="git-form-label">Channel</label>
+                <input class="slackChannelInput git-input" type="text" placeholder="#project-channel or C0123456789" spellcheck="false" />
+              </div>
+              <div class="git-form-row">
+                <label class="git-form-label">Poll every</label>
+                <select class="slackIntervalSelect git-input">
+                  <option value="3000">3 seconds</option>
+                  <option value="5000" selected>5 seconds</option>
+                  <option value="10000">10 seconds</option>
+                  <option value="30000">30 seconds</option>
+                </select>
+                <label class="git-form-check"><input class="slackPostReplies" type="checkbox" checked /> Post Claude's replies back to Slack</label>
+              </div>
+              <div class="git-form-actions">
+                <button class="slackTestConnectBtn small-btn primary-btn">Connect</button>
+                <span class="slackConnectError slack-connect-error"></span>
+              </div>
+            </div>
+
+            <div class="slackChat slack-chat hidden">
+              <div class="slackMessages slack-messages scroll-area">
+                <div class="slack-empty">No messages yet. Say something in the channel.</div>
+              </div>
+              <div class="slack-composer">
+                <textarea class="slackComposerInput slack-composer-input" rows="2" placeholder="Send a message to the channel (and Claude)…"></textarea>
+                <button class="slackSendBtn small-btn primary-btn">Send</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="tab-view" data-view="git">
+            <div class="gitAuthGate git-auth-gate hidden">
+              <div class="git-auth-gate-title">Sign in to use the Git tab</div>
+              <div class="git-auth-gate-msg">
+                You must authenticate with GitHub (<code>gh auth login</code>) before
+                you can run any commands in this tab.
+                <span class="gitAuthStatus git-auth-status">checking…</span>
+              </div>
+              <div class="git-auth-gate-actions">
+                <button class="gitAuthLoginBtn small-btn primary-btn">Login with gh</button>
+                <button class="gitAuthRecheckBtn small-btn">I've logged in — re-check</button>
+              </div>
+              <pre class="gitAuthHint git-auth-hint">Login runs in the Git Bash tab. Follow the prompts (device code / browser) to complete sign-in, then come back and click re-check.</pre>
+            </div>
+            <div class="gitAuthed git-authed-content">
+            <div class="view-toolbar git-toolbar">
+              <div class="git-toolbar-row git-toolbar-info">
+                <span class="view-title">Branch:</span>
+                <span class="gitBranch branch-chip">—</span>
+                <span class="gitHeader branch-header"></span>
+                <span class="gitAheadBehind ahead-behind"></span>
+              </div>
+              <div class="git-toolbar-row git-toolbar-actions">
+                <button class="publishBtn small-btn">Publish to GitHub…</button>
+                <button class="commitPushBtn small-btn">Commit &amp; Push…</button>
+                <button class="prBtn small-btn">Pull Request…</button>
+                <button class="runActionBtn small-btn">Run Action…</button>
+                <button class="gitRefresh small-btn">Refresh</button>
+                <button class="gitLogoutBtn small-btn">Logout</button>
+              </div>
+            </div>
+
+            <div class="commitPanel git-action-panel hidden">
+              <div class="git-panel-title">Commit &amp; Push <span class="commitAheadBehind ahead-behind"></span></div>
+              <section class="git-section" data-section="commit-form">
+                <div class="git-section-header">
+                  <span class="git-section-toggle" aria-hidden="true">▾</span>
+                  <span class="git-section-title">Details</span>
+                </div>
+                <div class="git-section-body">
+                  <div class="git-form-row">
+                    <label class="git-form-label">Branch</label>
+                    <input class="commitBranchInput git-input" type="text" placeholder="branch name" />
+                    <label class="git-form-check"><input class="commitNewBranch" type="checkbox" /> New branch</label>
+                  </div>
+                  <div class="git-form-row">
+                    <label class="git-form-label">Message</label>
+                    <textarea class="commitMessageInput git-input git-textarea" rows="3" placeholder="Commit message"></textarea>
+                  </div>
+                  <div class="git-form-row git-form-options">
+                    <label class="git-form-check"><input class="commitStageAll" type="checkbox" checked /> Stage all changes (git add -A)</label>
+                    <label class="git-form-check"><input class="commitPushToggle" type="checkbox" checked /> Push to origin</label>
+                    <label class="git-form-check"><input class="commitSetUpstream" type="checkbox" checked /> Set upstream (-u)</label>
+                  </div>
+                  <div class="git-form-actions">
+                    <button class="commitCancelBtn small-btn">Cancel</button>
+                    <button class="commitRunBtn small-btn primary-btn">Run</button>
+                  </div>
+                  <pre class="commitLog git-op-log scroll-area"></pre>
+                </div>
+              </section>
+              <section class="git-section" data-section="checkins">
+                <div class="git-section-header">
+                  <span class="git-section-toggle" aria-hidden="true">▾</span>
+                  <span class="git-section-title">Recent check-ins</span>
+                  <span class="commitCheckinsCount checkins-count">—</span>
+                  <button class="commitCheckinsRefreshBtn small-btn git-section-action">Refresh</button>
+                </div>
+                <div class="git-section-body">
+                  <ul class="commitCheckinsList checkins-list scroll-area">(open the panel to load)</ul>
+                </div>
+              </section>
+            </div>
+
+            <div class="publishPanel git-action-panel hidden">
+              <div class="git-panel-title">Publish to GitHub <span class="ghStatus gh-status"></span></div>
+              <section class="git-section" data-section="publish-form">
+                <div class="git-section-header">
+                  <span class="git-section-toggle" aria-hidden="true">▾</span>
+                  <span class="git-section-title">Details</span>
+                </div>
+                <div class="git-section-body">
+                  <div class="git-form-row">
+                    <label class="git-form-label">Owner</label>
+                    <select class="publishOwnerSelect git-input"><option value="">(loading…)</option></select>
+                    <button class="publishOwnerReloadBtn small-btn">Reload</button>
+                  </div>
+                  <div class="git-form-row">
+                    <label class="git-form-label">Repo name</label>
+                    <input class="publishRepoInput git-input" type="text" placeholder="name (just the repo)" />
+                  </div>
+                  <div class="git-form-row">
+                    <label class="git-form-label">Visibility</label>
+                    <label class="git-form-check"><input type="radio" name="publishVisibility" class="publishVis" value="private" checked /> Private</label>
+                    <label class="git-form-check"><input type="radio" name="publishVisibility" class="publishVis" value="public" /> Public</label>
+                    <label class="git-form-check"><input type="radio" name="publishVisibility" class="publishVis" value="internal" /> Internal</label>
+                  </div>
+                  <div class="git-form-row">
+                    <label class="git-form-label">Description</label>
+                    <input class="publishDescInput git-input" type="text" placeholder="(optional)" />
+                  </div>
+                  <div class="git-form-row">
+                    <label class="git-form-label">Initial commit</label>
+                    <input class="publishCommitInput git-input" type="text" placeholder="Initial commit" />
+                  </div>
+                  <div class="git-form-actions">
+                    <button class="publishCancelBtn small-btn">Cancel</button>
+                    <button class="publishRunBtn small-btn primary-btn">Create &amp; Push</button>
+                  </div>
+                  <pre class="publishLog git-op-log scroll-area"></pre>
+                </div>
+              </section>
+            </div>
+
+            <div class="prPanel git-action-panel hidden">
+              <div class="git-panel-title">
+                Pull Request
+                <span class="prGhStatus gh-status"></span>
+                <span class="prCurrent pr-current"></span>
+              </div>
+              <section class="git-section" data-section="form">
+                <div class="git-section-header">
+                  <span class="git-section-toggle" aria-hidden="true">▾</span>
+                  <span class="git-section-title">PR details</span>
+                </div>
+                <div class="git-section-body">
+                  <div class="git-form-row">
+                    <label class="git-form-label">Title</label>
+                    <input class="prTitleInput git-input" type="text" placeholder="PR title" />
+                  </div>
+                  <div class="git-form-row">
+                    <label class="git-form-label">Base branch</label>
+                    <input class="prBaseInput git-input" type="text" placeholder="main" />
+                  </div>
+                  <div class="git-form-row">
+                    <label class="git-form-label">Body</label>
+                    <textarea class="prBodyInput git-input git-textarea" rows="4" placeholder="Description (optional)"></textarea>
+                  </div>
+                  <div class="git-form-row git-form-options">
+                    <label class="git-form-check"><input class="prDraftToggle" type="checkbox" /> Create as draft</label>
+                  </div>
+                  <div class="git-form-actions">
+                    <button class="prCancelBtn small-btn">Close</button>
+                    <button class="prRefreshBtn small-btn">Refresh reviews</button>
+                    <button class="prSendToClaudeBtn small-btn" disabled title="Bundle all PR comments into a prompt and queue it for Claude">Send to Claude</button>
+                    <button class="prCreateBtn small-btn primary-btn">Create PR</button>
+                  </div>
+                  <pre class="prLog git-op-log scroll-area"></pre>
+                </div>
+              </section>
+              <section class="git-section" data-section="open-prs">
+                <div class="git-section-header">
+                  <span class="git-section-toggle" aria-hidden="true">▾</span>
+                  <span class="git-section-title">Open pull requests</span>
+                  <span class="prOpenCount pr-open-count">—</span>
+                  <button class="prOpenRefreshBtn small-btn git-section-action">Refresh</button>
+                </div>
+                <div class="git-section-body">
+                  <ul class="prOpenList pr-open-list scroll-area">(open the panel to load)</ul>
+                </div>
+              </section>
+              <section class="git-section git-section-grow" data-section="reviews">
+                <div class="git-section-header">
+                  <span class="git-section-toggle" aria-hidden="true">▾</span>
+                  <span class="git-section-title">Reviews &amp; comments</span>
+                  <span class="prReviewsFor pr-reviews-for"></span>
+                </div>
+                <div class="git-section-body">
+                  <div class="prReviewsList pr-reviews-list scroll-area">(select a pull request)</div>
+                </div>
+              </section>
+            </div>
+
+            <div class="actionPanel git-action-panel hidden">
+              <div class="git-panel-title">Run GitHub Action <span class="actionGhStatus gh-status"></span></div>
+              <section class="git-section" data-section="action-form">
+                <div class="git-section-header">
+                  <span class="git-section-toggle" aria-hidden="true">▾</span>
+                  <span class="git-section-title">Details</span>
+                </div>
+                <div class="git-section-body">
+                  <div class="git-form-row">
+                    <label class="git-form-label">Workflow</label>
+                    <select class="actionWorkflowSelect git-input"><option value="">(loading…)</option></select>
+                    <button class="actionReloadWorkflowsBtn small-btn">Reload</button>
+                  </div>
+                  <div class="git-form-row">
+                    <label class="git-form-label">Ref / branch</label>
+                    <select class="actionRefSelect git-input"><option value="">(loading…)</option></select>
+                    <button class="actionRefReloadBtn small-btn">Reload</button>
+                    <span class="actionRefHint pane-subtitle"></span>
+                  </div>
+                  <div class="actionInputsBlock action-inputs-block">
+                    <div class="action-inputs-title">Inputs <span class="actionInputsHint pane-subtitle"></span></div>
+                    <div class="actionInputsFields action-inputs-fields"></div>
+                    <div class="actionInputsFallback action-inputs-fallback hidden">
+                      <textarea class="actionInputsInput git-input git-textarea" rows="3" placeholder="One per line: key=value (optional)"></textarea>
+                    </div>
+                  </div>
+                  <div class="git-form-actions">
+                    <button class="actionCancelBtn small-btn">Cancel</button>
+                    <button class="actionRunBtn small-btn primary-btn">Run workflow</button>
+                    <button class="actionOpenRunBtn small-btn hidden" title="Open the run that was just triggered">Open run ↗</button>
+                  </div>
+                  <pre class="actionLog git-op-log scroll-area"></pre>
+                </div>
+              </section>
+            </div>
+
+            <pre class="gitStatus git-status scroll-area">(open a folder)</pre>
+            </div>
+          </div>
+
+          <div class="tab-view" data-view="diff">
+            <div class="view-toolbar">
+              <span class="view-title">Changes</span>
+              <button class="diffRefresh small-btn">Refresh</button>
+            </div>
+            <div class="diff-layout">
+              <ul class="diffFileList diff-files scroll-area"></ul>
+              <div class="diffContent diff-content scroll-area">(select a file)</div>
+            </div>
+          </div>
+
+          <div class="tab-view" data-view="tests">
+            <div class="view-toolbar">
+              <span class="view-title">Tests</span>
+              <span class="testsCount tests-count">—</span>
+              <button class="testsRefresh small-btn">Refresh</button>
+            </div>
+            <div class="tests-layout scroll-area">
+              <details class="tests-group unitTestsGroup" open>
+                <summary>
+                  <span class="tests-group-chevron">▸</span>
+                  <span class="tests-group-label">Unit tests</span>
+                  <span class="unitTestsCount tests-group-count">0</span>
+                  <button class="unitTestsUpdateBtn small-btn">Update unit tests</button>
+                  <button class="unitTestsRunAllBtn small-btn hidden">Run all</button>
+                </summary>
+                <div class="unitTestsBody tests-group-body">(open a folder)</div>
+              </details>
+              <details class="tests-group uiTestsGroup" open>
+                <summary>
+                  <span class="tests-group-chevron">▸</span>
+                  <span class="tests-group-label">UI tests</span>
+                  <span class="uiTestsCount tests-group-count">0</span>
+                  <label class="uiTestsHeadedLabel tests-watch-label" title="Run the browser visibly (appends --headed to the test command)">
+                    <input type="checkbox" class="uiTestsHeaded"> headed
+                  </label>
+                  <label class="uiTestsWatchLabel tests-watch-label" title="Stream test output here instead of switching to Git Bash">
+                    <input type="checkbox" class="uiTestsWatch"> watch
+                  </label>
+                  <button class="uiTestsRunAllBtn small-btn hidden">Run all</button>
+                </summary>
+                <div class="uiTestsBody tests-group-body">(open a folder)</div>
+                <pre class="uiTestsOutput tests-output hidden"></pre>
+              </details>
+            </div>
+          </div>
+
+        </div>
+      </section>
+    </main>
+  </template>
+
+  <template id="workspaceTabTpl">
+    <div class="ws-tab status-idle" role="button" draggable="true">
+      <span class="ws-tab-dot"></span>
+      <span class="ws-tab-label">…</span>
+      <span class="ws-tab-queue hidden" title="Queued prompts">0</span>
+      <button class="ws-tab-close" title="Close tab">×</button>
+    </div>
+  </template>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
