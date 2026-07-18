@@ -36,7 +36,7 @@ function persistSession() {
   for (const btn of dom.workspaceTabs.children) {
     for (const [, t] of TABS) {
       if (t.els.tabBtn === btn && t.folder) {
-        folders.push(t.folder);
+        folders.push({ path: t.folder, agent: t.agent === 'opencode' ? 'opencode' : 'claude' });
         break;
       }
     }
@@ -186,6 +186,7 @@ function createTab() {
   const tab = {
     id,
     folder: null,
+    agent: 'claude',
     cmd: { id: null, term: null, fit: null },
     bash: { id: null, term: null, fit: null },
     activeSubTab: 'bash',
@@ -233,12 +234,30 @@ function createTab() {
       socketReconnectTimer: null,
       socketReconnectDelay: 1000,
       lastTs: '0',
+      // Separate baseline for thread-reply polling (conversations.replies). The
+      // channel history and the anchor thread advance independently, so replies
+      // use their own oldest cursor to avoid missing any. See pollSlackOnce.
+      lastReplyTs: '0',
       seenTs: new Set(),
       messages: [],
       inbox: [],
       awaitingResponse: false,
       captureBuffer: '',
-      replyThreadTs: null
+      replyThreadTs: null,
+      // The single anchor thread for this connect session. All outbound posts
+      // and inbound-reply gating use this thread_ts; null means the proxy is
+      // inactive (no-op in both directions). See lib/slack-proxy.js.
+      threadTs: null
+    },
+    tasks: {
+      pollTimer: null,
+      fetching: false,
+      reconciling: false,
+      tickets: new Map(),
+      skillInstalled: null,
+      lastSig: '',
+      autoBuild: false,
+      lanesBound: false
     },
     els: {
       ws,
@@ -251,6 +270,7 @@ function createTab() {
       splitter: ws.querySelector('.splitter'),
       cmdTerm: ws.querySelector('.cmdTerm'),
       bashTerm: ws.querySelector('.bashTerm'),
+      agentSelect: ws.querySelector('.agentSelect'),
       claudeStatus: ws.querySelector('.claudeStatus'),
       claudeBanner: ws.querySelector('.claudeInstallBanner'),
       claudeInstallNpmBtn: ws.querySelector('.claudeInstallNpmBtn'),
@@ -258,6 +278,11 @@ function createTab() {
       claudeOpenDocsBtn: ws.querySelector('.claudeOpenDocsBtn'),
       claudeRecheckBtn: ws.querySelector('.claudeRecheckBtn'),
       claudeLaunchBtn: ws.querySelector('.claudeLaunchBtn'),
+      opencodeBanner: ws.querySelector('.opencodeInstallBanner'),
+      opencodeInstallBtn: ws.querySelector('.opencodeInstallBtn'),
+      opencodeOpenDocsBtn: ws.querySelector('.opencodeOpenDocsBtn'),
+      opencodeRecheckBtn: ws.querySelector('.opencodeRecheckBtn'),
+      opencodeLaunchBtn: ws.querySelector('.opencodeLaunchBtn'),
       queueToggleBtn: ws.querySelector('.queueToggleBtn'),
       queueCount: ws.querySelector('.queueCount'),
       addPromptBtn: ws.querySelector('.addPromptBtn'),
@@ -295,6 +320,8 @@ function createTab() {
       fileSaveBtn: ws.querySelector('.fileSaveBtn'),
       fileRenameBtn: ws.querySelector('.fileRenameBtn'),
       fileReloadBtn: ws.querySelector('.fileReloadBtn'),
+      filePreviewBtn: ws.querySelector('.filePreviewBtn'),
+      filePreview: ws.querySelector('.filePreview'),
       fileRenameRow: ws.querySelector('.fileRenameRow'),
       fileRenameInput: ws.querySelector('.fileRenameInput'),
       fileRenameConfirm: ws.querySelector('.fileRenameConfirm'),
@@ -314,6 +341,11 @@ function createTab() {
       logsList: ws.querySelector('.logsList'),
       logsRefreshBtn: ws.querySelector('.logsRefreshBtn'),
       logsClearBtn: ws.querySelector('.logsClearBtn'),
+      gitNotInstalledGate: ws.querySelector('.gitNotInstalledGate'),
+      gitInstallStatus: ws.querySelector('.gitInstallStatus'),
+      gitInstallWingetBtn: ws.querySelector('.gitInstallWingetBtn'),
+      gitInstallDownloadBtn: ws.querySelector('.gitInstallDownloadBtn'),
+      gitInstallRecheckBtn: ws.querySelector('.gitInstallRecheckBtn'),
       gitAuthGate: ws.querySelector('.gitAuthGate'),
       gitAuthStatus: ws.querySelector('.gitAuthStatus'),
       gitAuthLoginBtn: ws.querySelector('.gitAuthLoginBtn'),
@@ -411,6 +443,7 @@ function createTab() {
       slackConnectBtn: ws.querySelector('.slackConnectBtn'),
       slackDisconnectBtn: ws.querySelector('.slackDisconnectBtn'),
       slackConnectPanel: ws.querySelector('.slackConnectPanel'),
+      slackSignInBtn: ws.querySelector('.slackSignInBtn'),
       slackLoadTokenBtn: ws.querySelector('.slackLoadTokenBtn'),
       slackTokenStatus: ws.querySelector('.slackTokenStatus'),
       slackChannelInput: ws.querySelector('.slackChannelInput'),
@@ -421,7 +454,17 @@ function createTab() {
       slackChat: ws.querySelector('.slackChat'),
       slackMessages: ws.querySelector('.slackMessages'),
       slackComposerInput: ws.querySelector('.slackComposerInput'),
-      slackSendBtn: ws.querySelector('.slackSendBtn')
+      slackSendBtn: ws.querySelector('.slackSendBtn'),
+      tasksStatus: ws.querySelector('.tasksStatus'),
+      tasksConcurrency: ws.querySelector('.tasksConcurrency'),
+      tasksNewBtn: ws.querySelector('.tasksNewBtn'),
+      tasksBuildBtn: ws.querySelector('.tasksBuildBtn'),
+      tasksRefresh: ws.querySelector('.tasksRefresh'),
+      tasksSkillBanner: ws.querySelector('.tasksSkillBanner'),
+      tasksInstallSkillBtn: ws.querySelector('.tasksInstallSkillBtn'),
+      tasksEmpty: ws.querySelector('.tasksEmpty'),
+      tasksBoard: ws.querySelector('.tasksBoard'),
+      tasksLanes: ws.querySelectorAll('.tasks-lane')
     },
     uiTestWatch: { active: false }
   };
@@ -440,6 +483,15 @@ function createTab() {
     if (tab.filterReadme) await loadMdPaths(tab);
     renderFiles(tab);
   });
+  tab.els.tasksRefresh.addEventListener('click', () => pollTasksOnce(tab, true));
+  tab.els.tasksInstallSkillBtn.addEventListener('click', () => installOrchestrateSkill(tab));
+  tab.els.tasksNewBtn.addEventListener('click', () => openNewTaskModal(tab));
+  tab.els.tasksBuildBtn.addEventListener('click', () => toggleAutoBuild(tab));
+  if (tab.els.tasksConcurrency) {
+    tab.els.tasksConcurrency.addEventListener('change', () => onTasksConcurrencyChange(tab));
+    initTasksConcurrency(tab); // build options up front so the select is never empty
+  }
+  bindTaskLaneDrop(tab);
   tab.els.filterReadme.addEventListener('change', async () => {
     tab.filterReadme = tab.els.filterReadme.checked;
     if (!tab.folder) return;
@@ -458,6 +510,7 @@ function createTab() {
   tab.els.fileEditor.addEventListener('scroll', () => syncFileFindOverlayScroll(tab));
   tab.els.fileSaveBtn.addEventListener('click', () => saveCurrentFile(tab));
   tab.els.fileReloadBtn.addEventListener('click', () => reloadCurrentFile(tab));
+  tab.els.filePreviewBtn.addEventListener('click', () => toggleFilePreview(tab));
   tab.els.fileRenameBtn.addEventListener('click', () => openRenameRow(tab));
   tab.els.fileRenameCancel.addEventListener('click', () => closeRenameRow(tab));
   tab.els.fileRenameConfirm.addEventListener('click', () => confirmRename(tab));
@@ -503,6 +556,17 @@ function createTab() {
   tab.els.gitRefresh.addEventListener('click', () => refreshGitStatus(tab));
   tab.els.gitAuthLoginBtn.addEventListener('click', () => startGhLogin(tab));
   tab.els.gitAuthRecheckBtn.addEventListener('click', () => checkGitAuthAndGate(tab, true));
+  if (tab.els.gitInstallWingetBtn) {
+    tab.els.gitInstallWingetBtn.addEventListener('click', () => startGitInstall(tab));
+  }
+  if (tab.els.gitInstallDownloadBtn) {
+    tab.els.gitInstallDownloadBtn.addEventListener('click', () => {
+      if (window.api.openExternal) window.api.openExternal('https://git-scm.com/download/win');
+    });
+  }
+  if (tab.els.gitInstallRecheckBtn) {
+    tab.els.gitInstallRecheckBtn.addEventListener('click', () => checkGitAuthAndGate(tab, true));
+  }
   tab.els.gitLogoutBtn.addEventListener('click', () => startGhLogout(tab));
   tab.els.commitPushBtn.addEventListener('click', () => openCommitPanel(tab));
   tab.els.publishBtn.addEventListener('click', () => openPublishPanel(tab));
@@ -600,6 +664,7 @@ function createTab() {
 
   tab.els.slackConnectBtn.addEventListener('click', () => showSlackConnectForm(tab));
   tab.els.slackDisconnectBtn.addEventListener('click', () => disconnectSlack(tab));
+  tab.els.slackSignInBtn.addEventListener('click', () => signInWithSlack(tab));
   tab.els.slackLoadTokenBtn.addEventListener('click', () => ensureSlackToken(tab, true));
   tab.els.slackTestConnectBtn.addEventListener('click', () => connectSlack(tab));
   tab.els.slackPollToggle.addEventListener('change', () => {
@@ -629,6 +694,28 @@ function createTab() {
   tab.els.claudeLaunchBtn.addEventListener('click', () => {
     runInCmdPty(tab, 'claude');
     tab.els.claudeBanner.classList.add('hidden');
+  });
+
+  tab.els.agentSelect.addEventListener('change', () => {
+    const agent = tab.els.agentSelect.value === 'opencode' ? 'opencode' : 'claude';
+    if (agent === tab.agent) return;
+    tab.agent = agent;
+    persistSession();
+    if (!tab.folder) return;
+    launchCmdAgent(tab).catch((e) => console.error('[agentSelect]', e));
+  });
+
+  tab.els.opencodeInstallBtn.addEventListener('click', () => {
+    // opencode's official installer; runs in the Git Bash that now backs the cmd pane.
+    runInCmdPty(tab, 'curl -fsSL https://opencode.ai/install | bash');
+  });
+  tab.els.opencodeOpenDocsBtn.addEventListener('click', () => {
+    if (window.api.openExternal) window.api.openExternal('https://opencode.ai/docs/');
+  });
+  tab.els.opencodeRecheckBtn.addEventListener('click', () => recheckOpencode(tab));
+  tab.els.opencodeLaunchBtn.addEventListener('click', () => {
+    runInCmdPty(tab, 'opencode');
+    tab.els.opencodeBanner.classList.add('hidden');
   });
 
   tab.els.tabBtn.addEventListener('click', (e) => {
@@ -680,6 +767,7 @@ function closeTab(id) {
   if (tab.bash.id) { window.api.pty.kill(tab.bash.id); ptyToTab.delete(tab.bash.id); }
   if (tab.idleTimer) { clearTimeout(tab.idleTimer); tab.idleTimer = null; }
   if (tab.slack) stopSlackListening(tab);
+  if (tab.tasks && tab.tasks.pollTimer) { clearInterval(tab.tasks.pollTimer); tab.tasks.pollTimer = null; }
   try { tab.cmd.term && tab.cmd.term.dispose(); } catch (_) {}
   try { tab.bash.term && tab.bash.term.dispose(); } catch (_) {}
   tab.els.ws.remove();
@@ -816,6 +904,7 @@ async function openFolderInTab(tab, folder) {
   loadPromptLog(tab, false).catch((e) => console.error('[promptLog]', e));
 
   resetSlackForFolder(tab);
+  resetTasksForFolder(tab);
 
   if (!tab.cmd.term) {
     const t1 = makeTerminal(tab.els.cmdTerm);
@@ -833,10 +922,38 @@ async function openFolderInTab(tab, folder) {
   requestAnimationFrame(() => fitTab(tab));
 
   setTabStatus(tab, 'busy');
-  await detectClaude(tab);
-  await spawnTerm(tab, 'cmd', 'cmd', { cliCommand: 'claude' });
+  tab.els.agentSelect.value = tab.agent || 'claude';
+  await launchCmdAgent(tab);
   await spawnTerm(tab, 'bash', 'bash');
   persistSession();
+}
+
+// (Re)launch the chosen agent in the cmd pane. Claude runs in cmd.exe; openCode
+// runs in Git Bash. Switching agents kills the current cmd PTY and respawns it.
+async function launchCmdAgent(tab) {
+  const agent = tab.agent === 'opencode' ? 'opencode' : 'claude';
+  if (tab.cmd.id) {
+    await window.api.pty.kill(tab.cmd.id);
+    ptyToTab.delete(tab.cmd.id);
+    tab.cmd.id = null;
+  }
+  if (tab.cmd.term) tab.cmd.term.clear();
+
+  if (agent === 'opencode') {
+    tab.els.claudeBanner.classList.add('hidden');
+    const res = await detectOpencode(tab);
+    if (res.installed) {
+      await spawnTerm(tab, 'cmd', 'bash', { cliCommand: 'opencode' });
+    } else {
+      // Spawn a plain Git Bash so the install banner's commands have a shell to run in.
+      await spawnTerm(tab, 'cmd', 'bash');
+    }
+  } else {
+    tab.els.opencodeBanner.classList.add('hidden');
+    await detectClaude(tab);
+    await spawnTerm(tab, 'cmd', 'cmd', { cliCommand: 'claude' });
+  }
+  requestAnimationFrame(() => fitTab(tab));
 }
 
 async function detectClaude(tab) {
@@ -877,6 +994,43 @@ async function recheckClaude(tab) {
   }
 }
 
+async function detectOpencode(tab) {
+  try {
+    tab.els.claudeStatus.textContent = '(checking…)';
+    tab.els.claudeStatus.className = 'claudeStatus pane-subtitle';
+    const res = await window.api.cli.checkOpencode();
+    if (res && res.installed) {
+      const label = res.version ? `(opencode ${res.version})` : '(opencode found)';
+      tab.els.claudeStatus.textContent = label;
+      tab.els.claudeStatus.classList.add('ok');
+      tab.els.opencodeBanner.classList.add('hidden');
+      tab.opencodeInstalled = true;
+      return { installed: true };
+    }
+    tab.opencodeInstalled = false;
+    tab.els.claudeStatus.textContent = '(not installed)';
+    tab.els.claudeStatus.classList.add('bad');
+    tab.els.opencodeBanner.classList.remove('hidden');
+    tab.els.opencodeLaunchBtn.disabled = true;
+    return { installed: false };
+  } catch (err) {
+    console.error('[detectOpencode]', err);
+    tab.opencodeInstalled = false;
+    tab.els.claudeStatus.textContent = '(check failed)';
+    tab.els.claudeStatus.classList.add('bad');
+    tab.els.opencodeBanner.classList.remove('hidden');
+    return { installed: false };
+  }
+}
+
+async function recheckOpencode(tab) {
+  const res = await detectOpencode(tab);
+  // If opencode just became available, enable the manual launch button.
+  if (res.installed && tab.cmd.id) {
+    tab.els.opencodeLaunchBtn.disabled = false;
+  }
+}
+
 function runInCmdPty(tab, command) {
   if (!tab.cmd.id) {
     alert('cmd terminal is not running yet.');
@@ -894,12 +1048,16 @@ async function spawnTerm(tab, slot, shell, extra) {
   tab[slot].id = id;
   ptyToTab.set(id, { tab, slot });
   try { tab[slot].fit && tab[slot].fit.fit(); } catch (_) {}
-  tab[slot].term.onResize(({ cols, rows }) => window.api.pty.resize(id, cols, rows));
+  // Dispose listeners from any previous spawn into this terminal (agent switch)
+  // so input isn't written to the PTY more than once.
+  try { tab[slot].resizeListener && tab[slot].resizeListener.dispose(); } catch (_) {}
+  try { tab[slot].dataListener && tab[slot].dataListener.dispose(); } catch (_) {}
+  tab[slot].resizeListener = tab[slot].term.onResize(({ cols, rows }) => window.api.pty.resize(id, cols, rows));
   const { cols, rows } = tab[slot].term;
   const spawnOpts = { id, shell, cwd: tab.folder, cols, rows };
   if (extra && extra.cliCommand) spawnOpts.cliCommand = extra.cliCommand;
   await window.api.pty.spawn(spawnOpts);
-  tab[slot].term.onData((data) => {
+  tab[slot].dataListener = tab[slot].term.onData((data) => {
     window.api.pty.write(id, data);
     if (slot === 'cmd') {
       onCmdUserInput(tab);
@@ -953,6 +1111,7 @@ function setTabStatus(tab, status) {
     finalizePendingPromptEntry(tab);
     slackOnFinished(tab);
     tryDispatchNextPrompt(tab);
+    maybeContinueBuild(tab);
   }
 }
 
@@ -988,9 +1147,12 @@ function scheduleWaitingCheck(tab) {
 function onCmdData(tab, data) {
   tab.hasOutput = true;
   if (tab.status !== 'busy' && tab.status !== 'waiting') setTabStatus(tab, 'busy');
-  // While a Slack-originated prompt is in flight, accumulate Claude's terminal
-  // output so we can post it back once the run goes idle.
-  if (tab.slack && tab.slack.awaitingResponse) {
+  // Whenever the Slack proxy is active (connected + anchor thread), accumulate
+  // Claude's terminal output so we can post it into the anchor thread once the
+  // run goes idle — regardless of whether the output was triggered by a Slack
+  // reply or by the user typing directly. Batching is done by slackOnFinished
+  // so we don't spam per keystroke. No-op when not connected (threadTs null).
+  if (tab.slack && slackProxyEnabled(tab.slack)) {
     tab.slack.captureBuffer += String(data);
     if (tab.slack.captureBuffer.length > 200000) {
       tab.slack.captureBuffer = tab.slack.captureBuffer.slice(-200000);
@@ -1016,6 +1178,7 @@ function switchSubTab(tab, name) {
   for (const view of tab.els.subTabViews) {
     view.classList.toggle('active', view.dataset.view === name);
   }
+  if (name !== 'tasks') stopTasksPolling(tab);
   if (name === 'bash') {
     requestAnimationFrame(() => { try { tab.bash.fit && tab.bash.fit.fit(); } catch (_) {} });
   } else if (name === 'files') {
@@ -1031,6 +1194,8 @@ function switchSubTab(tab, name) {
     refreshDiff(tab);
   } else if (name === 'tests') {
     refreshTests(tab);
+  } else if (name === 'tasks') {
+    initTasksTab(tab);
   }
 }
 
@@ -1187,12 +1352,14 @@ function resetFileEditor(tab) {
   tab.fileOriginal = '';
   tab.fileIsBinary = false;
   tab.fileDirty = false;
+  setFilePreviewMode(tab, false);
   tab.els.fileEditor.value = '';
   tab.els.fileEditor.placeholder = '(click a file to view)';
   tab.els.fileEditor.classList.remove('hidden');
   tab.els.fileEditor.disabled = true;
   tab.els.fileBinaryMsg.classList.add('hidden');
   tab.els.fileBinaryMsg.textContent = '';
+  updateFilePreviewButton(tab);
   tab.els.fileViewerPath.textContent = '';
   tab.els.fileDirtyChip.classList.add('hidden');
   tab.els.fileSaveBtn.disabled = true;
@@ -1209,6 +1376,7 @@ async function loadFile(tab, fullPath, row) {
   if (row) row.classList.add('active');
   tab.currentFilePath = fullPath;
   tab._currentFileRow = row || null;
+  setFilePreviewMode(tab, false);
   tab.els.fileViewerPath.textContent = fullPath;
   tab.els.fileEditor.value = '';
   tab.els.fileEditor.placeholder = 'loading…';
@@ -1223,6 +1391,7 @@ async function loadFile(tab, fullPath, row) {
   if (!res.ok) {
     tab.els.fileEditor.placeholder = res.error || 'error';
     tab.els.fileEditor.disabled = true;
+    updateFilePreviewButton(tab);
     return;
   }
   if (res.binary || res.truncated) {
@@ -1234,6 +1403,7 @@ async function loadFile(tab, fullPath, row) {
     tab.els.fileRenameBtn.disabled = false;
     tab.els.fileReloadBtn.disabled = false;
     setFileDirty(tab, false);
+    updateFilePreviewButton(tab);
     return;
   }
   tab.fileIsBinary = false;
@@ -1246,12 +1416,75 @@ async function loadFile(tab, fullPath, row) {
   tab.els.fileRenameBtn.disabled = false;
   tab.els.fileReloadBtn.disabled = false;
   setFileDirty(tab, false);
+  updateFilePreviewButton(tab);
   const findOpen = tab.els.filesFindBar && !tab.els.filesFindBar.classList.contains('hidden');
   if (findOpen && tab.findScope === 'editor' && tab.els.filesFindInput.value) {
     applyEditorFind(tab, tab.els.filesFindInput.value);
   } else {
     renderFileFindOverlay(tab);
   }
+}
+
+// ─────────────────────────────────────────────── Markdown preview (TASK-015)
+
+// True when the path ends in `.md` (case-insensitive) — the only files that
+// get the "Show preview" toggle.
+function isMarkdownPath(p) {
+  return typeof p === 'string' && /\.md$/i.test(p);
+}
+
+// Reflect whether the preview toggle should be offered: only for an open,
+// non-binary `.md` file. When it should not be shown, force the viewer back to
+// source mode so a newly opened non-`.md` file never shows a stale preview.
+function updateFilePreviewButton(tab) {
+  const btn = tab.els.filePreviewBtn;
+  if (!btn) return;
+  const eligible = !!tab.currentFilePath && !tab.fileIsBinary && isMarkdownPath(tab.currentFilePath);
+  if (!eligible) {
+    setFilePreviewMode(tab, false);
+    btn.classList.add('hidden');
+    btn.disabled = true;
+    return;
+  }
+  btn.classList.remove('hidden');
+  btn.disabled = false;
+}
+
+// Switch the file viewer between raw source (editable textarea) and a rendered,
+// read-only markdown preview. The preview HTML comes from renderMarkdown(),
+// which HTML-escapes the source first, so no active script from the markdown
+// source can execute.
+function setFilePreviewMode(tab, on) {
+  const btn = tab.els.filePreviewBtn;
+  const preview = tab.els.filePreview;
+  if (!preview) return;
+  tab.previewMode = !!on;
+  if (on) {
+    preview.innerHTML = renderMarkdown(tab.els.fileEditor.value);
+    preview.classList.remove('hidden');
+    tab.els.fileEditor.classList.add('hidden');
+    if (tab.els.fileFindOverlay) tab.els.fileFindOverlay.classList.add('hidden');
+    if (btn) {
+      btn.textContent = 'Show source';
+      btn.classList.add('active');
+      btn.setAttribute('aria-pressed', 'true');
+    }
+  } else {
+    preview.classList.add('hidden');
+    preview.innerHTML = '';
+    if (!tab.fileIsBinary) tab.els.fileEditor.classList.remove('hidden');
+    if (tab.els.fileFindOverlay) tab.els.fileFindOverlay.classList.remove('hidden');
+    if (btn) {
+      btn.textContent = 'Show preview';
+      btn.classList.remove('active');
+      btn.setAttribute('aria-pressed', 'false');
+    }
+  }
+}
+
+function toggleFilePreview(tab) {
+  if (!isMarkdownPath(tab.currentFilePath) || tab.fileIsBinary) return;
+  setFilePreviewMode(tab, !tab.previewMode);
 }
 
 function setFileDirty(tab, dirty) {
@@ -1829,8 +2062,41 @@ function applyGitAuthState(tab, { authed, label, klass }) {
   }
 }
 
+function showGitNotInstalled(tab) {
+  tab.gitAuthed = false;
+  if (tab.els.gitNotInstalledGate) tab.els.gitNotInstalledGate.classList.remove('hidden');
+  tab.els.gitAuthGate.classList.add('hidden');
+  tab.els.gitAuthedContent.classList.add('hidden');
+  if (tab.els.gitInstallStatus) {
+    tab.els.gitInstallStatus.textContent = 'git not found on PATH';
+    tab.els.gitInstallStatus.className = 'gitInstallStatus git-auth-status bad';
+  }
+}
+
+function startGitInstall(tab) {
+  // The cmd terminal is occupied by the interactive `claude` CLI, so install
+  // in the Git Bash terminal (a real shell) and switch to it — same as gh login.
+  if (runInBashPty(tab, 'winget install --id Git.Git -e --source winget')) {
+    switchSubTab(tab, 'bash');
+  }
+}
+
 async function checkGitAuthAndGate(tab, force) {
   if (!tab.els.gitAuthGate) return;
+  // First gate: git itself must be installed — without it nothing in this tab works.
+  if (tab.els.gitNotInstalledGate) {
+    let gitRes;
+    try {
+      gitRes = await window.api.git.checkGit();
+    } catch (_) {
+      gitRes = null;
+    }
+    if (!gitRes || !gitRes.installed) {
+      showGitNotInstalled(tab);
+      return;
+    }
+    tab.els.gitNotInstalledGate.classList.add('hidden');
+  }
   applyGitAuthState(tab, { authed: false, label: 'checking…', klass: '' });
   let res;
   try {
@@ -4831,6 +5097,1222 @@ function tryDispatchNextPrompt(tab) {
   }, QUEUE_SEND_DELAY_MS);
 }
 
+// ───────────────────────────────────────────────────────── tasks board
+
+// Canonical six-value status enum, in board left-to-right order (TASK-006).
+// Mirrors LANE_STATUSES in lib/ticket-lanes.js for the browser side, which
+// cannot require Node modules. `todo` is where new tickets are created;
+// `defining` is the BA phase (acceptance criteria + Gherkin) before coding.
+const TASKS_LANE_STATUSES = ['todo', 'defining', 'in-progress', 'testing', 'failed-testing', 'done'];
+// Statuses that mean an agent is actively working the ticket right now (BA while
+// defining, coder while in-progress, tester while testing). Cards in one of
+// these states show the per-card blue "being worked on" dot; idle states
+// (todo / done / failed-testing) show no active dot. Mirrors ACTIVE_STATUSES in
+// lib/ticket-lanes.js.
+const TASKS_ACTIVE_STATUSES = ['defining', 'in-progress', 'testing'];
+// Status whose tests failed — its card shows a red "failed" marker. Mirrors
+// FAILED_STATUS in lib/ticket-lanes.js.
+const TASKS_FAILED_STATUS = 'failed-testing';
+// Dedicated lane for out-of-enum tickets so an unknown status is rendered
+// gracefully instead of being silently dumped into `todo`. Mirrors
+// UNKNOWN_STATUS in lib/ticket-lanes.js.
+const TASKS_UNKNOWN_STATUS = 'unknown';
+const TASKS_POLL_MS = 2500;
+
+// Which task card is currently being dragged, and the status it started in
+// (TASK-007). Used to scope intra-lane reordering to `todo`-to-`todo` drags so a
+// cross-lane drag still falls through to the lane drop handler (status change).
+let draggingTaskFile = null;
+let draggingTaskStatus = null;
+
+// Join path parts using the folder's own separator convention (matches the rest
+// of the renderer, which assumes Windows backslash paths from the main process).
+function tasksJoin(...parts) {
+  return parts.reduce((acc, p) => {
+    if (!acc) return p;
+    const sep = acc.endsWith('\\') || acc.endsWith('/') ? '' : '\\';
+    return acc + sep + p;
+  });
+}
+
+// Parse a ticket file into { fm, body }. Flat "key: value" frontmatter only (no
+// nested YAML). Returns null when the file lacks a well-formed --- ... --- block
+// so callers can skip/keep-last-good rather than render garbage.
+function parseTicketFrontmatter(content) {
+  if (typeof content !== 'string') return null;
+  const lines = content.replace(/\r\n?/g, '\n').split('\n');
+  if (lines[0].trim() !== '---') return null;
+  let closeIdx = -1;
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === '---') { closeIdx = i; break; }
+  }
+  if (closeIdx === -1) return null;
+  const fm = {};
+  for (let i = 1; i < closeIdx; i++) {
+    const line = lines[i];
+    if (!line.trim()) continue;
+    const idx = line.indexOf(':');
+    if (idx === -1) continue;
+    const key = line.slice(0, idx).trim();
+    if (key) fm[key] = line.slice(idx + 1).trim();
+  }
+  const body = lines.slice(closeIdx + 1).join('\n');
+  return { fm, body };
+}
+
+// "Waiting for an answer" predicate (TASK-005). Mirrors
+// lib/ticket-questions.js's isWaitingForAnswer for the browser side, which cannot
+// require Node modules. A ticket is waiting exactly when it carries a non-empty
+// `question` frontmatter field and no non-empty `answer` yet. Kept pure and
+// derived only from persisted frontmatter so the yellow dot updates within one
+// board poll once the answer lands on disk.
+function ticketFieldNonEmpty(v) {
+  return v != null && String(v).trim() !== '';
+}
+function isTicketWaitingForAnswer(fm) {
+  return !!fm && ticketFieldNonEmpty(fm.question) && !ticketFieldNonEmpty(fm.answer);
+}
+
+// Persisted user-defined `todo` ordering (TASK-007). Mirrors
+// lib/ticket-queue.js's ticketOrderValue/compareTicketOrder for the browser side,
+// which cannot require Node modules (matching how TASK-003/004/005/006 duplicated
+// the tiny pure helpers). The chosen order is stored per ticket as a numeric
+// `order` frontmatter field, which serializeTicket preserves as an unknown key so
+// it survives whole-file writes, board polls, and app restarts.
+function ticketOrderValue(fm) {
+  if (!fm) return null;
+  const raw = fm.order != null ? fm.order : fm.priority;
+  if (raw == null || String(raw).trim() === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Stable, deterministic comparator: prefer the persisted `order`, then fall back
+// to numeric `id` so tickets without an explicit order never jump between polls.
+function compareTicketOrder(a, b) {
+  const oa = ticketOrderValue(a);
+  const ob = ticketOrderValue(b);
+  if (oa !== null && ob !== null) {
+    if (oa !== ob) return oa - ob;
+  } else if (oa !== null) {
+    return -1;
+  } else if (ob !== null) {
+    return 1;
+  }
+  return String(a.id).localeCompare(String(b.id), undefined, { numeric: true });
+}
+
+// Folder-per-status layout (TASK-008). Mirrors lib/ticket-folders.js for the
+// browser side, which cannot require Node modules. Each canonical status owns a
+// subfolder under tasks/ named exactly for the status; unknown (out-of-enum)
+// statuses own no folder and are left in place.
+
+// Subfolder name (relative to tasks/) a ticket with this status belongs in, or
+// null for out-of-enum statuses (left in place, never filed into a status folder).
+function ticketFolderForStatus(status) {
+  return TASKS_LANE_STATUSES.includes(status) ? status : null;
+}
+
+// True when the folder a file currently sits in (relative to tasks/, '' = top
+// level) already matches the folder its frontmatter status calls for.
+function ticketFolderMatchesStatus(folder, status) {
+  const target = ticketFolderForStatus(status);
+  return target != null && (folder || '') === target;
+}
+
+// Basename of an absolute path, tolerating either path separator (main-process
+// paths are Windows backslash by convention).
+function tasksBasename(p) {
+  const s = String(p || '');
+  const i = Math.max(s.lastIndexOf('\\'), s.lastIndexOf('/'));
+  return i === -1 ? s : s.slice(i + 1);
+}
+
+// The immediate subfolder (relative to tasksDir) a file sits in, '' when the file
+// is at the top level of tasks/. Status folders are exactly one level deep, so
+// only the first path segment matters.
+function tasksSubfolder(tasksDir, filePath) {
+  const base = String(tasksDir || '');
+  let rel = String(filePath || '');
+  if (rel.toLowerCase().startsWith(base.toLowerCase())) rel = rel.slice(base.length);
+  rel = rel.replace(/^[\\/]+/, '');
+  const parts = rel.split(/[\\/]+/);
+  return parts.length > 1 ? parts[0] : '';
+}
+
+// Dedupe discovered tickets by frontmatter id, preferring the copy whose folder
+// matches its frontmatter status (mirrors lib/ticket-folders.js dedupeByFolder).
+// Keeps the first seen otherwise so a ticket that briefly exists in two folders
+// (legacy migration, a collided move) appears exactly once on the board.
+function dedupeTicketsByFolder(entries) {
+  const byId = new Map();
+  for (const e of entries) {
+    const id = e.fm.id;
+    if (id == null) continue;
+    if (!byId.has(id)) { byId.set(id, e); continue; }
+    const cur = byId.get(id);
+    if (ticketFolderMatchesStatus(e.folder, e.fm.status) &&
+        !ticketFolderMatchesStatus(cur.folder, cur.fm.status)) {
+      byId.set(id, e);
+    }
+  }
+  return Array.from(byId.values());
+}
+
+// Serialize back to disk, preserving the body verbatim and writing frontmatter
+// keys in a fixed order (unknown keys kept, appended after the known ones).
+function serializeTicket(fm, body) {
+  const order = ['id', 'title', 'status', 'created', 'updated'];
+  const keys = order.filter((k) => fm[k] != null);
+  for (const k of Object.keys(fm)) if (!keys.includes(k)) keys.push(k);
+  const fmLines = keys.map((k) => `${k}: ${fm[k]}`);
+  return ['---', ...fmLines, '---', body || ''].join('\n');
+}
+
+// ── Build accounting (TASK-003) display helpers ────────────────────────────
+// Read-only formatters for the per-ticket build time / cost stamped onto the
+// frontmatter (startedAt / finishedAt / costUsd / tokens) by the orchestrator.
+// These mirror lib/ticket-accounting.js's formatDuration for the browser side,
+// which cannot require Node modules. Each returns '' when the value is absent or
+// malformed so the UI shows nothing rather than fabricating a figure.
+
+// Compact wall-clock gap between two ISO-8601 stamps, or elapsed to now when
+// finishedAt is missing (a still-running build). '' if start is missing/invalid
+// or the end precedes the start.
+function formatBuildDuration(startedAt, finishedAt) {
+  if (!startedAt) return '';
+  const start = new Date(startedAt).getTime();
+  if (Number.isNaN(start)) return '';
+  let end;
+  if (finishedAt) {
+    end = new Date(finishedAt).getTime();
+    if (Number.isNaN(end)) return '';
+  } else {
+    end = Date.now();
+  }
+  const ms = end - start;
+  if (ms < 0) return '';
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`;
+  if (m > 0) return `${m}m ${String(s).padStart(2, '0')}s`;
+  return `${s}s`;
+}
+
+function formatCostUsd(v) {
+  if (v == null || v === '') return '';
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) return '';
+  if (n === 0) return '$0';
+  if (n < 1) return '$' + n.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+  return '$' + n.toFixed(2);
+}
+
+function formatTokens(v) {
+  if (v == null || v === '') return '';
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) return '';
+  if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k tok';
+  return Math.round(n) + ' tok';
+}
+
+// ── Per-run history (TASK-012) display helpers ─────────────────────────────
+// Read-only mirror of lib/ticket-runs.js for the browser side, which cannot
+// require Node modules (matching how TASK-003/005/007/008 duplicated the tiny
+// pure helpers). Each time a ticket is processed the orchestrator appends one run
+// entry — { startedAt, finishedAt, minutes, costUsd, at } — to a JSON array kept
+// on a single flat `runs` frontmatter field, so a re-run accumulates multiple
+// entries. These helpers parse and format that log for display only.
+
+// Parse the `runs` JSON array off a frontmatter object into an array of entries.
+// Tolerant: absent / non-string / invalid-JSON / non-array all yield [] so a
+// hand-edited or corrupt ticket never throws while rendering.
+function parseTicketRuns(fm) {
+  const raw = fm ? fm.runs : null;
+  if (raw == null) return [];
+  if (Array.isArray(raw)) return raw.filter((e) => e && typeof e === 'object');
+  if (typeof raw !== 'string' || raw.trim() === '') return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((e) => e && typeof e === 'object') : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+// Compact minutes label for a run, e.g. "12.5 min". '' when absent/malformed.
+function formatRunMinutes(v) {
+  if (v == null || v === '') return '';
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) return '';
+  const shown = Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+  return `${shown} min`;
+}
+
+// Short local date/time label for a run's timestamp. '' when missing/invalid.
+function formatRunAt(v) {
+  if (!v) return '';
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString();
+}
+
+// One display line per run: "<date/time> · <minutes> · <cost>", dropping any
+// fragment that is absent. Empty array in => empty array out.
+function ticketRunLines(fm) {
+  return parseTicketRuns(fm).map((r) => {
+    const bits = [];
+    const at = formatRunAt(r.at || r.finishedAt || r.startedAt);
+    if (at) bits.push(at);
+    const mins = formatRunMinutes(r.minutes);
+    if (mins) bits.push(mins);
+    const cost = formatCostUsd(r.costUsd);
+    if (cost) bits.push(cost);
+    return bits.join('   ·   ');
+  }).filter((line) => line !== '');
+}
+
+// Ordered list of accounting fragments present on this ticket's frontmatter.
+// Empty when the ticket carries no start/cost/token data yet.
+function ticketAccountingParts(fm) {
+  const parts = [];
+  const dur = formatBuildDuration(fm.startedAt, fm.finishedAt);
+  if (dur) parts.push(fm.startedAt && !fm.finishedAt ? dur + '…' : dur);
+  const cost = formatCostUsd(fm.costUsd);
+  if (cost) parts.push(cost);
+  const tok = formatTokens(fm.tokens);
+  if (tok) parts.push(tok);
+  return parts;
+}
+
+// Wipe board state when the tab switches to a different folder, then re-init if
+// the Tasks tab is the one currently showing.
+function resetTasksForFolder(tab) {
+  stopTasksPolling(tab);
+  tab.tasks.tickets = new Map();
+  tab.tasks.lastSig = '';
+  tab.tasks.skillInstalled = null;
+  tab.tasks.autoBuild = false;
+  for (const laneEl of tab.els.tasksLanes) {
+    const cards = laneEl.querySelector('.tasks-lane-cards');
+    if (cards) cards.innerHTML = '';
+    const countEl = laneEl.querySelector('.tasks-lane-count');
+    if (countEl) countEl.textContent = '0';
+  }
+  tab.els.tasksStatus.textContent = '';
+  tab.els.tasksEmpty.classList.add('hidden');
+  tab.els.tasksSkillBanner.classList.add('hidden');
+  tab.els.tasksNewBtn.disabled = true;
+  updateBuildBtn(tab);
+  // Populate + restore the parallel-build dropdown from this folder's stored
+  // value (or the default). Runs on every folder (re)open so each folder shows
+  // its own persisted concurrency; a corrupt/missing entry falls back to 3.
+  initTasksConcurrency(tab);
+  if (tab.activeSubTab === 'tasks') initTasksTab(tab);
+}
+
+function initTasksTab(tab) {
+  if (!tab.folder) {
+    tab.els.tasksStatus.textContent = '(open a folder)';
+    tab.els.tasksEmpty.classList.add('hidden');
+    tab.els.tasksSkillBanner.classList.add('hidden');
+    tab.els.tasksNewBtn.disabled = true;
+    updateBuildBtn(tab);
+    return;
+  }
+  tab.els.tasksNewBtn.disabled = false;
+  checkOrchestrateSkill(tab);
+  startTasksPolling(tab);
+}
+
+async function checkOrchestrateSkill(tab) {
+  if (!tab.folder) return false;
+  const skillPath = tasksJoin(tab.folder, '.claude', 'skills', 'orchestrate', 'SKILL.md');
+  let installed = false;
+  try {
+    const res = await window.api.fs.exists(skillPath);
+    installed = !!(res && res.ok && res.exists);
+  } catch (err) {
+    console.error('[tasks skill check]', err);
+  }
+  tab.tasks.skillInstalled = installed;
+  tab.els.tasksSkillBanner.classList.toggle('hidden', installed);
+  updateBuildBtn(tab);
+  return installed;
+}
+
+function startTasksPolling(tab) {
+  const t = tab.tasks;
+  if (t.pollTimer) return;
+  pollTasksOnce(tab, true);
+  t.pollTimer = setInterval(() => pollTasksOnce(tab), TASKS_POLL_MS);
+}
+
+function stopTasksPolling(tab) {
+  const t = tab.tasks;
+  if (t && t.pollTimer) { clearInterval(t.pollTimer); t.pollTimer = null; }
+}
+
+async function pollTasksOnce(tab, force) {
+  const t = tab.tasks;
+  if (!tab.folder || t.fetching) return;
+  // Skip quiet ticks when the board isn't the thing being looked at; a manual
+  // refresh or an internal call passes force to bypass this.
+  if (!force) {
+    if (tab.activeSubTab !== 'tasks') return;
+    if (!tab.els.ws.classList.contains('active')) return;
+    if (document.hidden) return;
+  }
+  t.fetching = true;
+  let toReconcile = null;
+  try {
+    const tasksDir = tasksJoin(tab.folder, 'tasks');
+    // Discover tickets recursively across tasks/ and its per-status subfolders
+    // (TASK-008) via the existing recursive fs:findByExt IPC, so a ticket filed
+    // into tasks/<status>/ still appears on the board.
+    const res = await window.api.fs.findByExt(tasksDir, '.md');
+    if (!res || !res.ok) {
+      t.tickets = new Map();
+      if (force || t.lastSig !== '') { t.lastSig = ''; renderTasksBoard(tab); }
+      return;
+    }
+    // Reuse the last good parse for a given path so a ticket the agent is mid-
+    // rewrite doesn't flicker out and back.
+    const prevByPath = new Map();
+    for (const tk of t.tickets.values()) prevByPath.set(tk.path, tk);
+    const candidates = [];
+    for (const filePath of res.files) {
+      const name = tasksBasename(filePath);
+      const folder = tasksSubfolder(tasksDir, filePath);
+      const fr = await window.api.fs.readFile(filePath);
+      let entry = null;
+      if (fr && fr.ok && !fr.binary) {
+        const parsed = parseTicketFrontmatter(fr.content);
+        if (parsed && parsed.fm.id) {
+          entry = { file: name, path: filePath, folder, fm: parsed.fm, body: parsed.body, raw: fr.content };
+        }
+      }
+      if (!entry) {
+        const prev = prevByPath.get(filePath);
+        if (prev) entry = prev;
+      }
+      if (entry) candidates.push(entry);
+    }
+    // Dedupe by ticket id, preferring the copy whose folder matches frontmatter
+    // status, so a ticket that momentarily lives in two folders shows once.
+    const deduped = dedupeTicketsByFolder(candidates);
+    const next = new Map();
+    for (const tk of deduped) next.set(tk.file, tk);
+    t.tickets = next;
+    const sig = Array.from(next.values())
+      .map((tk) => `${tk.fm.id}|${tk.fm.status}|${tk.fm.updated}`)
+      .sort()
+      .join('~');
+    if (force || sig !== t.lastSig) {
+      t.lastSig = sig;
+      renderTasksBoard(tab);
+    }
+    toReconcile = deduped;
+  } catch (err) {
+    console.error('[tasks poll]', err);
+  } finally {
+    t.fetching = false;
+  }
+  // Frontmatter is authoritative: after the scan reconciles any file whose folder
+  // disagrees with its status by moving it to the matching folder. Runs after
+  // fetching is cleared so its follow-up poll isn't skipped by the in-flight guard.
+  if (toReconcile) reconcileTicketFolders(tab, toReconcile);
+}
+
+// Move a ticket .md file into the subfolder matching `status`, creating the
+// destination folder on demand. A single atomic fs:rename per the board contract,
+// so a concurrent poll never sees the file in two folders or missing. Unknown
+// (out-of-enum) statuses own no folder and are left in place. Returns
+// { ok, moved, path } — path is the file's location afterwards. On a
+// destination-name collision (fs:rename refuses when the target exists) nothing is
+// overwritten and the source is left untouched; the poll dedupe then shows the
+// copy already in the correct folder, so no data is lost.
+async function relocateTicketFile(tab, srcPath, fileName, status) {
+  const targetFolder = ticketFolderForStatus(status);
+  if (targetFolder == null) return { ok: true, moved: false, path: srcPath };
+  const tasksDir = tasksJoin(tab.folder, 'tasks');
+  const destDir = tasksJoin(tasksDir, targetFolder);
+  const destPath = tasksJoin(destDir, fileName);
+  if (destPath === srcPath) return { ok: true, moved: false, path: srcPath };
+  await window.api.fs.mkdir(destDir);
+  const rn = await window.api.fs.rename(srcPath, destPath);
+  if (rn && rn.ok) return { ok: true, moved: true, path: destPath };
+  console.warn('[tasks relocate]', fileName, '->', targetFolder, (rn && rn.error) || 'failed');
+  return { ok: false, moved: false, path: srcPath, error: rn && rn.error };
+}
+
+// Reconcile on-disk folders to frontmatter status: for each ticket whose folder
+// disagrees with its status, move the file into the matching folder. Guarded so
+// overlapping polls don't stack moves, and re-polls once after any successful move
+// so the board reflects the new locations.
+async function reconcileTicketFolders(tab, entries) {
+  const t = tab.tasks;
+  if (t.reconciling) return;
+  const stale = entries.filter((e) => {
+    const target = ticketFolderForStatus(e.fm.status);
+    return target != null && (e.folder || '') !== target;
+  });
+  if (!stale.length) return;
+  t.reconciling = true;
+  let moved = false;
+  try {
+    for (const e of stale) {
+      const r = await relocateTicketFile(tab, e.path, e.file, e.fm.status);
+      if (r && r.moved) moved = true;
+    }
+  } finally {
+    t.reconciling = false;
+  }
+  if (moved) pollTasksOnce(tab, true);
+}
+
+function renderTasksBoard(tab) {
+  const t = tab.tasks;
+  const lanes = {};
+  for (const laneEl of tab.els.tasksLanes) {
+    const cards = laneEl.querySelector('.tasks-lane-cards');
+    cards.innerHTML = '';
+    lanes[laneEl.dataset.status] = { el: laneEl, cards, count: 0 };
+  }
+  // Sort by numeric `id` across the board, but honour the user-defined order
+  // within the `todo` lane (TASK-007): two todo tickets are compared by their
+  // persisted `order` (falling back to id), while every other pairing stays in id
+  // order. Because routing to lanes preserves this relative order, the todo lane
+  // renders in the chosen order and other lanes stay id-sorted.
+  const tickets = Array.from(t.tickets.values()).sort((a, b) => {
+    if (a.fm.status === 'todo' && b.fm.status === 'todo') {
+      return compareTicketOrder(a.fm, b.fm);
+    }
+    return String(a.fm.id).localeCompare(String(b.fm.id), undefined, { numeric: true });
+  });
+  for (const tk of tickets) {
+    // Route to a lane. Known statuses go to their own lane; anything outside the
+    // six-value enum is treated as unknown and routed to the dedicated `unknown`
+    // lane (a clearly-marked card) rather than being silently dumped into `todo`.
+    // If the unknown lane is somehow absent from the DOM, fall back to `todo` so
+    // the board never crashes on bad data.
+    const unknown = !TASKS_LANE_STATUSES.includes(tk.fm.status);
+    let laneKey = unknown ? TASKS_UNKNOWN_STATUS : tk.fm.status;
+    if (!lanes[laneKey]) laneKey = 'todo';
+    const lane = lanes[laneKey];
+    const card = document.createElement('div');
+    card.className = 'task-card' + (unknown ? ' unknown-status' : '');
+    card.title = unknown ? `Unknown status: ${tk.fm.status}` : (tk.fm.title || '');
+    card.draggable = true;
+    card.dataset.file = tk.file;
+    card.dataset.status = tk.fm.status;
+    card.addEventListener('dragstart', (e) => {
+      card.classList.add('dragging');
+      draggingTaskFile = tk.file;
+      draggingTaskStatus = tk.fm.status;
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', tk.file);
+      }
+    });
+    card.addEventListener('dragend', () => {
+      card.classList.remove('dragging');
+      draggingTaskFile = null;
+      draggingTaskStatus = null;
+      clearTaskDropMarkers(tab);
+    });
+    // Intra-`todo` reordering (TASK-007): while dragging one todo card over
+    // another todo card, mark an above/below insertion point and, on drop,
+    // persist the new order. Cross-lane drags fall through to the lane drop
+    // handler, which still changes status as before.
+    if (tk.fm.status === 'todo') {
+      card.addEventListener('dragover', (e) => {
+        if (draggingTaskStatus !== 'todo' || draggingTaskFile === tk.file) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+        const rect = card.getBoundingClientRect();
+        const before = (e.clientY - rect.top) < rect.height / 2;
+        clearTaskDropMarkers(tab);
+        card.classList.add(before ? 'task-card-drop-before' : 'task-card-drop-after');
+      });
+      card.addEventListener('dragleave', () => {
+        card.classList.remove('task-card-drop-before', 'task-card-drop-after');
+      });
+      card.addEventListener('drop', (e) => {
+        if (draggingTaskStatus !== 'todo' || draggingTaskFile === tk.file) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const rect = card.getBoundingClientRect();
+        const before = (e.clientY - rect.top) < rect.height / 2;
+        const dragged = draggingTaskFile;
+        clearTaskDropMarkers(tab);
+        if (dragged) reorderTodoTicket(tab, dragged, tk.file, before);
+      });
+    }
+    const idEl = document.createElement('div');
+    idEl.className = 'task-card-id';
+    idEl.textContent = tk.fm.id;
+    const titleEl = document.createElement('div');
+    titleEl.className = 'task-card-title';
+    titleEl.textContent = tk.fm.title || '(untitled)';
+    card.appendChild(idEl);
+    card.appendChild(titleEl);
+    // "Being worked on" indicator: shown while an agent is actively working the
+    // ticket, or while the ticket is waiting for the user's answer. Derived
+    // purely from persisted frontmatter (status + question/answer), so it appears,
+    // turns yellow, and clears on the normal poll cycle as the file changes on
+    // disk. Waiting (question with no answer) paints the dot yellow, mirroring the
+    // status-waiting tab convention, distinct from the blue actively-worked dot.
+    // Dot precedence: waiting-for-answer (yellow, TASK-005) wins so the user's
+    // attention isn't lost; then failed tests (red, TASK-006); then actively
+    // worked (blue). Idle non-failed states show no dot.
+    const waitingForAnswer = isTicketWaitingForAnswer(tk.fm);
+    const failed = tk.fm.status === TASKS_FAILED_STATUS;
+    const active = TASKS_ACTIVE_STATUSES.includes(tk.fm.status);
+    if (waitingForAnswer || failed || active) {
+      const dot = document.createElement('span');
+      dot.className = 'task-card-dot' + (waitingForAnswer ? ' waiting' : (failed ? ' failed' : ''));
+      dot.title = waitingForAnswer ? 'Waiting for your answer' : (failed ? 'Tests failed' : 'Being worked on');
+      card.appendChild(dot);
+    }
+    // Build accounting (TASK-003): unobtrusive time/cost line, shown only when
+    // the orchestrator has stamped start/cost/token data. Absent otherwise so
+    // nothing is fabricated. Independent of the working-indicator dot above.
+    const acctParts = ticketAccountingParts(tk.fm);
+    if (acctParts.length) {
+      const metaEl = document.createElement('div');
+      metaEl.className = 'task-card-meta';
+      metaEl.textContent = acctParts.join(' · ');
+      card.appendChild(metaEl);
+    }
+    card.addEventListener('click', () => openTaskModal(tab, tk));
+    lane.cards.appendChild(card);
+    lane.count++;
+  }
+  for (const status of Object.keys(lanes)) {
+    const countEl = lanes[status].el.querySelector('.tasks-lane-count');
+    if (countEl) countEl.textContent = String(lanes[status].count);
+  }
+  // The unknown lane only appears when it actually holds an out-of-enum ticket,
+  // so the board isn't cluttered with an always-empty lane in the normal case.
+  const unknownLane = lanes[TASKS_UNKNOWN_STATUS];
+  if (unknownLane) unknownLane.el.classList.toggle('hidden', unknownLane.count === 0);
+  const total = tickets.length;
+  const showEmpty = total === 0 && t.skillInstalled !== false;
+  tab.els.tasksEmpty.classList.toggle('hidden', !showEmpty);
+  const polling = t.pollTimer ? ' · polling' : '';
+  tab.els.tasksStatus.textContent = total ? `${total} ticket${total === 1 ? '' : 's'}${polling}` : '';
+  updateBuildBtn(tab);
+  maybeContinueBuild(tab);
+}
+
+// Ticket detail/edit modal. Loads the freshest copy from disk, lets the user
+// edit title/status/body, and guards against clobbering a concurrent agent write.
+function openTaskModal(tab, ticket) {
+  const modal = document.getElementById('taskModal');
+  if (!modal) return;
+  const idEl = modal.querySelector('.task-modal-id');
+  const titleInput = modal.querySelector('.task-modal-title');
+  const statusSel = modal.querySelector('.task-modal-status');
+  const pathEl = modal.querySelector('.task-modal-path');
+  const acctEl = modal.querySelector('.task-modal-accounting');
+  const runsEl = modal.querySelector('.task-modal-runs');
+  const questionEl = modal.querySelector('.task-modal-question');
+  const questionTextEl = modal.querySelector('.task-modal-question-text');
+  const answerInput = modal.querySelector('.task-modal-answer-input');
+  const bodyArea = modal.querySelector('.task-modal-body');
+  const errEl = modal.querySelector('.task-modal-error');
+  const cancelBtn = modal.querySelector('.task-modal-cancel');
+  const saveBtn = modal.querySelector('.task-modal-save');
+
+  const ticketPath = ticket.path;
+  let fm = Object.assign({}, ticket.fm);
+  let openRaw = ticket.raw;
+
+  const fill = (fmObj, body) => {
+    idEl.textContent = fmObj.id || '';
+    titleInput.value = fmObj.title || '';
+    statusSel.value = TASKS_LANE_STATUSES.includes(fmObj.status) ? fmObj.status : 'todo';
+    bodyArea.value = body || '';
+    // Build accounting (TASK-003): read-only build time / cost summary, hidden
+    // when the ticket carries no accounting data.
+    if (acctEl) {
+      const bits = [];
+      const dur = formatBuildDuration(fmObj.startedAt, fmObj.finishedAt);
+      if (dur) bits.push(`Build time: ${fmObj.startedAt && !fmObj.finishedAt ? dur + ' (running)' : dur}`);
+      const cost = formatCostUsd(fmObj.costUsd);
+      if (cost) bits.push(`Cost: ${cost}`);
+      const tok = formatTokens(fmObj.tokens);
+      if (tok) bits.push(`Tokens: ${tok.replace(/ tok$/, '')}`);
+      acctEl.textContent = bits.join('   ·   ');
+      acctEl.classList.toggle('hidden', bits.length === 0);
+    }
+    // Per-run history (TASK-012): a read-only log of every time the ticket was
+    // processed. Each run shows its date/time, minutes processed and cost; a
+    // re-run appends a new line so the whole run history is visible. Hidden when
+    // the ticket carries no run entries.
+    if (runsEl) {
+      const lines = ticketRunLines(fmObj);
+      runsEl.textContent = '';
+      if (lines.length) {
+        const head = document.createElement('div');
+        head.className = 'task-modal-runs-label';
+        head.textContent = `Runs (${lines.length})`;
+        runsEl.appendChild(head);
+        for (const line of lines) {
+          const row = document.createElement('div');
+          row.className = 'task-modal-runs-row';
+          row.textContent = line;
+          runsEl.appendChild(row);
+        }
+      }
+      runsEl.classList.toggle('hidden', lines.length === 0);
+    }
+    // Question/answer (TASK-005): show the agent's question and let the user type
+    // an answer inline. Shown only when the ticket carries a question in its
+    // frontmatter. The input is prefilled with any stored answer so a later
+    // reader/editor sees what was decided and can amend it. Storing the answer
+    // clears the waiting state (question present + answer present => not waiting).
+    if (questionEl) {
+      const q = fmObj.question != null ? String(fmObj.question) : '';
+      if (q.trim()) {
+        questionTextEl.textContent = q;
+        if (answerInput) answerInput.value = fmObj.answer != null ? String(fmObj.answer) : '';
+        questionEl.classList.remove('hidden');
+      } else {
+        questionTextEl.textContent = '';
+        if (answerInput) answerInput.value = '';
+        questionEl.classList.add('hidden');
+      }
+    }
+  };
+  fill(fm, ticket.body);
+  pathEl.textContent = ticketPath;
+  errEl.textContent = '';
+  errEl.dataset.mode = '';
+  modal.classList.remove('hidden');
+  titleInput.focus();
+
+  // Refresh from disk so edits start from the latest version.
+  (async () => {
+    const fr = await window.api.fs.readFile(ticketPath);
+    if (fr && fr.ok && !fr.binary) {
+      const parsed = parseTicketFrontmatter(fr.content);
+      if (parsed) { fm = parsed.fm; openRaw = fr.content; fill(fm, parsed.body); }
+    }
+  })();
+
+  const cleanup = () => {
+    modal.classList.add('hidden');
+    saveBtn.removeEventListener('click', onSave);
+    cancelBtn.removeEventListener('click', onCancel);
+  };
+  const onCancel = () => cleanup();
+  const doWrite = async () => {
+    const newFm = Object.assign({}, fm);
+    newFm.title = titleInput.value.trim();
+    newFm.status = statusSel.value;
+    newFm.updated = new Date().toISOString();
+    if (!newFm.created) newFm.created = newFm.updated;
+    // Question/answer (TASK-005): fold the typed answer into the frontmatter when
+    // the ticket has a question. A non-empty answer clears the waiting state and
+    // is stored alongside the question so a later reader sees both. Collapsed to a
+    // single line because flat "key: value" frontmatter cannot hold newlines. An
+    // empty answer leaves the ticket waiting (no `answer` key written). The
+    // body textarea (with the user-owned `## Additional Context`) is written whole
+    // and untouched.
+    if (questionEl && !questionEl.classList.contains('hidden') && answerInput) {
+      const ans = answerInput.value.replace(/\s*[\r\n]+\s*/g, ' ').trim();
+      if (ans) newFm.answer = ans;
+      else delete newFm.answer;
+    }
+    const wr = await window.api.fs.writeFile(ticketPath, serializeTicket(newFm, bodyArea.value));
+    if (!wr || !wr.ok) {
+      errEl.textContent = 'Save failed: ' + ((wr && wr.error) || 'unknown');
+      return;
+    }
+    cleanup();
+    pollTasksOnce(tab, true);
+  };
+  const onSave = async () => {
+    if (errEl.dataset.mode === 'overwrite') { await doWrite(); return; }
+    // Changed-on-disk check: the orchestrator may have rewritten this ticket
+    // (e.g. a status transition) while the user had the modal open.
+    let diskRaw = openRaw;
+    try {
+      const fr = await window.api.fs.readFile(ticketPath);
+      if (fr && fr.ok) diskRaw = fr.content;
+    } catch (_) {}
+    if (diskRaw !== openRaw) {
+      errEl.textContent = 'This ticket changed on disk (an agent may have updated it). Click Save again to overwrite.';
+      errEl.dataset.mode = 'overwrite';
+      openRaw = diskRaw;
+      return;
+    }
+    await doWrite();
+  };
+  saveBtn.addEventListener('click', onSave);
+  cancelBtn.addEventListener('click', onCancel);
+}
+
+async function installOrchestrateSkill(tab) {
+  if (!tab.folder) return;
+  const btn = tab.els.tasksInstallSkillBtn;
+  const prev = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Installing…';
+  try {
+    const res = await window.api.tasks.installSkill(tab.folder);
+    if (!res || !res.ok) {
+      const textEl = tab.els.tasksSkillBanner.querySelector('.install-banner-text');
+      if (textEl) textEl.innerHTML = '<strong>Install failed.</strong> ' + ((res && res.error) || 'unknown error');
+      btn.disabled = false;
+      btn.textContent = prev;
+      return;
+    }
+    tab.tasks.skillInstalled = true;
+    tab.els.tasksSkillBanner.classList.add('hidden');
+    tab.els.tasksBuildBtn.disabled = false;
+    btn.textContent = prev;
+    pollTasksOnce(tab, true);
+  } catch (err) {
+    console.error('[tasks installSkill]', err);
+    btn.disabled = false;
+    btn.textContent = prev;
+  }
+}
+
+const BUILD_COMMAND = '/orchestrate build';
+
+// ── Parallel-build concurrency (TASK-019) ───────────────────────────────────
+// The Tasks toolbar's `.tasksConcurrency` <select> lets the user pick how many
+// build agents the orchestrator may run at once. The choice is persisted per
+// folder in localStorage under `tasks:concurrency:<folder>` and carried into the
+// build as `/orchestrate build --concurrency <N>`.
+//
+// This renderer is a browser script (not requireable), so the clamp/default
+// logic below is INLINED to mirror lib/tasks-settings.js + lib/ticket-queue.js's
+// resolveConcurrency. Keep the two in lockstep (matching the
+// ACTIVE_STATUSES/TASKS_ACTIVE_STATUSES convention): [1, TASKS_MAX_CONCURRENCY],
+// floored, defaulting to TASKS_DEFAULT_CONCURRENCY for missing/blank/junk input.
+const TASKS_MAX_CONCURRENCY = 8;
+const TASKS_DEFAULT_CONCURRENCY = 3;
+
+// Inline mirror of lib/ticket-queue.js resolveConcurrency.
+function resolveTasksConcurrency(input) {
+  if (input == null || input === '') return TASKS_DEFAULT_CONCURRENCY;
+  const n = typeof input === 'number' ? input : Number(input);
+  if (!Number.isFinite(n)) return TASKS_DEFAULT_CONCURRENCY;
+  const floored = Math.floor(n);
+  if (floored < 1) return 1;
+  if (floored > TASKS_MAX_CONCURRENCY) return TASKS_MAX_CONCURRENCY;
+  return floored;
+}
+
+// Inline mirror of lib/tasks-settings.js readStoredConcurrency: parse a raw
+// localStorage value (JSON-encoded number, bare string, blank, or corrupt) into
+// a resolved concurrency, never throwing.
+function readStoredTasksConcurrency(raw) {
+  if (raw == null) return resolveTasksConcurrency(raw);
+  let value = raw;
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (trimmed === '') return resolveTasksConcurrency('');
+    try { value = JSON.parse(trimmed); } catch (_) { value = trimmed; }
+  }
+  return resolveTasksConcurrency(value);
+}
+
+// Per-folder storage key, mirroring slackStorageKey (null when no folder open).
+function tasksConcurrencyStorageKey(tab) {
+  return tab.folder ? 'tasks:concurrency:' + tab.folder : null;
+}
+
+// The current resolved concurrency for this folder, read fresh from localStorage
+// so the queued build command never diverges from a stale in-memory value.
+function currentTasksConcurrency(tab) {
+  const key = tasksConcurrencyStorageKey(tab);
+  if (!key) return TASKS_DEFAULT_CONCURRENCY;
+  try {
+    return readStoredTasksConcurrency(localStorage.getItem(key));
+  } catch (_) {
+    return TASKS_DEFAULT_CONCURRENCY;
+  }
+}
+
+// The build command carrying the folder's chosen concurrency, built at queue
+// time from the current resolved value.
+function buildCommandFor(tab) {
+  return BUILD_COMMAND + ' --concurrency ' + currentTasksConcurrency(tab);
+}
+
+// True for any queued prompt that is a build command (bare or argumented), so
+// stop/continuation logic recognises the `--concurrency <N>` form too.
+function isBuildCommand(p) {
+  return typeof p === 'string' && (p === BUILD_COMMAND || p.startsWith(BUILD_COMMAND + ' '));
+}
+
+// Fill the <select> with one <option> per value in [1, TASKS_MAX_CONCURRENCY],
+// derived from the ceiling so it never drifts. Defensive: no-op if absent.
+function populateTasksConcurrencyOptions(tab) {
+  const sel = tab.els.tasksConcurrency;
+  if (!sel) return;
+  if (sel.options.length === TASKS_MAX_CONCURRENCY) return; // already built
+  sel.innerHTML = '';
+  for (let i = 1; i <= TASKS_MAX_CONCURRENCY; i++) {
+    const opt = document.createElement('option');
+    opt.value = String(i);
+    opt.textContent = String(i);
+    sel.appendChild(opt);
+  }
+}
+
+// Initialise the select for the current folder: build options, then select the
+// stored (clamped/defaulted) value. Never throws on a corrupt entry.
+function initTasksConcurrency(tab) {
+  const sel = tab.els.tasksConcurrency;
+  if (!sel) return;
+  populateTasksConcurrencyOptions(tab);
+  sel.value = String(currentTasksConcurrency(tab));
+}
+
+// Persist the chosen value per folder, mirroring saveSlackConfig's try/catch.
+function onTasksConcurrencyChange(tab) {
+  const sel = tab.els.tasksConcurrency;
+  if (!sel) return;
+  const value = resolveTasksConcurrency(sel.value);
+  sel.value = String(value); // reflect the clamped value back to the UI
+  const key = tasksConcurrencyStorageKey(tab);
+  if (!key) return; // no folder open -> skip persistence
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (_) {}
+}
+
+// Counts of tickets per status, from the last poll snapshot.
+function taskStatusCounts(tab) {
+  const counts = { todo: 0, defining: 0, 'in-progress': 0, testing: 0, 'failed-testing': 0, done: 0, other: 0 };
+  for (const tk of tab.tasks.tickets.values()) {
+    const s = tk.fm.status;
+    if (counts[s] === undefined) counts.other++; else counts[s]++;
+  }
+  return counts;
+}
+
+// Reflect Build/Stop state on the toolbar button. When auto-build is running the
+// button becomes a Stop control; otherwise it's enabled only once the skill is
+// installed and there is something to build.
+function updateBuildBtn(tab) {
+  const btn = tab.els.tasksBuildBtn;
+  if (!btn) return;
+  const t = tab.tasks;
+  if (t.autoBuild) {
+    btn.textContent = 'Stop';
+    btn.classList.add('building');
+    btn.disabled = false;
+    btn.title = 'Stop auto-building (Claude finishes the current ticket)';
+    return;
+  }
+  btn.textContent = 'Build';
+  btn.classList.remove('building');
+  const counts = taskStatusCounts(tab);
+  const pending = counts.todo + counts['failed-testing'];
+  btn.disabled = !t.skillInstalled || pending === 0;
+  btn.title = t.skillInstalled
+    ? 'Build queued tickets until the board is clear'
+    : 'Install the orchestration skill first';
+}
+
+// Start/stop the continuous build. Starting queues the first "/orchestrate build";
+// maybeContinueBuild re-queues it whenever Claude goes idle with work remaining.
+function toggleAutoBuild(tab) {
+  if (!tab.folder) return;
+  const t = tab.tasks;
+  if (t.autoBuild) {
+    t.autoBuild = false;
+    // Drop any not-yet-sent build command so the loop truly stops (matches the
+    // argumented `--concurrency <N>` form as well as the bare command).
+    tab.promptQueue = tab.promptQueue.filter((p) => !isBuildCommand(p));
+    renderQueue(tab);
+    updateBuildBtn(tab);
+    return;
+  }
+  if (!t.skillInstalled) return;
+  const counts = taskStatusCounts(tab);
+  // Nothing to do — don't start a loop that would immediately stop itself.
+  if (counts.todo + counts['failed-testing'] === 0) return;
+  t.autoBuild = true;
+  updateBuildBtn(tab);
+  // Kick the first build directly. Unlike the auto-continuation, this initial
+  // run also picks up `failed-testing` tickets, so the button doubles as a
+  // manual "retry failed" trigger.
+  queueBuild(tab);
+}
+
+// Re-queue "/orchestrate build" while auto-build is on and there is still work in
+// `todo` (fresh work). Tickets stuck in `failed-testing` are NOT retried here —
+// the skill already caps its own fix loop and hands those back to the user, so
+// re-triggering on them would spin forever. When nothing is left to do, stop and
+// let the button fall back to its idle state (the board shows the final result).
+function maybeContinueBuild(tab) {
+  const t = tab.tasks;
+  if (!t.autoBuild || !tab.folder) return;
+  if (tab.status !== 'finished') return;      // Claude is busy / not ready
+  if (tab.queueFiring) return;                // mid-dispatch, don't stack
+  if (tab.promptQueue.some(isBuildCommand)) return;
+  if (t.continueChecking) return;             // a decision poll is already in flight
+  // Decide from FRESH data — the snapshot can be stale when the Tasks tab isn't
+  // visible (polling is skipped), which would otherwise spawn no-op builds in a
+  // loop. Force a read, then re-validate everything before queuing.
+  t.continueChecking = true;
+  Promise.resolve(pollTasksOnce(tab, true)).finally(() => {
+    t.continueChecking = false;
+    if (!t.autoBuild || !tab.folder) { updateBuildBtn(tab); return; }
+    if (tab.status !== 'finished' || tab.queueFiring) return;
+    if (tab.promptQueue.some(isBuildCommand)) return;
+    if (taskStatusCounts(tab).todo > 0) {
+      queueBuild(tab);
+    } else {
+      // No todo left. Done driving; anything still red needs the user.
+      t.autoBuild = false;
+      updateBuildBtn(tab);
+    }
+  });
+}
+
+// Queue "/orchestrate build" through the existing prompt queue so it inherits the
+// idle-gating and two-write submit that the claude REPL needs.
+function queueBuild(tab) {
+  tab.promptQueue.push(buildCommandFor(tab));
+  renderQueue(tab);
+  if (tab.status === 'finished') tryDispatchNextPrompt(tab);
+}
+
+// Attach drop targets to each lane once. Dropping a card rewrites that ticket's
+// `status` frontmatter to the lane it lands in.
+function bindTaskLaneDrop(tab) {
+  if (tab.tasks.lanesBound) return;
+  tab.tasks.lanesBound = true;
+  for (const laneEl of tab.els.tasksLanes) {
+    const status = laneEl.dataset.status;
+    // The `unknown` lane is a read-only holding area for out-of-enum tickets;
+    // it isn't a real status, so don't let a drop write `status: unknown`.
+    if (status === TASKS_UNKNOWN_STATUS) continue;
+    laneEl.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+      laneEl.classList.add('drag-over');
+    });
+    laneEl.addEventListener('dragleave', () => laneEl.classList.remove('drag-over'));
+    laneEl.addEventListener('drop', (e) => {
+      e.preventDefault();
+      laneEl.classList.remove('drag-over');
+      const file = e.dataTransfer && e.dataTransfer.getData('text/plain');
+      if (file) moveTicketToStatus(tab, file, status);
+    });
+  }
+}
+
+// Rewrite a ticket's status on disk (whole-file write, per the skill contract).
+// Reads the freshest copy first so a concurrent agent write isn't clobbered
+// wholesale — only the status/updated fields change.
+async function moveTicketToStatus(tab, file, newStatus) {
+  const ticket = tab.tasks.tickets.get(file);
+  if (!ticket) return;
+  if (ticket.fm.status === newStatus) return;
+  const filePath = ticket.path;
+  let fm = ticket.fm;
+  let body = ticket.body;
+  try {
+    const fr = await window.api.fs.readFile(filePath);
+    if (fr && fr.ok && !fr.binary) {
+      const parsed = parseTicketFrontmatter(fr.content);
+      if (parsed) { fm = parsed.fm; body = parsed.body; }
+    }
+  } catch (_) {}
+  const newFm = Object.assign({}, fm);
+  newFm.status = newStatus;
+  newFm.updated = new Date().toISOString();
+  if (!newFm.created) newFm.created = newFm.updated;
+  const wr = await window.api.fs.writeFile(filePath, serializeTicket(newFm, body));
+  if (!wr || !wr.ok) {
+    console.error('[tasks move]', wr && wr.error);
+    return;
+  }
+  // Folder-per-status layout (TASK-008): after the whole-file write, relocate the
+  // file into tasks/<new status>/ as a single atomic move. Write-then-rename keeps
+  // the file present exactly once, so a concurrent poll never sees it duplicated or
+  // missing.
+  await relocateTicketFile(tab, filePath, file, newStatus);
+  pollTasksOnce(tab, true);
+}
+
+// Clear any above/below reorder insertion markers left on task cards.
+function clearTaskDropMarkers(tab) {
+  for (const laneEl of tab.els.tasksLanes) {
+    for (const el of laneEl.querySelectorAll('.task-card-drop-before, .task-card-drop-after')) {
+      el.classList.remove('task-card-drop-before', 'task-card-drop-after');
+    }
+  }
+}
+
+// Persist a single ticket's `order` value (TASK-007). Whole-file write per the
+// skill contract: read the freshest copy first so a concurrent agent write isn't
+// clobbered, change only `order`/`updated`, preserve `created` and every other
+// section (including the user-owned `## Additional Context`). Skips the write when
+// the on-disk order already matches. Returns true when a write happened.
+async function persistTicketOrder(tab, file, order) {
+  const ticket = tab.tasks.tickets.get(file);
+  if (!ticket) return false;
+  const filePath = ticket.path;
+  let fm = ticket.fm;
+  let body = ticket.body;
+  try {
+    const fr = await window.api.fs.readFile(filePath);
+    if (fr && fr.ok && !fr.binary) {
+      const parsed = parseTicketFrontmatter(fr.content);
+      if (parsed) { fm = parsed.fm; body = parsed.body; }
+    }
+  } catch (_) {}
+  if (String(fm.order == null ? '' : fm.order) === String(order)) return false;
+  const newFm = Object.assign({}, fm);
+  newFm.order = String(order);
+  newFm.updated = new Date().toISOString();
+  if (!newFm.created) newFm.created = newFm.updated;
+  const wr = await window.api.fs.writeFile(filePath, serializeTicket(newFm, body));
+  if (!wr || !wr.ok) {
+    console.error('[tasks reorder]', wr && wr.error);
+    return false;
+  }
+  return true;
+}
+
+// Reorder a ticket within the `todo` lane (TASK-007). Computes the new position
+// of `draggedFile` relative to `targetFile` (dropped above or below it), then
+// reindexes every todo ticket's `order` to 1..N in the new sequence so the chosen
+// order is a total order that survives board polls and restarts. Only touches the
+// `todo` lane — a card dragged out of todo goes through moveTicketToStatus
+// instead. Each ticket is a whole-file write; only files whose order changed are
+// rewritten.
+async function reorderTodoTicket(tab, draggedFile, targetFile, before) {
+  const dragged = tab.tasks.tickets.get(draggedFile);
+  const target = tab.tasks.tickets.get(targetFile);
+  if (!dragged || !target) return;
+  if (dragged.fm.status !== 'todo' || target.fm.status !== 'todo') return;
+  if (draggedFile === targetFile) return;
+
+  const todo = Array.from(tab.tasks.tickets.values())
+    .filter((tk) => tk.fm.status === 'todo')
+    .sort((a, b) => compareTicketOrder(a.fm, b.fm));
+  const list = todo.filter((tk) => tk.file !== draggedFile);
+  const targetIdx = list.findIndex((tk) => tk.file === targetFile);
+  if (targetIdx === -1) return;
+  list.splice(before ? targetIdx : targetIdx + 1, 0, dragged);
+
+  let wrote = false;
+  for (let i = 0; i < list.length; i++) {
+    if (await persistTicketOrder(tab, list[i].file, i + 1)) wrote = true;
+  }
+  if (wrote) pollTasksOnce(tab, true);
+}
+
+// Turn a title into a short filename slug.
+function taskSlug(title) {
+  const s = String(title || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+    .replace(/-+$/g, '');
+  return s || 'ticket';
+}
+
+// Next TASK-<nnn> id, continuing the highest existing number.
+function nextTaskId(tab) {
+  let max = 0;
+  for (const tk of tab.tasks.tickets.values()) {
+    const m = /TASK-0*(\d+)/i.exec(tk.fm.id || '');
+    if (m) max = Math.max(max, parseInt(m[1], 10));
+  }
+  return 'TASK-' + String(max + 1).padStart(3, '0');
+}
+
+// New-ticket modal. Writes a fresh `todo` ticket following the skill's file
+// contract so the orchestrator (and the build loop) can pick it up.
+function openNewTaskModal(tab) {
+  if (!tab.folder) return;
+  const modal = document.getElementById('newTaskModal');
+  if (!modal) return;
+  const idEl = modal.querySelector('.newtask-id');
+  const titleInput = modal.querySelector('.newtask-title');
+  const bodyArea = modal.querySelector('.newtask-body');
+  const errEl = modal.querySelector('.newtask-error');
+  const cancelBtn = modal.querySelector('.newtask-cancel');
+  const createBtn = modal.querySelector('.newtask-create');
+
+  const id = nextTaskId(tab);
+  idEl.textContent = id;
+  titleInput.value = '';
+  bodyArea.value = '';
+  errEl.textContent = '';
+  modal.classList.remove('hidden');
+  titleInput.focus();
+
+  const cleanup = () => {
+    modal.classList.add('hidden');
+    createBtn.removeEventListener('click', onCreate);
+    cancelBtn.removeEventListener('click', onCancel);
+  };
+  const onCancel = () => cleanup();
+  const onCreate = async () => {
+    const title = titleInput.value.trim();
+    if (!title) { errEl.textContent = 'Title is required.'; titleInput.focus(); return; }
+    createBtn.disabled = true;
+    try {
+      const now = new Date().toISOString();
+      const fm = { id, title, status: 'todo', created: now, updated: now };
+      const description = bodyArea.value.trim() || 'What needs doing and why.';
+      const body = [
+        '',
+        '## Description',
+        description,
+        '',
+        '## Acceptance Criteria',
+        '- [ ] First testable criterion',
+        '',
+        '## Additional Context',
+        '(User-owned. Read it before building. Never overwrite it.)',
+        ''
+      ].join('\n');
+      // Folder-per-status layout (TASK-008): new tickets are `todo`, so write them
+      // straight into tasks/todo/ rather than the top level, avoiding an immediate
+      // reconciliation move on the next poll.
+      const tasksDir = tasksJoin(tab.folder, 'tasks');
+      const subfolder = ticketFolderForStatus('todo');
+      const destDir = subfolder ? tasksJoin(tasksDir, subfolder) : tasksDir;
+      await window.api.fs.mkdir(destDir);
+      const filePath = tasksJoin(destDir, `${id}-${taskSlug(title)}.md`);
+      const wr = await window.api.fs.writeFile(filePath, serializeTicket(fm, body));
+      if (!wr || !wr.ok) {
+        errEl.textContent = 'Create failed: ' + ((wr && wr.error) || 'unknown');
+        createBtn.disabled = false;
+        return;
+      }
+      createBtn.disabled = false;
+      cleanup();
+      pollTasksOnce(tab, true);
+    } catch (err) {
+      errEl.textContent = 'Create failed: ' + (err.message || err);
+      createBtn.disabled = false;
+    }
+  };
+  createBtn.addEventListener('click', onCreate);
+  cancelBtn.addEventListener('click', onCancel);
+}
+
 // ───────────────────────────────────────────────────────── slack channel
 
 // Slack config is stored per-folder in localStorage. The bot token is loaded
@@ -4880,12 +6362,15 @@ function resetSlackForFolder(tab) {
   s.fetching = false;
   s.transport = null;
   s.lastTs = '0';
+  s.lastReplyTs = '0';
   s.seenTs = new Set();
   s.messages = [];
   s.inbox = [];
   s.awaitingResponse = false;
   s.captureBuffer = '';
   s.replyThreadTs = null;
+  // Drop any prior session anchor so reconnecting in this tab makes a fresh one.
+  s.threadTs = null;
 
   const cfg = loadSlackConfig(tab);
   // The token comes from the SLACK_TOKEN .env variable; keep any previously
@@ -5002,6 +6487,87 @@ async function ensureSlackToken(tab, force) {
   }
 }
 
+// Prompt for (and persist) the Slack app's OAuth client credentials. Both are
+// required before we can start the OAuth flow; returns null if the user cancels
+// either prompt.
+async function ensureSlackClientCredentials() {
+  const id = await ensureSecret({
+    key: 'SLACK_CLIENT_ID',
+    title: 'Slack app Client ID',
+    description: 'From your Slack app → Basic Information → App Credentials. Saved to .env and reused next time.',
+    placeholder: '1234567890.1234567890'
+  });
+  if (!id) return null;
+  const secret = await ensureSecret({
+    key: 'SLACK_CLIENT_SECRET',
+    title: 'Slack app Client Secret',
+    description: 'From your Slack app → Basic Information → App Credentials. Saved to .env and reused next time.',
+    placeholder: '••••••••••••••••',
+    password: true
+  });
+  if (!secret) return null;
+  return { id, secret };
+}
+
+// "Sign in with Slack": ensure client credentials, then run the OAuth flow in
+// the main process (opens the system browser, catches the loopback redirect,
+// exchanges the code, saves SLACK_TOKEN). On success the obtained user token is
+// cached on the tab exactly like a freshly loaded .env token. Any failure leaves
+// any previously working token untouched — we only overwrite tab.slack.token on
+// a confirmed success.
+async function signInWithSlack(tab) {
+  const setStatus = (text, cls) => {
+    tab.els.slackTokenStatus.textContent = text;
+    tab.els.slackTokenStatus.className = 'slackTokenStatus slack-signin-status' + (cls ? ' ' + cls : '');
+  };
+  tab.els.slackConnectError.textContent = '';
+
+  // Client id/secret must be set BEFORE starting OAuth (criterion 6).
+  const creds = await ensureSlackClientCredentials();
+  if (!creds) {
+    setStatus('Slack sign-in needs both SLACK_CLIENT_ID and SLACK_CLIENT_SECRET.', 'error');
+    return;
+  }
+
+  const btn = tab.els.slackSignInBtn;
+  const prevLabel = btn.textContent;
+  btn.disabled = true;
+  tab.els.slackLoadTokenBtn.disabled = true;
+  btn.textContent = 'Signing in…';
+  setStatus('Opening your browser to sign in with Slack…', '');
+
+  // While the browser tab is open, surface the exact redirect URL so the user
+  // can register it on their Slack app if Slack rejects it.
+  const off = window.api.slack.onOAuthStarted(({ redirectUri }) => {
+    if (redirectUri) {
+      setStatus('Waiting for Slack in your browser… If it errors, register this redirect URL on your Slack app (OAuth & Permissions → Redirect URLs): ' + redirectUri, '');
+    }
+  });
+
+  try {
+    const res = await window.api.slack.startOAuth();
+    if (!res || !res.ok || !res.token) {
+      const msg = (res && res.error) || 'Slack sign-in failed.';
+      setStatus(msg, 'error');
+      showSlackInstructions(tab, msg);
+      return;
+    }
+    // Success — treat identically to a freshly loaded token.
+    tab.slack.token = res.token;
+    saveSlackConfig(tab);
+    setStatus('✓ Signed in with Slack' + (res.team ? ' (' + res.team + ')' : '') + '. Choose a channel and Connect.', 'ok');
+    updateSlackTokenUI(tab);
+  } catch (err) {
+    setStatus(err.message || String(err), 'error');
+    showSlackInstructions(tab, err.message || String(err));
+  } finally {
+    if (off) off();
+    btn.disabled = false;
+    tab.els.slackLoadTokenBtn.disabled = false;
+    btn.textContent = prevLabel;
+  }
+}
+
 // Render setup instructions into the connect-error slot so the user knows how
 // to fix a missing/invalid token or a failed connection.
 function showSlackInstructions(tab, detail) {
@@ -5039,7 +6605,6 @@ async function connectSlack(tab) {
       return;
     }
     const s = tab.slack;
-    s.connected = true;
     s.token = token;
     s.channelId = res.channelId;
     s.channelName = res.channelName || '';
@@ -5052,8 +6617,36 @@ async function connectSlack(tab) {
     s.seenTs = new Set();
     s.messages = [];
     s.inbox = [];
+    s.awaitingResponse = false;
+    s.captureBuffer = '';
+    s.replyThreadTs = null;
+    s.threadTs = null;
+
+    // Create the ONE anchor message for this session and reuse its thread_ts as
+    // the two-way proxy thread. On failure we do NOT mark connected / set
+    // threadTs, so no stale/duplicate thread is left behind (criterion 1).
+    const headerText = `:robot_face: Claude session started${tab.folder ? ' · ' + tab.folder : ''}. Reply in this thread to talk to Claude; Claude's output will be posted here.`;
+    let anchor;
+    try {
+      anchor = await window.api.slack.post(token, s.channelId, headerText, null);
+    } catch (err) {
+      anchor = { ok: false, error: err.message || String(err) };
+    }
+    if (!anchor || !anchor.ok || !anchor.ts) {
+      showSlackInstructions(tab, 'Connected to the channel, but could not create the Slack session thread: '
+        + ((anchor && anchor.error) || 'post failed') + '. Not connected.');
+      return; // leave s.connected false and s.threadTs null
+    }
+    s.threadTs = anchor.ts;
+    // Baseline reply polling at the anchor so we pick up every reply typed into
+    // the thread from here on (conversations.replies, not history).
+    s.lastReplyTs = anchor.ts;
+    // The anchor is the bot's own post — never feed it back into Claude.
+    s.seenTs.add(anchor.ts);
+    s.connected = true;
+
     saveSlackConfig(tab);
-    appendSlackMessage(tab, { who: 'system', text: `Connected to ${s.channelName ? '#' + s.channelName : s.channelId} as ${res.botUser || 'bot'}. New channel messages will be sent to Claude.` });
+    appendSlackMessage(tab, { who: 'system', text: `Connected to ${s.channelName ? '#' + s.channelName : s.channelId} as ${res.botUser || 'bot'}. Replies in the session thread will be sent to Claude.` });
     updateSlackUI(tab);
     startSlackListening(tab);
   } catch (err) {
@@ -5066,7 +6659,15 @@ async function connectSlack(tab) {
 
 function disconnectSlack(tab) {
   stopSlackListening(tab);
-  tab.slack.connected = false;
+  const s = tab.slack;
+  s.connected = false;
+  // Clear the session anchor + in-flight state so a later reconnect creates a
+  // fresh single anchor rather than reusing a stale thread (criterion 7).
+  s.threadTs = null;
+  s.awaitingResponse = false;
+  s.captureBuffer = '';
+  s.replyThreadTs = null;
+  s.inbox = [];
   appendSlackMessage(tab, { who: 'system', text: 'Disconnected.' });
   updateSlackUI(tab);
 }
@@ -5204,11 +6805,7 @@ function handleSlackSocketEvent(tab, event) {
   const s = tab.slack;
   if (!event || event.type !== 'message') return;
   if (event.channel && s.channelId && event.channel !== s.channelId) return;
-  if (!event.ts) return;
-  if (Number(event.ts) > Number(s.lastTs)) s.lastTs = event.ts;
-  if (s.seenTs.has(event.ts)) return;
-  s.seenTs.add(event.ts);
-  handleIncomingSlackMessage(tab, event);
+  ingestSlackMessage(tab, event);
 }
 
 function startSlackPolling(tab) {
@@ -5243,11 +6840,26 @@ async function pollSlackOnce(tab) {
       return;
     }
     for (const msg of res.messages) {
-      if (!msg || !msg.ts) continue;
-      if (Number(msg.ts) > Number(s.lastTs)) s.lastTs = msg.ts;
-      if (s.seenTs.has(msg.ts)) continue;
-      s.seenTs.add(msg.ts);
-      handleIncomingSlackMessage(tab, msg);
+      ingestSlackMessage(tab, msg);
+    }
+
+    // conversations.history (above) only returns top-level channel messages, not
+    // replies posted inside a thread. Since users talk to Claude by replying in
+    // the session anchor thread, we MUST poll conversations.replies as well or
+    // their replies never make it back into the app / Claude window.
+    if (s.threadTs) {
+      const rep = await window.api.slack.fetchReplies(s.token, s.channelId, s.threadTs, s.lastReplyTs, 200);
+      if (rep && rep.ok) {
+        for (const msg of rep.messages) {
+          if (!msg || msg.ts == null) continue;
+          if (msg.ts === s.threadTs) continue; // the anchor/parent, not a reply
+          if (Number(msg.ts) > Number(s.lastReplyTs)) s.lastReplyTs = msg.ts;
+          ingestSlackMessage(tab, msg);
+        }
+      } else if (rep && rep.error) {
+        tab.els.slackStatus.textContent = 'error: ' + rep.error;
+        tab.els.slackStatus.className = 'slackStatus slack-status error';
+      }
     }
   } catch (err) {
     console.error('[slack poll]', err);
@@ -5256,13 +6868,172 @@ async function pollSlackOnce(tab) {
   }
 }
 
+// ── Markdown renderer (mirrors lib/markdown.js) ────────────────────────────
+// The renderer is a browser script (nodeIntegration:false) so it cannot
+// require() the lib module; this is a verbatim mirror kept in sync with
+// lib/markdown.js. See that file for the full rationale + safety notes: the
+// source is HTML-escaped BEFORE any transform, so raw HTML/<script> in the
+// markdown never becomes live markup, and link/image URLs are scheme-checked.
+
+function mdEscapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function mdSanitizeUrl(url) {
+  const raw = String(url).trim();
+  const cleaned = raw.replace(/[\u0000-\u0020]/g, '');
+  const schemeMatch = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(cleaned);
+  if (schemeMatch) {
+    const scheme = schemeMatch[1].toLowerCase();
+    const ok = scheme === 'http' || scheme === 'https' || scheme === 'mailto' || scheme === 'tel';
+    if (ok) return cleaned;
+    if (scheme === 'data' && /^data:image\//i.test(cleaned)) return cleaned;
+    return '#';
+  }
+  return cleaned;
+}
+
+function mdRenderInline(escaped) {
+  const codeSpans = [];
+  let text = escaped.replace(/`([^`]+)`/g, (_m, code) => {
+    codeSpans.push('<code>' + code + '</code>');
+    return ' CODE' + (codeSpans.length - 1) + ' ';
+  });
+  text = text.replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+&quot;[^&]*&quot;)?\)/g,
+    (_m, alt, url) => '<img src="' + mdSanitizeUrl(url) + '" alt="' + alt + '">');
+  text = text.replace(/\[([^\]]+)\]\(([^)\s]+)(?:\s+&quot;[^&]*&quot;)?\)/g,
+    (_m, label, url) => '<a href="' + mdSanitizeUrl(url) + '">' + label + '</a>');
+  text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  text = text.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+  text = text.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  text = text.replace(/(^|[^a-zA-Z0-9_])_([^_]+)_(?=$|[^a-zA-Z0-9_])/g, '$1<em>$2</em>');
+  text = text.replace(/ CODE(\d+) /g, (_m, idx) => codeSpans[Number(idx)]);
+  return text;
+}
+
+function renderMarkdown(src) {
+  const lines = String(src == null ? '' : src).replace(/\r\n?/g, '\n').split('\n');
+  const out = [];
+  let i = 0;
+  const listItemHtml = (text) => '<li>' + mdRenderInline(mdEscapeHtml(text)) + '</li>';
+  while (i < lines.length) {
+    const line = lines[i];
+    const fence = /^(\s*)(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fence) {
+      const marker = fence[2][0];
+      const body = [];
+      i++;
+      while (i < lines.length && !new RegExp('^\\s*' + marker + '{3,}\\s*$').test(lines[i])) {
+        body.push(lines[i]);
+        i++;
+      }
+      if (i < lines.length) i++;
+      out.push('<pre><code>' + mdEscapeHtml(body.join('\n')) + '</code></pre>');
+      continue;
+    }
+    if (/^\s*$/.test(line)) { i++; continue; }
+    const heading = /^(#{1,6})\s+(.*?)\s*#*\s*$/.exec(line);
+    if (heading) {
+      const level = heading[1].length;
+      out.push('<h' + level + '>' + mdRenderInline(mdEscapeHtml(heading[2])) + '</h' + level + '>');
+      i++;
+      continue;
+    }
+    if (/^\s*>/.test(line)) {
+      const quoted = [];
+      while (i < lines.length && /^\s*>/.test(lines[i])) {
+        quoted.push(lines[i].replace(/^\s*>\s?/, ''));
+        i++;
+      }
+      out.push('<blockquote>' + renderMarkdown(quoted.join('\n')) + '</blockquote>');
+      continue;
+    }
+    if (/^\s*[-*+]\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
+        items.push(listItemHtml(lines[i].replace(/^\s*[-*+]\s+/, '')));
+        i++;
+      }
+      out.push('<ul>' + items.join('') + '</ul>');
+      continue;
+    }
+    if (/^\s*\d+[.)]\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) {
+        items.push(listItemHtml(lines[i].replace(/^\s*\d+[.)]\s+/, '')));
+        i++;
+      }
+      out.push('<ol>' + items.join('') + '</ol>');
+      continue;
+    }
+    const para = [];
+    while (
+      i < lines.length &&
+      !/^\s*$/.test(lines[i]) &&
+      !/^(\s*)(`{3,}|~{3,})/.test(lines[i]) &&
+      !/^#{1,6}\s+/.test(lines[i]) &&
+      !/^\s*>/.test(lines[i]) &&
+      !/^\s*[-*+]\s+/.test(lines[i]) &&
+      !/^\s*\d+[.)]\s+/.test(lines[i])
+    ) {
+      para.push(lines[i]);
+      i++;
+    }
+    const joined = para.map((l) => mdRenderInline(mdEscapeHtml(l))).join('<br>');
+    out.push('<p>' + joined + '</p>');
+  }
+  return out.join('\n');
+}
+
+// ── Slack proxy decision logic (mirrors lib/slack-proxy.js) ────────────────
+// The renderer is a browser script (nodeIntegration:false) so it cannot
+// require() the lib module; this is a verbatim mirror kept in sync with
+// lib/slack-proxy.js. See that file for the full rationale.
+
+// The two-way proxy is active only once connected AND a single anchor thread
+// exists. When false BOTH directions are a no-op. Mirrors isProxyEnabled in
+// lib/slack-proxy.js.
+function slackProxyEnabled(s) {
+  return !!(s && s.connected && s.threadTs);
+}
+
+// Should this inbound Slack message be dispatched to the Claude window? Filters
+// the bot's own posts (bot_id / botUserId / seenTs) so Claude's output never
+// loops back, non-user subtypes, and anything outside the session anchor
+// thread. Mirrors shouldDispatchIncoming in lib/slack-proxy.js.
+function slackShouldDispatchIncoming(msg, s) {
+  if (!msg || msg.ts == null) return false;
+  if (!slackProxyEnabled(s)) return false;
+  if (msg.bot_id) return false;
+  if (s.botUserId && msg.user === s.botUserId) return false;
+  if (s.seenTs && typeof s.seenTs.has === 'function' && s.seenTs.has(msg.ts)) return false;
+  if (msg.subtype && msg.subtype !== 'thread_broadcast' && msg.subtype !== 'file_share') return false;
+  const thread = msg.thread_ts || msg.ts;
+  if (thread !== s.threadTs) return false;
+  return true;
+}
+
+// Common ingest funnel for both transports (Socket Mode + polling). Advances
+// the ts baseline, applies the pure dispatch decision (which includes seenTs
+// dedup + bot-self filtering + anchor-thread gating), then marks the ts seen so
+// it is never reprocessed by a later poll.
+function ingestSlackMessage(tab, msg) {
+  const s = tab.slack;
+  if (!msg || msg.ts == null) return;
+  if (Number(msg.ts) > Number(s.lastTs)) s.lastTs = msg.ts;
+  const accept = slackShouldDispatchIncoming(msg, s);
+  s.seenTs.add(msg.ts);
+  if (!accept) return;
+  handleIncomingSlackMessage(tab, msg);
+}
+
 function handleIncomingSlackMessage(tab, msg) {
   const s = tab.slack;
-  // Skip the bot's own posts (Claude's replies) and non-user system events so
-  // we don't feed Claude's output back in as a new prompt.
-  if (msg.bot_id) return;
-  if (s.botUserId && msg.user === s.botUserId) return;
-  if (msg.subtype && msg.subtype !== 'thread_broadcast' && msg.subtype !== 'file_share') return;
   const text = decodeSlackText(msg.text || '');
   if (!text.trim()) return;
 
@@ -5289,7 +7060,7 @@ function decodeSlackText(t) {
 // queue uses.
 function slackTryDispatch(tab) {
   const s = tab.slack;
-  if (!s.connected) return;
+  if (!slackProxyEnabled(s)) return; // no-op when not connected / no anchor thread
   if (s.awaitingResponse) return;
   if (!s.inbox.length) return;
   if (!tab.cmd.id) return;
@@ -5298,8 +7069,9 @@ function slackTryDispatch(tab) {
 
   const item = s.inbox.shift();
   s.awaitingResponse = true;
+  // Fresh capture window for this reply. Outbound always uses the single
+  // session anchor thread (s.threadTs), never a per-message thread.
   s.captureBuffer = '';
-  s.replyThreadTs = item.ts || null;
   setTabStatus(tab, 'busy');
   if (tab.idleTimer) { clearTimeout(tab.idleTimer); tab.idleTimer = null; }
   try {
@@ -5321,18 +7093,21 @@ function slackTryDispatch(tab) {
 // next queued Slack message (if any).
 function slackOnFinished(tab) {
   const s = tab.slack;
-  if (!s || !s.connected) return;
-  if (s.awaitingResponse) {
-    const reply = cleanTerminalOutput(s.captureBuffer);
-    s.awaitingResponse = false;
-    s.captureBuffer = '';
-    if (reply) {
-      appendSlackMessage(tab, { who: 'claude', text: reply });
-      if (s.postReplies) {
-        postToSlack(tab, reply, s.replyThreadTs);
-      }
+  // No-op unless the proxy is active. Always clear the in-flight flag so a run
+  // that finished can never leave dispatch permanently stuck.
+  if (!s || !slackProxyEnabled(s)) { if (s) s.awaitingResponse = false; return; }
+
+  // Flush whatever Claude output accumulated into the single anchor thread,
+  // regardless of what triggered the run (Slack reply or direct typing).
+  const reply = cleanTerminalOutput(s.captureBuffer);
+  s.captureBuffer = '';
+  s.awaitingResponse = false;
+  s.replyThreadTs = null;
+  if (reply) {
+    appendSlackMessage(tab, { who: 'claude', text: reply });
+    if (s.postReplies) {
+      postToSlack(tab, reply, s.threadTs);
     }
-    s.replyThreadTs = null;
   }
   // Give the TUI a beat to settle, then dispatch the next queued Slack message
   // (covers messages that arrived while Claude was still busy).
@@ -5343,18 +7118,32 @@ function slackOnFinished(tab) {
 
 async function postToSlack(tab, text, threadTs) {
   const s = tab.slack;
-  if (!s.connected || !text) return;
+  // No-op when the proxy is inactive (not connected / no anchor thread).
+  if (!slackProxyEnabled(s) || !text) return { ok: false };
+  // Always post into the single session anchor thread.
+  const thread = threadTs || s.threadTs;
   // Slack hard-limits ~4000 chars per message; chunk longer replies.
   const chunks = chunkText(text, 3800);
+  let ok = true;
+  let lastError = null;
   for (const chunk of chunks) {
     try {
-      const res = await window.api.slack.post(s.token, s.channelId, chunk, threadTs);
+      const res = await window.api.slack.post(s.token, s.channelId, chunk, thread);
       if (res && res.ok && res.ts) s.seenTs.add(res.ts);
-      if (!res || !res.ok) console.warn('[slack post]', res && res.error);
+      if (!res || !res.ok) { ok = false; lastError = (res && res.error) || 'post failed'; }
     } catch (err) {
-      console.error('[slack post]', err);
+      ok = false;
+      lastError = err.message || String(err);
     }
   }
+  if (!ok) {
+    // Surface the failure without crashing the app or the Claude window.
+    console.warn('[slack post]', lastError);
+    tab.els.slackStatus.textContent = 'send failed: ' + lastError;
+    tab.els.slackStatus.className = 'slackStatus slack-status error';
+    appendSlackMessage(tab, { who: 'system', text: 'Slack send failed: ' + lastError });
+  }
+  return { ok, error: lastError };
 }
 
 function chunkText(text, size) {
@@ -5399,14 +7188,15 @@ function cleanTerminalOutput(raw) {
 
 function sendSlackComposer(tab) {
   const s = tab.slack;
-  if (!s.connected) return;
+  if (!slackProxyEnabled(s)) return;
   const text = tab.els.slackComposerInput.value.trim();
   if (!text) return;
   tab.els.slackComposerInput.value = '';
-  // Posting from here surfaces in the channel; the poller will skip it (bot
-  // user id), so it won't be re-dispatched as a prompt — show it locally.
+  // Posting from here surfaces in the anchor thread; the poller will skip it
+  // (bot user id / seenTs), so it won't be re-dispatched as a prompt — show it
+  // locally. Routed into the single session thread like every other outbound.
   appendSlackMessage(tab, { who: 'me', text });
-  postToSlack(tab, text, null);
+  postToSlack(tab, text, s.threadTs);
 }
 
 function appendSlackMessage(tab, msg) {
@@ -5463,8 +7253,14 @@ async function restoreSession() {
     restoringSession = true;
     dom.emptyState.classList.add('hidden');
     let firstTabId = null;
-    for (const folder of folders) {
+    for (const entry of folders) {
+      // Entries are normalized to { path, agent } by the main process, but
+      // tolerate a bare string in case of an older session file.
+      const folder = typeof entry === 'string' ? entry : (entry && entry.path);
+      if (!folder) continue;
+      const agent = (entry && entry.agent === 'opencode') ? 'opencode' : 'claude';
       const tab = createTab();
+      tab.agent = agent;
       if (!firstTabId) firstTabId = tab.id;
       activateTab(tab.id);
       try {
