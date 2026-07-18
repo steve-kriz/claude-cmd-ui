@@ -8,17 +8,30 @@ const envStore = require('./lib/env-store');
 const aws = require('./lib/aws');
 const cloudLogs = require('./lib/cloud-logs');
 const slack = require('./lib/slack');
+const slackOAuth = require('./lib/slack-oauth');
 
 const ptys = new Map();
 let mainWindow = null;
 let sessionFilePath = null;
+
+// A folder entry may be a legacy bare string (path only) or an object with the
+// per-project agent choice. Normalize both to { path, agent }.
+function normalizeFolderEntry(entry) {
+  if (typeof entry === 'string' && entry.length > 0) {
+    return { path: entry, agent: 'claude' };
+  }
+  if (entry && typeof entry === 'object' && typeof entry.path === 'string' && entry.path.length > 0) {
+    return { path: entry.path, agent: entry.agent === 'opencode' ? 'opencode' : 'claude' };
+  }
+  return null;
+}
 
 async function readSession() {
   if (!sessionFilePath) return { folders: [] };
   try {
     const buf = await fsp.readFile(sessionFilePath, 'utf8');
     const data = JSON.parse(buf);
-    const folders = Array.isArray(data.folders) ? data.folders.filter((s) => typeof s === 'string' && s.length > 0) : [];
+    const folders = Array.isArray(data.folders) ? data.folders.map(normalizeFolderEntry).filter(Boolean) : [];
     return { folders };
   } catch (_) {
     return { folders: [] };
@@ -28,7 +41,8 @@ async function readSession() {
 async function writeSession(data) {
   if (!sessionFilePath) return;
   const tmp = sessionFilePath + '.tmp';
-  const payload = JSON.stringify({ folders: Array.isArray(data.folders) ? data.folders : [] }, null, 2);
+  const folders = Array.isArray(data.folders) ? data.folders.map(normalizeFolderEntry).filter(Boolean) : [];
+  const payload = JSON.stringify({ folders }, null, 2);
   await fsp.writeFile(tmp, payload, 'utf8');
   await fsp.rename(tmp, sessionFilePath);
 }
@@ -487,6 +501,55 @@ ipcMain.handle('fs:rename', async (_evt, { oldPath, newPath }) => {
   }
 });
 
+ipcMain.handle('fs:mkdir', async (_evt, { path: dir }) => {
+  try {
+    if (typeof dir !== 'string' || !dir) throw new Error('path required');
+    await fsp.mkdir(dir, { recursive: true });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('fs:exists', async (_evt, { path: p }) => {
+  try {
+    const st = await fsp.stat(p);
+    return { ok: true, exists: true, isDir: st.isDirectory() };
+  } catch (_) {
+    return { ok: true, exists: false };
+  }
+});
+
+// Copies the bundled orchestrate skill into the opened project and ensures the
+// tasks/ folder exists. Reads each bundled file with fsp.readFile (asar-safe;
+// fsp.copyFile/cp do not work from inside an asar archive).
+ipcMain.handle('tasks:installSkill', async (_evt, { projectPath }) => {
+  try {
+    if (!projectPath || typeof projectPath !== 'string') throw new Error('projectPath required');
+    const srcDir = path.join(__dirname, 'assets', 'skills', 'orchestrate');
+    const destDir = path.join(projectPath, '.claude', 'skills', 'orchestrate');
+    await fsp.mkdir(destDir, { recursive: true });
+    for (const name of await fsp.readdir(srcDir)) {
+      const content = await fsp.readFile(path.join(srcDir, name));
+      await fsp.writeFile(path.join(destDir, name), content);
+    }
+    // Propagate the dedicated orchestration subagent definitions (BA/coder/tester)
+    // into the project's .claude/agents/ so each phase can dispatch to its own
+    // agent type. Same asar-safe readFile/writeFile pattern as the skill copy.
+    const agentsSrcDir = path.join(__dirname, 'assets', 'agents');
+    const agentsDestDir = path.join(projectPath, '.claude', 'agents');
+    await fsp.mkdir(agentsDestDir, { recursive: true });
+    for (const name of await fsp.readdir(agentsSrcDir)) {
+      const content = await fsp.readFile(path.join(agentsSrcDir, name));
+      await fsp.writeFile(path.join(agentsDestDir, name), content);
+    }
+    await fsp.mkdir(path.join(projectPath, 'tasks'), { recursive: true });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 function promptHistoryDir(cwd) {
   return path.join(cwd, '.claude-logs', 'logs');
 }
@@ -702,6 +765,26 @@ ipcMain.handle('cli:checkClaude', async () => {
     return { ok: true, installed: true, version: null, path: (found.stdout || '').trim().split(/\r?\n/)[0] };
   }
   return { ok: true, installed: false, error: (ver.stderr || ver.error || '').trim() };
+});
+
+ipcMain.handle('cli:checkOpencode', async () => {
+  const ver = await execCapture('opencode', ['--version'], process.cwd());
+  if (ver.ok) {
+    return { ok: true, installed: true, version: (ver.stdout || '').trim() };
+  }
+  const finder = process.platform === 'win32' ? 'where' : 'which';
+  const found = await execCapture(finder, ['opencode'], process.cwd());
+  if (found.ok && (found.stdout || '').trim()) {
+    return { ok: true, installed: true, version: null, path: (found.stdout || '').trim().split(/\r?\n/)[0] };
+  }
+  return { ok: true, installed: false, error: (ver.stderr || ver.error || '').trim() };
+});
+
+ipcMain.handle('git:checkGit', async () => {
+  const ver = await execCapture('git', ['--version'], process.cwd());
+  if (!ver.ok) return { ok: true, installed: false };
+  const version = (ver.stdout || '').replace(/^git version\s*/i, '').trim() || null;
+  return { ok: true, installed: true, version };
 });
 
 ipcMain.handle('github:checkGh', async () => {
@@ -1462,6 +1545,18 @@ ipcMain.handle('slack:fetch', async (_evt, { token, channel, oldest, limit }) =>
   }
 });
 
+// Fetch replies inside a single thread. Needed because conversations.history
+// (slack:fetch) never returns thread replies, so history polling alone cannot
+// see a user's reply in the session anchor thread.
+ipcMain.handle('slack:fetchReplies', async (_evt, { token, channel, ts, oldest, limit }) => {
+  try {
+    if (!token || !channel || !ts) throw new Error('token, channel and ts required');
+    return await slack.fetchReplies(token, channel, ts, oldest, limit);
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 ipcMain.handle('slack:post', async (_evt, { token, channel, text, threadTs }) => {
   try {
     if (!token || !channel) throw new Error('token and channel required');
@@ -1480,6 +1575,47 @@ ipcMain.handle('slack:openSocket', async (_evt, { appToken }) => {
   } catch (err) {
     return { ok: false, error: err.message };
   }
+});
+
+// ── Slack "Sign in with Slack" OAuth v2 ─────────────────────────────────────
+// The orchestration (loopback server, authorize-URL builder, `state` CSRF check,
+// access_denied / missing-code routing, token exchange + persist, always-close)
+// lives in the Electron-free lib/slack-oauth.js so it is testable outside
+// Electron. This file is a thin shell: it injects the Electron-specific pieces —
+// shell.openExternal as `openBrowser`, and the renderer notification as
+// `onStarted` — and reuses the real exchange / env-set functions.
+
+let slackOAuthInflight = null;
+
+// Start the OAuth flow. Refuses if the client credentials are missing (the
+// renderer prompts for and saves them first, then retries) or if a sign-in is
+// already running.
+ipcMain.handle('slack:startOAuth', async () => {
+  const clientId = (envStore.get('SLACK_CLIENT_ID') || '').trim();
+  const clientSecret = (envStore.get('SLACK_CLIENT_SECRET') || '').trim();
+  if (!clientId || !clientSecret) {
+    return {
+      ok: false,
+      needsCredentials: true,
+      error: 'SLACK_CLIENT_ID and SLACK_CLIENT_SECRET must be set before signing in with Slack.'
+    };
+  }
+  if (slackOAuthInflight) {
+    return { ok: false, error: 'A Slack sign-in is already in progress. Finish or close the browser tab first.' };
+  }
+  const run = slackOAuth.runOAuth({
+    clientId,
+    clientSecret,
+    openBrowser: (url) => shell.openExternal(url),
+    onStarted: ({ redirectUri, authorizeUrl }) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('slack:oauthStarted', { redirectUri, authorizeUrl });
+      }
+    }
+  });
+  slackOAuthInflight = run;
+  try { return await run; }
+  finally { slackOAuthInflight = null; }
 });
 
 // Aborts whichever operation produced the current conflicted state.

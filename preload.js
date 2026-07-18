@@ -49,9 +49,15 @@ contextBridge.exposeInMainWorld('api', {
     readDir: (dirPath) => ipcRenderer.invoke('fs:readDir', { path: dirPath }),
     readFile: (filePath) => ipcRenderer.invoke('fs:readFile', { path: filePath }),
     writeFile: (filePath, content) => ipcRenderer.invoke('fs:writeFile', { path: filePath, content }),
+    mkdir: (dirPath) => ipcRenderer.invoke('fs:mkdir', { path: dirPath }),
     rename: (oldPath, newPath) => ipcRenderer.invoke('fs:rename', { oldPath, newPath }),
     findByExt: (root, ext, excludeDirs) => ipcRenderer.invoke('fs:findByExt', { root, ext, excludeDirs }),
-    grep: (root, query) => ipcRenderer.invoke('fs:grep', { root, query })
+    grep: (root, query) => ipcRenderer.invoke('fs:grep', { root, query }),
+    exists: (p) => ipcRenderer.invoke('fs:exists', { path: p })
+  },
+
+  tasks: {
+    installSkill: (projectPath) => ipcRenderer.invoke('tasks:installSkill', { projectPath })
   },
 
   prompts: {
@@ -63,6 +69,7 @@ contextBridge.exposeInMainWorld('api', {
   },
 
   git: {
+    checkGit: () => ipcRenderer.invoke('git:checkGit'),
     status: (cwd) => ipcRenderer.invoke('git:status', { cwd }),
     diff: (cwd, file, untracked) => ipcRenderer.invoke('git:diff', { cwd, file, untracked: !!untracked }),
     repoInfo: (cwd) => ipcRenderer.invoke('git:repoInfo', { cwd }),
@@ -78,7 +85,8 @@ contextBridge.exposeInMainWorld('api', {
   },
 
   cli: {
-    checkClaude: () => ipcRenderer.invoke('cli:checkClaude')
+    checkClaude: () => ipcRenderer.invoke('cli:checkClaude'),
+    checkOpencode: () => ipcRenderer.invoke('cli:checkOpencode')
   },
 
   github: {
@@ -98,8 +106,15 @@ contextBridge.exposeInMainWorld('api', {
     getToken: () => ipcRenderer.invoke('slack:getToken'),
     connect: (token, channel) => ipcRenderer.invoke('slack:connect', { token, channel }),
     fetch: (token, channel, oldest, limit) => ipcRenderer.invoke('slack:fetch', { token, channel, oldest, limit }),
+    fetchReplies: (token, channel, ts, oldest, limit) => ipcRenderer.invoke('slack:fetchReplies', { token, channel, ts, oldest, limit }),
     post: (token, channel, text, threadTs) => ipcRenderer.invoke('slack:post', { token, channel, text, threadTs }),
-    openSocket: (appToken) => ipcRenderer.invoke('slack:openSocket', { appToken })
+    openSocket: (appToken) => ipcRenderer.invoke('slack:openSocket', { appToken }),
+    startOAuth: () => ipcRenderer.invoke('slack:startOAuth'),
+    onOAuthStarted: (cb) => {
+      const listener = (_e, payload) => cb(payload);
+      ipcRenderer.on('slack:oauthStarted', listener);
+      return () => ipcRenderer.removeListener('slack:oauthStarted', listener);
+    }
   },
 
   env: {

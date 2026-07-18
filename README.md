@@ -3,7 +3,8 @@
 A Windows-first Electron desktop app that wraps an AI coding CLI (`claude`) and a `Git Bash`
 terminal side-by-side, then layers a full project cockpit around them: a file explorer with search
 and inline editing, a Git/GitHub panel, a diff & merge-conflict viewer, a test runner, a Slack
-bridge, and a multi-account AWS SSO credential switcher.
+bridge, a ticket-driven **Tasks kanban board** with a multi-agent "orchestrate" build workflow, and
+a multi-account AWS SSO credential switcher.
 
 The goal is to drive an AI coding agent from a single window — queue up prompts, watch it work,
 review the diffs it produces, commit & push, open a PR, run a GitHub Action, and (optionally) relay
@@ -32,6 +33,7 @@ the whole conversation to and from a Slack channel — without leaving the app.
   - [Change Viewer (diff & merge conflicts)](#change-viewer-diff--merge-conflicts)
   - [Tests tab](#tests-tab)
   - [Slack bridge](#slack-bridge)
+  - [Tasks board & the Orchestrate workflow](#tasks-board--the-orchestrate-workflow)
 - [Data & files written](#data--files-written)
 - [The prompt-logs Lambda](#the-prompt-logs-lambda)
 - [Security notes](#security-notes)
@@ -57,8 +59,18 @@ The app follows the standard Electron split with context isolation enabled:
   - `pty.js` — spawns `cmd.exe`, Git Bash, or a "worker" shell (gemini/codex) via `@lydell/node-pty`,
     with logic to auto-launch a CLI once the shell prompt is detected.
   - `aws.js` — AWS SSO login, role listing/selection, and credential rewriting.
-  - `slack.js` — a thin Slack Web API client (auth, channel resolution, history, post).
+  - `slack.js` — a thin Slack Web API client (auth, channel resolution, history, thread replies, post).
+  - `slack-oauth.js` — the "Sign in with Slack" OAuth v2 flow (authorize URL, loopback callback, token exchange).
+  - `slack-proxy.js` — pure decision logic for the two-way Slack ↔ Claude thread proxy (inbound replies).
   - `cloud-logs.js` — optional HTTP client for the prompt-logs Lambda (used for cloud sync).
+  - `env-store.js` — reads/writes `.env` values (used by the Slack OAuth and prompt flows).
+  - `ticket-*.js` — Electron-free helpers for the Tasks board / orchestrate workflow: `ticket-lanes.js`
+    (status enum & lanes), `ticket-folders.js` (folder-per-status reconciliation), `ticket-queue.js`
+    (concurrency/claims/isolation/ordering), `ticket-accounting.js` + `ticket-runs.js` (build time &
+    cost), `ticket-questions.js` (clarifying Q/A), and `ticket-history.js` (`## History` append).
+  - `orchestrate-agents.js` — the dedicated subagent type names and the missing-agent fallback.
+- **`.claude/skills/orchestrate/` + `.claude/agents/`** — the orchestrate skill and the three subagent
+  definitions (business-analyst, coder, tester) that drive the ticket workflow.
 - **`lambda/prompt-logs/`** — an optional AWS Lambda that stores prompt history in CloudWatch Logs.
 
 Terminals are rendered with [xterm.js](https://xtermjs.org/) and backed by real ConPTY processes, so
@@ -106,23 +118,13 @@ project. Open folders are remembered and reopened on the next launch.
 
 ## The window at a glance
 
-```
-┌─ workspace tabs ──────────────────────────────────────  [+ Folder…] ─┐
-├───────────────────────────────┬──────────────────────────────────────┤
-│  cmd · claude                 ║  [Git Bash][Files][Slack][Git]        │
-│  ┌─────────────────────────┐  ║  [Change Viewer][Tests]               │
-│  │                         │  ║                                        │
-│  │  claude REPL            │  ║   (active right-hand tab view)         │
-│  │  (xterm terminal)       │  ║                                        │
-│  │                         │  ║                                        │
-│  └─────────────────────────┘  ║                                        │
-│  Logs / Queue / +Prompt       ║                                        │
-└───────────────────────────────┴──────────────────────────────────────┘
-                                 ↑ draggable splitter
-```
+![The main working screen: the claude REPL on the left, a right-hand tabbed surface, and the workspace tabs across the top.](images/working_screen1.jpg)
+
+*The main working screen — the `claude` REPL on the left, the tabbed right-hand surface, and the queue/logs panels below.*
 
 - **Left pane:** the `cmd` terminal running `claude`, plus the prompt **Queue** and **Logs** panels.
-- **Right pane:** a tabbed surface — Git Bash, File Explorer, Slack, Git, Change Viewer, Tests.
+- **Right pane:** a tabbed surface — Git Bash, File Explorer, Slack, Git, Change Viewer, Tests, and
+  the **Tasks** board.
 - A draggable **splitter** sets the left/right ratio; terminals re-fit on release.
 
 ---
@@ -149,6 +151,10 @@ project. Open folders are remembered and reopened on the next launch.
     clears it.
 - A small badge on the tab shows the number of **queued prompts**.
 
+![A workspace tab showing the green "finished" status dot after the agent goes idle.](images/tab_finished_work.jpg)
+
+*A tab flips to the green **finished** state once the agent goes idle after producing output.*
+
 ### The cmd / claude pane
 
 - On opening a folder the app checks whether `claude` is installed (`claude --version`, falling
@@ -173,6 +179,10 @@ project. Open folders are remembered and reopened on the next launch.
   **auto-dispatched**: the text is typed into the REPL, logged, and `Enter` is sent a moment later.
   If the agent is paused on a confirmation, dispatch waits until you resolve it.
 - The per-tab badge and the in-pane count track the pending queue.
+
+![The prompt queue panel with several prompts queued up to feed the agent one at a time.](images/queue_up_prompts.jpg)
+
+*Queue up prompts and let the app auto-dispatch them one at a time as the agent goes idle.*
 
 ### Prompt history (logs)
 
@@ -227,6 +237,13 @@ and account IDs are at the top of `lib/aws.js`.
   show a placeholder instead of garbage.
 - **Rename** files in place (with illegal-character validation).
 - Two quick filters: **Readme** (Markdown only) and **Changes** (only git-modified files).
+- **Markdown preview:** when the open file is a `.md` file, a **Show preview** toggle appears in the
+  editor toolbar. It renders the source as formatted HTML — headings, bold/italic, ordered/unordered
+  lists, inline and fenced code, links, images, and blockquotes — and toggles straight back to the raw
+  source. The toggle only shows for `.md` files. Rendering is done by the in-repo, dependency-free
+  renderer `lib/markdown.js` (no new npm dependency): the source is HTML-escaped *before* any transform
+  and link/image URLs are scheme-checked, so raw HTML or a `javascript:` URL in the document can never
+  execute — it is only ever shown as visible text.
 - **Find bar** (`Ctrl+F`) with three scopes:
   - **Tree** — live filter of file/folder names.
   - **Content** — full-text search across the folder (debounced), with file + line + snippet results.
@@ -236,6 +253,10 @@ and account IDs are at the top of `lib/aws.js`.
 
 Gated behind a GitHub sign-in check — if `gh` isn't installed or authenticated, the tab shows a sign-in
 prompt with a **Login with gh** button (runs `gh auth login` in the bash pane) and a re-check button.
+
+![The Git tab showing branch info, commit & push controls, and GitHub actions.](images/github_view.png)
+
+*The Git/GitHub panel — branch tracking, commit & push, publish, pull requests, and workflow dispatch.*
 
 Once authenticated:
 
@@ -293,6 +314,12 @@ are posted back.
 - **Token** is read from the `SLACK_TOKEN` variable in your `.env` file (the bot token, `xoxb-…`, from
   your Slack app's *OAuth & Permissions → Bot User OAuth Token*). AWS Secrets Manager is no longer used.
   If the token is missing or the connection fails, the Slack tab shows setup instructions.
+- **Sign in with Slack (OAuth):** instead of pasting a token, you can click **Sign in with Slack** to
+  run an OAuth v2 flow (`lib/slack-oauth.js`). The app opens the authorize URL in your browser, catches
+  the redirect on a small fixed-range loopback port (with a `state`/CSRF check), exchanges the code, and
+  writes your *user* token (`xoxp-…`) back into `.env` automatically. It requests the user scopes
+  `channels:history, channels:read, groups:history, groups:read, chat:write`; the OAuth app credentials
+  live in `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET`.
 - **Connect** to a channel by `#name` or ID; the app validates the token and resolves the channel.
 - **Live** listening keeps the channel connected and dispatches each new message to the agent
   (respecting the same idle/TUI guards as the queue), skipping the bot's own posts and system events,
@@ -307,8 +334,95 @@ are posted back.
 - The agent's terminal output is captured, cleaned (ANSI/box-drawing stripped, blank lines collapsed,
   length-capped), chunked to Slack's limit, and **posted back in-thread** — toggleable with **Post
   Claude's replies back to Slack**.
+- **Two-way thread proxy (inbound replies):** on connect the app posts a single anchor message and
+  reuses its `thread_ts` for the whole session, so the conversation stays in one Slack thread. Replies
+  you type **into that Slack thread** are pulled back (`conversations.replies`) and fed into the Claude
+  window as prompts — subject to the same idle/TUI guards, bot/self filtering, and timestamp de-dupe as
+  the channel listener. The decision logic is pure and unit-tested in `lib/slack-proxy.js` (mirrored in
+  the renderer).
 - A built-in **composer** lets you send messages to the channel directly. Slack config is remembered
   per project, and a dot on the tab indicates live listening.
+
+### Tasks board & the Orchestrate workflow
+
+The **Tasks** tab is a live kanban board for **ticket-driven development**: you plan a feature into
+tickets, review them, and let a set of AI subagents build and test them while you watch progress move
+across the lanes. The board re-reads the ticket files every few seconds, so status changes show up on
+their own.
+
+![The Tasks kanban board showing tickets moving across the todo → defining → in-progress → testing → failed-testing → done lanes.](images/workflow_task_view.png)
+
+*The Tasks board — one lane per status, with per-ticket build time, cost, and status markers.*
+
+**Tickets are files.** Each ticket is a markdown file under `tasks/` with flat `key: value`
+frontmatter (`id`, `title`, `status`, `created`, `updated`, plus optional extras) followed by
+`## Description`, `## Acceptance Criteria`, `## Cucumber Tests`, and a user-owned `## Additional
+Context` section that the agents read but never overwrite.
+
+**Six lanes.** `status` is one of a six-value enum, and the board renders one lane per status in this
+exact left-to-right order, matching how work flows:
+
+`todo → defining → in-progress → testing → failed-testing → done`
+
+- **todo** — freshly created tickets awaiting work (and where you drop new ones).
+- **defining** — the business-analyst agent is writing acceptance criteria and Gherkin.
+- **in-progress** — a coder agent is implementing the ticket.
+- **testing** — a tester agent is writing/running tests.
+- **failed-testing** — tests failed; the card shows a red marker and the fix loop runs.
+- **done** — complete.
+
+Out-of-enum statuses are routed to a dedicated **unknown** lane rather than being silently dumped into
+`todo`, so bad data is visible instead of hidden.
+
+**Folder-per-status layout.** A ticket file lives in the `tasks/<status>/` subfolder matching its
+frontmatter status (`tasks/todo/`, `tasks/in-progress/`, `tasks/done/`, …). Frontmatter status is the
+single source of truth: when the folder and the status disagree, the file is reconciled (moved) to the
+folder its status calls for. Unknown statuses own no folder and are left in place
+(`lib/ticket-folders.js`).
+
+**Three agent roles.** The workflow is driven by the `orchestrate` skill
+(`.claude/skills/orchestrate/SKILL.md`), which coordinates three dedicated subagents defined in
+`.claude/agents/` (`ba.md`, `coder.md`, `tester.md`):
+
+- **business-analyst** (`orchestrate-ba`, read/search only) — turns a feature request into small,
+  independently testable tickets with acceptance criteria and Gherkin scenarios.
+- **coder** (`orchestrate-coder`) — implements one ticket to its acceptance criteria inside that
+  ticket's isolated branch/worktree; does not write tests.
+- **tester** (`orchestrate-tester`) — writes e2e cucumber + unit tests, mocks all DB calls, runs the
+  suite, and reports pass/fail.
+
+If a named agent definition is missing at dispatch time the orchestrator falls back to the generic
+`general-purpose` agent and reports it, rather than aborting (`lib/orchestrate-agents.js`). You drive
+the workflow with `/orchestrate plan <feature>` (plan/define), `/orchestrate build` (build/test loop),
+and `/orchestrate status` (summarize the board).
+
+**Concurrency, claims & isolation.** The build loop can run **several tickets at once** up to a bounded
+limit (default **3**, hard ceiling **8**). Each ticket is **claimed** atomically by writing the
+building agent's id into an `agent` frontmatter field together with `status: in-progress` in a single
+whole-file write — the first writer wins, so no two agents ever work the same ticket. Each build runs
+on its own per-ticket git branch/worktree derived from the ticket id (e.g. `orchestrate/task-004`), so
+parallel builds never clobber each other's working tree; git-shared steps like merging back are
+serialized. The pure decision logic (claim/release, next-batch selection, ordering, isolation names)
+lives in `lib/ticket-queue.js` and is unit-tested.
+
+**Build accounting & run log.** Tickets record how long each build took and what it cost. A single
+latest build stamps `startedAt` / `finishedAt` (and optional `costUsd` / `tokens`) on the frontmatter
+(`lib/ticket-accounting.js`), and every run additionally appends an entry to a durable `runs` log so
+re-runs **accumulate** multiple entries rather than overwriting (`lib/ticket-runs.js`). The board shows
+each ticket's build time (in minutes) and cost.
+
+**Other board features.**
+
+- **Ordering** — the `todo` lane honours a per-ticket numeric `order` field so a chosen order sticks
+  across polls and restarts (`lib/ticket-queue.js` / `lib/ticket-lanes.js`).
+- **Clarifying questions** — a ticket can carry a `question` / `answer` pair; while it has a question
+  and no answer the card shows a **yellow** "waiting" dot, cleared the moment the answer lands
+  (`lib/ticket-questions.js`).
+- **Durable history** — each coder/tester prompt+response is folded into a `## History` section in the
+  ticket file, kept before `## Additional Context` so the user section stays at the tail
+  (`lib/ticket-history.js`).
+- **Working indicator** — cards in an active status (`defining` / `in-progress` / `testing`) show a
+  blue "being worked on" dot.
 
 ---
 
@@ -319,6 +433,7 @@ are posted back.
 | `<userData>/session.json` | List of open folders (restored on launch) | app |
 | `<userData>/status.json` | Active AWS env/role/expiration | `lib/aws.js` |
 | `<project>/.claude-logs/logs/prompt_history.json` | Per-project prompt history | app |
+| `<project>/tasks/<status>/TASK-*.md` | Ticket files for the Tasks board (one subfolder per status) | orchestrate workflow |
 | `~/.aws/config` | Adds `[sso-session claude-cmd-ui]` + a `[profile sso-<account>]` per account you sign into | `lib/aws.js` |
 | `~/.aws/credentials` | Rewrites `[default]` & `[ohq-dev]` (backed up once first) | `lib/aws.js` |
 | `<project>/.gitignore` | Appended when you use the ignore menu | app |
@@ -383,12 +498,27 @@ claude-cmd-ui/
 ├── lib/
 │   ├── pty.js               # cmd / bash / worker PTY spawning + CLI auto-launch
 │   ├── aws.js               # SSO login, role selection, credential rewrite
-│   ├── slack.js             # Slack Web API client
-│   └── cloud-logs.js        # Optional prompt-logs Lambda client (cloud sync)
+│   ├── slack.js             # Slack Web API client (incl. thread replies)
+│   ├── slack-oauth.js       # "Sign in with Slack" OAuth v2 flow
+│   ├── slack-proxy.js       # Two-way Slack ↔ Claude thread proxy logic
+│   ├── env-store.js         # Read/write .env values
+│   ├── cloud-logs.js        # Optional prompt-logs Lambda client (cloud sync)
+│   ├── orchestrate-agents.js# Subagent type names + missing-agent fallback
+│   ├── ticket-lanes.js      # Status enum + board lanes
+│   ├── ticket-folders.js    # Folder-per-status reconciliation
+│   ├── ticket-queue.js      # Concurrency, claims, isolation, ordering
+│   ├── ticket-accounting.js # Per-ticket build time & cost
+│   ├── ticket-runs.js       # Durable per-run accounting log
+│   ├── ticket-questions.js  # Clarifying question / answer
+│   └── ticket-history.js    # Append to a ticket's ## History
 ├── renderer/
 │   ├── index.html           # Layout + per-tab workspace template
 │   ├── renderer.js          # All UI behavior (~5k lines)
 │   └── styles.css           # Theme
+├── .claude/
+│   ├── skills/orchestrate/  # The orchestrate skill (SKILL.md)
+│   └── agents/              # ba.md / coder.md / tester.md subagent definitions
+├── tasks/                   # Ticket files for the Tasks board (one subfolder per status)
 ├── lambda/
 │   └── prompt-logs/         # Optional CloudWatch-backed prompt log store
 ├── run.bat                  # Convenience launcher (npm run start)

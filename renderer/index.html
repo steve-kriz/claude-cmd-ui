@@ -39,11 +39,63 @@
     </div>
   </div>
 
+  <div id="taskModal" class="task-modal hidden">
+    <div class="task-modal-card">
+      <div class="task-modal-head">
+        <span class="task-modal-id"></span>
+        <input class="task-modal-title" type="text" spellcheck="false" placeholder="Title" />
+        <select class="task-modal-status">
+          <option value="todo">To Do</option>
+          <option value="defining">Defining</option>
+          <option value="in-progress">In Progress</option>
+          <option value="testing">Testing</option>
+          <option value="failed-testing">Failed Testing</option>
+          <option value="done">Done</option>
+        </select>
+      </div>
+      <div class="task-modal-path"></div>
+      <div class="task-modal-accounting hidden"></div>
+      <div class="task-modal-runs hidden"></div>
+      <div class="task-modal-question hidden">
+        <div class="task-modal-question-label">Question from agent</div>
+        <div class="task-modal-question-text"></div>
+        <input class="task-modal-answer-input" type="text" spellcheck="false" placeholder="Type your answer, then Save…" />
+      </div>
+      <textarea class="task-modal-body" spellcheck="false"></textarea>
+      <div class="task-modal-error"></div>
+      <div class="task-modal-actions">
+        <button class="task-modal-cancel small-btn">Cancel</button>
+        <button class="task-modal-save small-btn primary-btn">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="newTaskModal" class="task-modal hidden">
+    <div class="task-modal-card">
+      <div class="task-modal-head">
+        <span class="task-modal-id newtask-id"></span>
+        <input class="task-modal-title newtask-title" type="text" spellcheck="false" placeholder="Ticket title" />
+      </div>
+      <textarea class="task-modal-body newtask-body" spellcheck="false" placeholder="Describe what needs doing and why. This becomes the ticket's Description."></textarea>
+      <div class="task-modal-error newtask-error"></div>
+      <div class="task-modal-actions">
+        <button class="newtask-cancel small-btn">Cancel</button>
+        <button class="newtask-create small-btn primary-btn">Create ticket</button>
+      </div>
+    </div>
+  </div>
+
   <template id="workspaceTpl">
     <main class="workspace">
       <section class="cmdPane pane">
         <div class="pane-header">
-          <span class="pane-title">cmd · claude <span class="claudeStatus pane-subtitle">(checking…)</span></span>
+          <span class="pane-title">
+            <select class="agentSelect" title="Choose which AI agent runs in this pane">
+              <option value="claude">cmd · claude</option>
+              <option value="opencode">git bash · openCode</option>
+            </select>
+            <span class="claudeStatus pane-subtitle">(checking…)</span>
+          </span>
           <div class="queue-controls">
             <button class="logsToggleBtn logs-toggle" title="Show prompt history">
               Logs <span class="logsCount logs-count">0</span>
@@ -89,6 +141,18 @@
             <button class="claudeLaunchBtn small-btn" disabled>Launch claude</button>
           </div>
         </div>
+        <div class="opencodeInstallBanner install-banner hidden">
+          <div class="install-banner-text">
+            <strong>opencode CLI not found.</strong>
+            Install it to run openCode in Git Bash.
+          </div>
+          <div class="install-banner-actions">
+            <button class="opencodeInstallBtn small-btn primary-btn">Install in Git Bash</button>
+            <button class="opencodeOpenDocsBtn small-btn">Install docs…</button>
+            <button class="opencodeRecheckBtn small-btn">Re-check</button>
+            <button class="opencodeLaunchBtn small-btn" disabled>Launch openCode</button>
+          </div>
+        </div>
         <div class="cmdTerm term"></div>
       </section>
 
@@ -102,6 +166,7 @@
           <button class="tab-btn" data-tab="git">Git</button>
           <button class="tab-btn" data-tab="diff">Change Viewer <span class="changeCount change-count hidden">0</span></button>
           <button class="tab-btn" data-tab="tests">Tests</button>
+          <button class="tab-btn" data-tab="tasks">Tasks</button>
         </div>
 
         <div class="tab-views">
@@ -143,6 +208,7 @@
               <button class="fileSaveBtn small-btn" disabled>Save</button>
               <button class="fileRenameBtn small-btn" disabled>Rename…</button>
               <button class="fileReloadBtn small-btn" disabled>Reload</button>
+              <button class="filePreviewBtn small-btn hidden" disabled aria-pressed="false">Show preview</button>
               <button class="filesRefresh small-btn">Refresh</button>
             </div>
             <div class="fileRenameRow file-rename hidden">
@@ -171,6 +237,7 @@
                   <div class="fileFindOverlay file-find-overlay" aria-hidden="true"><div class="fileFindOverlayInner file-find-overlay-inner"></div></div>
                   <textarea class="fileEditor file-editor scroll-area" spellcheck="false" placeholder="(click a file to view)"></textarea>
                 </div>
+                <div class="filePreview markdown-preview scroll-area hidden"></div>
                 <pre class="fileBinaryMsg file-viewer scroll-area hidden"></pre>
               </div>
             </div>
@@ -202,13 +269,19 @@
 
               <div class="slack-secret-block">
                 <div class="git-form-actions">
+                  <button class="slackSignInBtn small-btn slack-signin-btn">Sign in with Slack</button>
                   <button class="slackLoadTokenBtn small-btn primary-btn">Load token from .env</button>
                   <span class="slackTokenStatus slack-signin-status"></span>
                 </div>
                 <div class="slack-oauth-hint">
-                  Set <code>SLACK_TOKEN</code> in <code>.env</code> first. If loading fails,
-                  add or fix the value and reload. You can also just hit <strong>Connect</strong>
-                  below — the token is loaded automatically.
+                  <strong>Sign in with Slack</strong> opens your browser to log in with your own
+                  Slack account and saves the resulting token to <code>SLACK_TOKEN</code> — no
+                  manual paste. It needs <code>SLACK_CLIENT_ID</code> and
+                  <code>SLACK_CLIENT_SECRET</code> from your Slack app (you'll be prompted the
+                  first time), and the redirect URL shown after you click must be registered under
+                  your Slack app → OAuth &amp; Permissions → Redirect URLs. Alternatively, set
+                  <code>SLACK_TOKEN</code> in <code>.env</code> yourself and use
+                  <strong>Load token from .env</strong>.
                 </div>
               </div>
 
@@ -244,6 +317,19 @@
           </div>
 
           <div class="tab-view" data-view="git">
+            <div class="gitNotInstalledGate git-auth-gate hidden">
+              <div class="git-auth-gate-title">Git is not installed</div>
+              <div class="git-auth-gate-msg">
+                This tab needs <code>git</code> on your PATH. Install it, then re-check.
+                <span class="gitInstallStatus git-auth-status">checking…</span>
+              </div>
+              <div class="git-auth-gate-actions">
+                <button class="gitInstallWingetBtn small-btn primary-btn">Install via winget</button>
+                <button class="gitInstallDownloadBtn small-btn">Open download page</button>
+                <button class="gitInstallRecheckBtn small-btn">I've installed it — re-check</button>
+              </div>
+              <pre class="git-auth-hint">winget install runs in the Git Bash terminal. After it finishes, restart the app (or open a new folder) so the updated PATH is picked up, then click re-check.</pre>
+            </div>
             <div class="gitAuthGate git-auth-gate hidden">
               <div class="git-auth-gate-title">Sign in to use the Git tab</div>
               <div class="git-auth-gate-msg">
@@ -500,6 +586,61 @@
                 <div class="uiTestsBody tests-group-body">(open a folder)</div>
                 <pre class="uiTestsOutput tests-output hidden"></pre>
               </details>
+            </div>
+          </div>
+
+          <div class="tab-view" data-view="tasks">
+            <div class="view-toolbar">
+              <span class="view-title">Tasks</span>
+              <span class="tasksStatus tasks-status"></span>
+              <span class="toolbar-spacer"></span>
+              <label class="tasksConcurrencyLabel tasks-concurrency-label" title="How many build agents may run in parallel">
+                Parallel
+                <select class="tasksConcurrency" title="How many build agents may run in parallel"></select>
+              </label>
+              <button class="tasksNewBtn small-btn" title="Create a new ticket" disabled>New ticket</button>
+              <button class="tasksBuildBtn small-btn primary-btn" title="Build queued tickets until the board is clear" disabled>Build</button>
+              <button class="tasksRefresh small-btn">Refresh</button>
+            </div>
+            <div class="tasksSkillBanner install-banner hidden">
+              <div class="install-banner-text">
+                <strong>Orchestration skill not installed.</strong>
+                Install it to plan features as tickets and drive build &amp; test from this board.
+              </div>
+              <div class="install-banner-actions">
+                <button class="tasksInstallSkillBtn small-btn primary-btn">Install orchestration skill</button>
+              </div>
+            </div>
+            <div class="tasksEmpty tasks-empty hidden">No tickets yet. Ask Claude: <code>/orchestrate plan &lt;feature&gt;</code></div>
+            <div class="tasksBoard tasks-board scroll-area">
+              <div class="tasks-lane" data-status="todo">
+                <div class="tasks-lane-header">To Do <span class="tasks-lane-count">0</span></div>
+                <div class="tasks-lane-cards"></div>
+              </div>
+              <div class="tasks-lane" data-status="defining">
+                <div class="tasks-lane-header">Defining <span class="tasks-lane-count">0</span></div>
+                <div class="tasks-lane-cards"></div>
+              </div>
+              <div class="tasks-lane" data-status="in-progress">
+                <div class="tasks-lane-header">In Progress <span class="tasks-lane-count">0</span></div>
+                <div class="tasks-lane-cards"></div>
+              </div>
+              <div class="tasks-lane" data-status="testing">
+                <div class="tasks-lane-header">Testing <span class="tasks-lane-count">0</span></div>
+                <div class="tasks-lane-cards"></div>
+              </div>
+              <div class="tasks-lane" data-status="failed-testing">
+                <div class="tasks-lane-header">Failed Testing <span class="tasks-lane-count">0</span></div>
+                <div class="tasks-lane-cards"></div>
+              </div>
+              <div class="tasks-lane" data-status="done">
+                <div class="tasks-lane-header">Done <span class="tasks-lane-count">0</span></div>
+                <div class="tasks-lane-cards"></div>
+              </div>
+              <div class="tasks-lane hidden" data-status="unknown">
+                <div class="tasks-lane-header">Unknown <span class="tasks-lane-count">0</span></div>
+                <div class="tasks-lane-cards"></div>
+              </div>
             </div>
           </div>
 
