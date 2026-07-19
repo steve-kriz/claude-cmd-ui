@@ -56,8 +56,10 @@ const FOLDERS = path.join(ROOT, 'lib', 'ticket-folders.js');
 const readLower = (p) => fs.readFileSync(p, 'utf8').toLowerCase();
 const readRaw = (p) => fs.readFileSync(p);
 
-// The canonical six-status enum — no review lane may ever be added.
-const SIX_STATUSES = ['todo', 'defining', 'in-progress', 'testing', 'failed-testing', 'done'];
+// The canonical six-lane enum — no review lane may ever be added. (TASK-028
+// replaced the failed-testing lane with post-processing; failed-testing remains
+// a valid status without its own lane.)
+const SIX_STATUSES = ['todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done'];
 
 // --- Minimal flat-YAML frontmatter parser (matches the shape the agent files
 // use: inline scalars + a `>-` folded description block). ---------------------
@@ -276,13 +278,13 @@ test('E2E cucumber: the persona routes discovered issues to new follow-up ticket
 test('E2E cucumber: both SKILL.md copies place the review between testing and done', async (t) => {
   await t.test(
     'Given both copies of SKILL.md, Then each documents a tech-lead review after testing and before done ' +
-    'with the ordering testing -> tech-lead review -> done',
+    'with the ordering testing -> tech-lead review -> post-processing -> done',
     () => {
       for (const [label, p] of [['.claude', PROJECT_SKILL], ['assets', ASSETS_SKILL]]) {
         const md = readLower(p);
         assert.match(md, /tech-lead review/, `${label}/SKILL.md documents a tech-lead review step`);
-        assert.match(md, /testing\s*→\s*tech-lead review\s*→\s*done/,
-          `${label}/SKILL.md shows the testing -> tech-lead review -> done ordering`);
+        assert.match(md, /testing\s*→\s*tech-lead review\s*→\s*post-processing\s*→\s*done/,
+          `${label}/SKILL.md shows the testing -> tech-lead review -> post-processing -> done ordering`);
       }
     },
   );

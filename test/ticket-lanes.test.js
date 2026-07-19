@@ -1,9 +1,10 @@
 'use strict';
 
-// Unit + cucumber-style tests for TASK-006: the `defining` lane between `todo`
-// and `in-progress`, the six-value status enum
-//   todo → defining → in-progress → testing → failed-testing → done
-// the red per-ticket "failed" marker, and graceful handling of unknown statuses.
+// Unit + cucumber-style tests for TASK-006/028: the `defining` lane between
+// `todo` and `in-progress`, the six-lane board enum
+//   todo → defining → in-progress → testing → post-processing → done
+// the red per-ticket "failed" marker (failed-testing folds into Testing), and
+// graceful handling of unknown statuses.
 //
 // Two things are under test:
 //
@@ -32,12 +33,16 @@ const path = require('node:path');
 
 const {
   LANE_STATUSES,
+  VALID_STATUSES,
   ACTIVE_STATUSES,
   FAILED_STATUS,
+  POST_PROCESSING_STATUS,
+  POST_PROCESSING_KIND,
   UNKNOWN_STATUS,
   isKnownStatus,
   isActiveStatus,
   isFailedStatus,
+  isPostProcessingTicket,
   laneForStatus,
 } = require('../lib/ticket-lanes');
 
@@ -54,7 +59,7 @@ const cssSrc = fs.readFileSync(STYLES, 'utf8');
 
 test('LANE_STATUSES is the six-value enum in canonical left-to-right order', () => {
   assert.deepEqual(LANE_STATUSES, [
-    'todo', 'defining', 'in-progress', 'testing', 'failed-testing', 'done',
+    'todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done',
   ]);
 });
 
@@ -115,6 +120,56 @@ test('laneForStatus routes an unknown status to the unknown lane, NOT todo', () 
   }
 });
 
+// --- TASK-028: post-processing lane/status + failed-testing folding ---------
+
+test('POST_PROCESSING_STATUS and POST_PROCESSING_KIND are both "post-processing"', () => {
+  assert.equal(POST_PROCESSING_STATUS, 'post-processing');
+  assert.equal(POST_PROCESSING_KIND, 'post-processing');
+});
+
+test('post-processing is a lane status; failed-testing is valid but NOT a lane', () => {
+  assert.ok(LANE_STATUSES.includes('post-processing'), 'post-processing owns a lane');
+  assert.ok(!LANE_STATUSES.includes('failed-testing'), 'failed-testing has no dedicated lane');
+  assert.ok(VALID_STATUSES.includes('failed-testing'), 'failed-testing is still a valid status');
+});
+
+test('VALID_STATUSES is the seven-value superset (lanes + failed-testing)', () => {
+  assert.deepEqual([...VALID_STATUSES].sort(), [
+    'defining', 'done', 'failed-testing', 'in-progress', 'post-processing', 'testing', 'todo',
+  ]);
+  // Exactly LANE_STATUSES plus the single extra failed-testing status.
+  assert.deepEqual(VALID_STATUSES, [...LANE_STATUSES, 'failed-testing']);
+});
+
+test('isKnownStatus is true for failed-testing AND post-processing (never routed to unknown)', () => {
+  assert.equal(isKnownStatus('failed-testing'), true);
+  assert.equal(isKnownStatus('post-processing'), true);
+  for (const s of VALID_STATUSES) assert.equal(isKnownStatus(s), true, `${s} known`);
+});
+
+test('laneForStatus folds failed-testing into testing and keeps post-processing distinct', () => {
+  assert.equal(laneForStatus('failed-testing'), 'testing', 'failed-testing folds into testing');
+  assert.equal(laneForStatus('post-processing'), 'post-processing');
+  assert.notEqual(laneForStatus('failed-testing'), 'todo', 'failed cards never dumped into todo');
+  assert.notEqual(laneForStatus('failed-testing'), UNKNOWN_STATUS);
+});
+
+test('post-processing is NOT an active status (no blue "being worked on" dot)', () => {
+  assert.equal(isActiveStatus('post-processing'), false);
+  assert.ok(!ACTIVE_STATUSES.includes('post-processing'));
+});
+
+test('isPostProcessingTicket is true only when kind === "post-processing"', () => {
+  assert.equal(isPostProcessingTicket({ kind: 'post-processing' }), true);
+  assert.equal(isPostProcessingTicket({ fm: { kind: 'post-processing' } }), true, 'accepts { fm } wrapper');
+  // Status is irrelevant — only the kind decides.
+  assert.equal(isPostProcessingTicket({ status: 'todo', kind: 'post-processing' }), true);
+  assert.equal(isPostProcessingTicket({ status: 'post-processing' }), false, 'status alone does not make it a recipe');
+  for (const bad of [{}, { kind: '' }, { kind: 'other' }, null, undefined]) {
+    assert.equal(isPostProcessingTicket(bad), false, `not a post-processing ticket: ${JSON.stringify(bad)}`);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Source-scanning guards: the browser side must mirror the lib constants,
 // carry the lanes in order in the DOM, and carry the red failed CSS rule.
@@ -157,8 +212,10 @@ test('renderer.js wires the red dot to the failed status and appends it as a car
 
 test('the new-ticket flow still creates tickets with status todo', () => {
   // Guards the "New tickets are created in todo" scenario at the source: the
-  // new-task modal stamps `status: 'todo'` on the fresh frontmatter.
-  assert.match(rendererSrc, /status:\s*'todo'/);
+  // new-task modal defaults the mode's status to 'todo' (TASK-028 parameterised
+  // the opener; the toolbar button passes no mode, so it still creates a todo
+  // ticket with no kind).
+  assert.match(rendererSrc, /mode\.status\s*\|\|\s*'todo'/);
 });
 
 // ===========================================================================
@@ -170,21 +227,27 @@ test('the new-ticket flow still creates tickets with status todo', () => {
 // array and every DB access is mocked away by construction.
 // ===========================================================================
 
-// The six enum lanes plus the dedicated unknown lane, exactly mirroring the DOM
+// The six board lanes plus the dedicated unknown lane, exactly mirroring the DOM
 // columns (index.html). This stands in for the rendered board's lane set.
+// `failed-testing` is deliberately NOT a board lane — it folds into Testing.
 const BOARD_LANES = [...LANE_STATUSES, UNKNOWN_STATUS];
 
 // VERBATIM copy of renderTasksBoard's per-ticket routing + dot decision
-// (renderer/renderer.js ~5278-5325). Returns the placement so scenarios can
-// assert where a card lands and what marker it shows, without a DOM.
+// (renderer/renderer.js). Returns the placement so scenarios can assert where a
+// card lands and what marker it shows, without a DOM. failed-testing folds into
+// the Testing lane (TASK-028); out-of-enum statuses route to the unknown lane.
 const TASKS_LANE_STATUSES = [...LANE_STATUSES];
+const TASKS_VALID_STATUSES = [...LANE_STATUSES, FAILED_STATUS];
 const TASKS_ACTIVE_STATUSES = [...ACTIVE_STATUSES];
 const TASKS_FAILED_STATUS = FAILED_STATUS;
 const TASKS_UNKNOWN_STATUS = UNKNOWN_STATUS;
 
 function placeCard(fm, lanesPresent) {
-  const unknown = !TASKS_LANE_STATUSES.includes(fm.status);
-  let laneKey = unknown ? TASKS_UNKNOWN_STATUS : fm.status;
+  const unknown = !TASKS_VALID_STATUSES.includes(fm.status);
+  let laneKey;
+  if (unknown) laneKey = TASKS_UNKNOWN_STATUS;
+  else if (fm.status === TASKS_FAILED_STATUS) laneKey = 'testing';
+  else laneKey = fm.status;
   if (!lanesPresent.includes(laneKey)) laneKey = 'todo';
   const failed = fm.status === TASKS_FAILED_STATUS;
   const active = TASKS_ACTIVE_STATUSES.includes(fm.status);
@@ -212,9 +275,9 @@ function renderBoard(tickets) {
 }
 
 test('Scenario: The defining lane sits between todo and in-progress', () => {
-  // Then the lane order left-to-right is the six-value enum
+  // Then the lane order left-to-right is the six-lane board enum
   assert.deepEqual(BOARD_LANES.slice(0, 6),
-    ['todo', 'defining', 'in-progress', 'testing', 'failed-testing', 'done']);
+    ['todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done']);
 });
 
 test('Scenario: New tickets are created in todo', () => {
@@ -227,8 +290,9 @@ test('Scenario: New tickets are created in todo', () => {
   const placed = placeCard(fm, BOARD_LANES);
   assert.equal(placed.laneKey, 'todo');
   assert.equal(placed.unknown, false);
-  // And the source new-ticket flow stamps the same status.
-  assert.match(rendererSrc, /status:\s*'todo'/);
+  // And the source new-ticket flow defaults the mode's status to the same value
+  // (TASK-028 parameterised the opener; the toolbar button passes no mode).
+  assert.match(rendererSrc, /mode\.status\s*\|\|\s*'todo'/);
 });
 
 test('Scenario: A defining ticket lands in the defining lane', () => {
@@ -265,8 +329,9 @@ test('Scenario: Failed tests show a red marker', () => {
   assert.equal(placed.dot.className, 'task-card-dot failed');
   // and the CSS paints that class red.
   assert.match(cssSrc, /\.task-card-dot\.failed\s*\{[^}]*background:\s*#f14c4c/i);
-  // and the card lands in the failed-testing lane, not unknown.
-  assert.equal(placed.laneKey, 'failed-testing');
+  // and the card folds into the testing lane (no dedicated lane), not unknown
+  // and never dumped into todo (TASK-028).
+  assert.equal(placed.laneKey, 'testing');
   assert.equal(placed.unknown, false);
 });
 

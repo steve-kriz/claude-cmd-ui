@@ -57,7 +57,10 @@ contextBridge.exposeInMainWorld('api', {
   },
 
   tasks: {
-    installSkill: (projectPath) => ipcRenderer.invoke('tasks:installSkill', { projectPath })
+    installSkill: (projectPath) => ipcRenderer.invoke('tasks:installSkill', { projectPath }),
+    // Fire-and-forget: report the app-wide count of actively-worked tickets so the
+    // main process can hold/release the OS keep-awake wake-lock (TASK-036).
+    reportActivity: (activeCount) => ipcRenderer.send('tasks:activity', activeCount)
   },
 
   prompts: {

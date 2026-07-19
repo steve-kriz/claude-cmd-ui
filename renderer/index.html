@@ -49,7 +49,7 @@
           <option value="defining">Defining</option>
           <option value="in-progress">In Progress</option>
           <option value="testing">Testing</option>
-          <option value="failed-testing">Failed Testing</option>
+          <option value="post-processing">Post-processing</option>
           <option value="done">Done</option>
         </select>
       </div>
@@ -76,11 +76,48 @@
         <span class="task-modal-id newtask-id"></span>
         <input class="task-modal-title newtask-title" type="text" spellcheck="false" placeholder="Ticket title" />
       </div>
+      <div class="newtask-bug-of-row hidden">
+        <label class="newtask-bug-of-label">Bug against:</label>
+        <select class="newtask-bug-of"></select>
+      </div>
+      <div class="newtask-bug-warn hidden"></div>
       <textarea class="task-modal-body newtask-body" spellcheck="false" placeholder="Describe what needs doing and why. This becomes the ticket's Description."></textarea>
       <div class="task-modal-error newtask-error"></div>
       <div class="task-modal-actions">
+        <button class="newtask-bug small-btn">Bug</button>
         <button class="newtask-cancel small-btn">Cancel</button>
         <button class="newtask-create small-btn primary-btn">Create ticket</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="bugReportModal" class="task-modal hidden">
+    <div class="task-modal-card">
+      <div class="task-modal-head">
+        <span class="task-modal-id bugreport-id"></span>
+        <span class="bugreport-title">Report a bug — send this ticket back to To Do</span>
+      </div>
+      <div class="bugreport-desc">Describe the bug you found. It is appended to the ticket's <code>## Bug Reports</code> section so the context is kept, then the ticket moves back to To Do for a re-build.</div>
+      <textarea class="task-modal-body bugreport-body" spellcheck="false" placeholder="What is broken? Steps to reproduce, expected vs actual behaviour…"></textarea>
+      <div class="task-modal-error bugreport-error"></div>
+      <div class="task-modal-actions">
+        <button class="bugreport-cancel small-btn">Cancel</button>
+        <button class="bugreport-submit small-btn primary-btn">Submit &amp; move to To Do</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="planModal" class="task-modal hidden">
+    <div class="task-modal-card">
+      <div class="task-modal-head">
+        <span class="plan-title">Plan a feature — describe what you want built</span>
+      </div>
+      <div class="plan-desc">Describe the functionality you want. The planner breaks it into tickets on the board. Nothing is written yet.</div>
+      <textarea class="task-modal-body plan-body" spellcheck="false" placeholder="Describe what you want built, e.g.&#10;- A settings page with a dark-mode toggle&#10;- Persist the choice per user&#10;- Apply it on load"></textarea>
+      <div class="task-modal-error plan-error"></div>
+      <div class="task-modal-actions">
+        <button class="plan-cancel small-btn">Cancel</button>
+        <button class="plan-submit small-btn primary-btn">Plan</button>
       </div>
     </div>
   </div>
@@ -598,6 +635,7 @@
                 Parallel
                 <select class="tasksConcurrency" title="How many build agents may run in parallel"></select>
               </label>
+              <button class="tasksPlanBtn small-btn" title="Describe a feature and let the planner break it into tickets" disabled>Plan</button>
               <button class="tasksNewBtn small-btn" title="Create a new ticket" disabled>New ticket</button>
               <button class="tasksBuildBtn small-btn primary-btn" title="Build queued tickets until the board is clear" disabled>Build</button>
               <button class="tasksRefresh small-btn">Refresh</button>
@@ -629,8 +667,8 @@
                 <div class="tasks-lane-header">Testing <span class="tasks-lane-count">0</span></div>
                 <div class="tasks-lane-cards"></div>
               </div>
-              <div class="tasks-lane" data-status="failed-testing">
-                <div class="tasks-lane-header">Failed Testing <span class="tasks-lane-count">0</span></div>
+              <div class="tasks-lane" data-status="post-processing">
+                <div class="tasks-lane-header">Post-processing <span class="tasks-lane-count">0</span><button class="tasks-lane-add" title="Add a post-processing ticket">+</button></div>
                 <div class="tasks-lane-cards"></div>
               </div>
               <div class="tasks-lane" data-status="done">

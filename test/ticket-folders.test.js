@@ -42,7 +42,7 @@ const {
   reconcileFolder,
   dedupeByFolder,
 } = require('../lib/ticket-folders');
-const { LANE_STATUSES } = require('../lib/ticket-lanes');
+const { LANE_STATUSES, VALID_STATUSES } = require('../lib/ticket-lanes');
 
 const RENDERER = path.join(__dirname, '..', 'renderer', 'renderer.js');
 const MAIN = path.join(__dirname, '..', 'main.js');
@@ -57,6 +57,16 @@ const mainSrc = fs.readFileSync(MAIN, 'utf8');
 
 test('folderForStatus maps each canonical status to a subfolder named for it', () => {
   for (const s of LANE_STATUSES) {
+    assert.equal(folderForStatus(s), s, `${s} owns the tasks/${s} subfolder`);
+  }
+});
+
+test('folderForStatus gives post-processing and failed-testing their own subfolders (TASK-028)', () => {
+  // Both are driven by the valid-statuses set, not just the lane list: failed-testing
+  // has no lane but still owns tasks/failed-testing/, and post-processing owns its own.
+  assert.equal(folderForStatus('post-processing'), 'post-processing');
+  assert.equal(folderForStatus('failed-testing'), 'failed-testing');
+  for (const s of VALID_STATUSES) {
     assert.equal(folderForStatus(s), s, `${s} owns the tasks/${s} subfolder`);
   }
 });
@@ -187,10 +197,12 @@ test('dedupeByFolder: distinct ids all survive (no false collapsing)', () => {
 // (renderer.js is not require()-able, so we assert against its source.)
 // ===========================================================================
 
-test('renderer.js mirrors folderForStatus off TASKS_LANE_STATUSES (null for unknown)', () => {
+test('renderer.js mirrors folderForStatus off TASKS_VALID_STATUSES (null for unknown)', () => {
+  // TASK-028: driven by the valid-statuses set so failed-testing (no lane) and
+  // post-processing both own their own subfolders; unknown statuses still get null.
   assert.match(rendererSrc, /function\s+ticketFolderForStatus\(status\)/);
   assert.match(rendererSrc,
-    /return\s+TASKS_LANE_STATUSES\.includes\(status\)\s*\?\s*status\s*:\s*null/);
+    /return\s+TASKS_VALID_STATUSES\.includes\(status\)\s*\?\s*status\s*:\s*null/);
 });
 
 test('renderer.js mirrors folderMatchesStatus (null target never matches)', () => {
@@ -274,7 +286,9 @@ test('reorder within todo is a whole-file order write and never relocates', () =
 });
 
 test('new todo tickets are written into tasks/todo/ on create', () => {
-  assert.match(rendererSrc, /const\s+subfolder\s*=\s*ticketFolderForStatus\('todo'\)/);
+  // TASK-028 parameterised the opener: the subfolder derives from the mode's
+  // status (defaulting to 'todo'), so a new todo ticket still lands in tasks/todo/.
+  assert.match(rendererSrc, /const\s+subfolder\s*=\s*ticketFolderForStatus\(status\)/);
   assert.match(rendererSrc,
     /const\s+destDir\s*=\s*subfolder\s*\?\s*tasksJoin\(tasksDir,\s*subfolder\)\s*:\s*tasksDir/);
   assert.match(rendererSrc, /await\s+window\.api\.fs\.mkdir\(destDir\)/);

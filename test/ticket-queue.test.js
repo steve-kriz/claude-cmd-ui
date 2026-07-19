@@ -36,6 +36,7 @@ const {
   claimTicket,
   releaseTicket,
   selectNextBatch,
+  canRunInParallel,
   idSlug,
   ticketBranchName,
   ticketWorktreeDir,
@@ -92,6 +93,7 @@ test('exports the documented surface', () => {
   assert.equal(typeof claimTicket, 'function');
   assert.equal(typeof releaseTicket, 'function');
   assert.equal(typeof selectNextBatch, 'function');
+  assert.equal(typeof canRunInParallel, 'function');
   assert.equal(typeof idSlug, 'function');
   assert.equal(typeof ticketBranchName, 'function');
   assert.equal(typeof ticketWorktreeDir, 'function');
@@ -416,6 +418,33 @@ test('selectNextBatch skips tickets claimed by another agent and non-claimable l
   assert.deepEqual(batch.map((t) => t.fm.id), ['TASK-004', 'TASK-005']);
 });
 
+// --- TASK-028: post-processing tickets are excluded from the build swarm ----
+
+test('claimTicket refuses a kind:post-processing ticket even when status is claimable', () => {
+  // A recipe ticket must never be built, even if its status were tampered to a
+  // claimable value.
+  for (const status of ['todo', 'failed-testing', 'post-processing']) {
+    const res = claimTicket({ id: 'PP-1', status, kind: 'post-processing' }, 'a1', { at: '2026-07-18T01:00:00.000Z' });
+    assert.equal(res.ok, false, `post-processing kind not claimable at status ${status}`);
+    assert.equal(res.reason, 'post-processing');
+  }
+});
+
+test('selectNextBatch never selects a post-processing ticket (kind guard)', () => {
+  const tickets = [
+    T('TASK-001', 'todo'),                                   // normal work
+    T('PP-1', 'post-processing', { kind: 'post-processing' }), // recipe — excluded
+    T('PP-2', 'todo', { kind: 'post-processing' }),          // tampered status — still excluded
+  ];
+  const batch = selectNextBatch(tickets, { limit: 8 });
+  assert.deepEqual(batch.map((t) => t.fm.id), ['TASK-001'],
+    'only the plain todo ticket is dispatched; post-processing tickets excluded');
+});
+
+test('CLAIMABLE_STATUSES is unchanged by TASK-028 (todo + failed-testing)', () => {
+  assert.deepEqual([...CLAIMABLE_STATUSES].sort(), ['failed-testing', 'todo']);
+});
+
 // GHERKIN: "Concurrency is bounded" — limit 2, five todo tickets → at most 2
 // worked at once, the rest wait.
 test('CUCUMBER: concurrency is bounded (limit 2, 5 todos → 2 dispatched, 3 wait)', () => {
@@ -475,6 +504,186 @@ test('selectNextBatch handles empty / non-array input safely', () => {
   assert.deepEqual(selectNextBatch([], { limit: 3 }), []);
   assert.deepEqual(selectNextBatch(null, { limit: 3 }), []);
   assert.deepEqual(selectNextBatch(undefined, {}), []);
+});
+
+// ---------------------------------------------------------------------------
+// canRunInParallel — single-new-ticket dispatch decision (TASK-029)
+// { ok, reason, freeSlots }; never throws / never returns undefined; pure;
+// reuses resolveConcurrency/activeCount and the same predicates as
+// selectNextBatch so verdicts compose.
+// ---------------------------------------------------------------------------
+
+test('canRunInParallel returns the { ok, reason, freeSlots } shape and never throws for any input', () => {
+  const inputs = [
+    [undefined, undefined, undefined],
+    [null, null, null],
+    ['garbage', 42, 'x'],
+    [[], {}, {}],
+    [[T('A', 'in-progress', { agent: 'a1' })], T('B', 'todo').fm, { limit: 3 }],
+    [{}, { fm: null }, { limit: 'x' }],
+    [[{ fm: null }, null], { status: '' }, {}],
+  ];
+  for (const [tickets, newTicket, opts] of inputs) {
+    let res;
+    assert.doesNotThrow(() => { res = canRunInParallel(tickets, newTicket, opts); },
+      `no throw for ${JSON.stringify([tickets, newTicket, opts])}`);
+    assert.notEqual(res, undefined, 'never returns undefined');
+    assert.equal(typeof res.ok, 'boolean', 'ok is boolean');
+    assert.equal(typeof res.reason, 'string', 'reason is string');
+    assert.equal(typeof res.freeSlots, 'number', 'freeSlots is number');
+    assert.ok(Number.isInteger(res.freeSlots) && res.freeSlots >= 0, 'freeSlots is a non-negative integer');
+  }
+});
+
+test('canRunInParallel: ok:true only for a free slot + claimable, not-active, not-other-claimed ticket', () => {
+  const board = [T('TASK-001', 'in-progress', { agent: 'a1' })]; // 1 active
+  const res = canRunInParallel(board, T('TASK-100', 'todo').fm, { limit: 3 });
+  assert.deepEqual(res, { ok: true, reason: 'ok', freeSlots: 2 });
+});
+
+test('canRunInParallel: freeSlots = max(0, resolveConcurrency(limit) - activeCount(tickets))', () => {
+  const board = [
+    T('A', 'in-progress', { agent: 'a1' }),
+    T('B', 'testing', { agent: 'a2' }),
+    T('C', 'todo'),
+    T('D', 'done'),
+  ]; // activeCount 2
+  assert.equal(canRunInParallel(board, T('N', 'todo').fm, { limit: 3 }).freeSlots, 1);
+  assert.equal(canRunInParallel(board, T('N', 'todo').fm, { limit: 8 }).freeSlots, 6);
+  // junk limit → DEFAULT_CONCURRENCY (3); 3 - 2 = 1
+  assert.equal(canRunInParallel(board, T('N', 'todo').fm, { limit: 'abc' }).freeSlots, 1);
+  // > MAX clamps to 8; 8 - 2 = 6
+  assert.equal(canRunInParallel(board, T('N', 'todo').fm, { limit: 1000 }).freeSlots, 6);
+  // non-array tickets → 0 active → freeSlots = limit
+  assert.equal(canRunInParallel('nope', T('N', 'todo').fm, { limit: 3 }).freeSlots, 3);
+  assert.equal(canRunInParallel(null, T('N', 'todo').fm, {}).freeSlots, DEFAULT_CONCURRENCY);
+});
+
+test('canRunInParallel: failed-testing is an eligible (claimable) status', () => {
+  const res = canRunInParallel([], T('T', 'failed-testing').fm, { limit: 3 });
+  assert.equal(res.ok, true);
+  assert.equal(res.reason, 'ok');
+});
+
+test('canRunInParallel: missing/invalid newTicket → no-ticket, freeSlots still computed', () => {
+  const board = [T('A', 'in-progress', { agent: 'a1' })]; // freeSlots 2 @ limit 3
+  for (const bad of [null, undefined, 42, 'x', {}, { status: '' }, { status: '   ' }, { fm: null }]) {
+    const res = canRunInParallel(board, bad, { limit: 3 });
+    assert.equal(res.ok, false, `no-ticket for ${JSON.stringify(bad)}`);
+    assert.equal(res.reason, 'no-ticket', `reason for ${JSON.stringify(bad)}`);
+    assert.equal(res.freeSlots, 2, 'freeSlots still computed from the board');
+  }
+});
+
+test('canRunInParallel: claimed by a different agent → claimed', () => {
+  const res = canRunInParallel(
+    [T('A', 'in-progress', { agent: 'a1' })],
+    T('N', 'todo', { agent: 'other-agent' }).fm,
+    { limit: 3, agentId: 'me' },
+  );
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'claimed');
+});
+
+test('canRunInParallel: already-active (not same-agent) → already-active', () => {
+  for (const status of ['in-progress', 'testing']) {
+    const res = canRunInParallel([], T('N', status).fm, { limit: 3 });
+    assert.equal(res.ok, false, `already-active for ${status}`);
+    assert.equal(res.reason, 'already-active');
+  }
+});
+
+test('canRunInParallel: unclaimed non-claimable status → not-claimable', () => {
+  for (const status of ['done', 'defining', 'weird-out-of-enum']) {
+    const res = canRunInParallel([], T('N', status).fm, { limit: 3 });
+    assert.equal(res.ok, false, `not-claimable for ${status}`);
+    assert.equal(res.reason, 'not-claimable');
+  }
+});
+
+test('canRunInParallel: eligible ticket but no free slots → no-slots, freeSlots 0', () => {
+  const board = [
+    T('A', 'in-progress', { agent: 'a1' }),
+    T('B', 'in-progress', { agent: 'a2' }),
+    T('C', 'testing', { agent: 'a3' }),
+  ]; // 3 active, limit 3 → 0 free
+  const res = canRunInParallel(board, T('N', 'todo').fm, { limit: 3 });
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'no-slots');
+  assert.equal(res.freeSlots, 0);
+});
+
+test('canRunInParallel: same-agent re-entry is not "claimed"/"already-active" and stays eligible', () => {
+  // Own active ticket handed back for re-fix; a same-agent claim is a safe re-entry.
+  const board = [T('OTHER', 'testing', { agent: 'a2' })]; // 1 active, limit 3 → 2 free
+  const reentry = canRunInParallel(board, T('N', 'failed-testing', { agent: 'me' }).fm, { limit: 3, agentId: 'me' });
+  assert.equal(reentry.ok, true, 'same-agent claimable re-entry is ok');
+  assert.equal(reentry.reason, 'ok');
+
+  // Same-agent re-entry from an active status is eligible too (mirrors selectNextBatch).
+  const activeReentry = canRunInParallel(board, T('N', 'in-progress', { agent: 'me' }).fm, { limit: 3, agentId: 'me' });
+  assert.equal(activeReentry.ok, true, 'own active ticket offered for re-entry');
+  assert.equal(activeReentry.reason, 'ok');
+});
+
+test('canRunInParallel: reason precedence — eligibility decided before capacity (full board, ineligible ticket)', () => {
+  const full = [
+    T('A', 'in-progress', { agent: 'a1' }),
+    T('B', 'in-progress', { agent: 'a2' }),
+    T('C', 'testing', { agent: 'a3' }),
+  ]; // 0 free
+  // A "done" (not-claimable) ticket on a full board reports the ineligibility, not no-slots.
+  assert.equal(canRunInParallel(full, T('N', 'done').fm, { limit: 3 }).reason, 'not-claimable');
+  // A ticket claimed by another agent reports claimed, not no-slots.
+  assert.equal(canRunInParallel(full, T('N', 'todo', { agent: 'x' }).fm, { limit: 3, agentId: 'me' }).reason, 'claimed');
+  // A missing ticket reports no-ticket, not no-slots.
+  assert.equal(canRunInParallel(full, null, { limit: 3 }).reason, 'no-ticket');
+  // A post-processing ticket reports post-processing, not no-slots.
+  assert.equal(canRunInParallel(full, T('N', 'todo', { kind: 'post-processing' }).fm, { limit: 3 }).reason, 'post-processing');
+});
+
+test('canRunInParallel: kind:post-processing ticket is NEVER eligible (reason post-processing)', () => {
+  for (const status of ['todo', 'failed-testing', 'post-processing']) {
+    const res = canRunInParallel([], T('PP', status, { kind: 'post-processing' }).fm, { limit: 3 });
+    assert.equal(res.ok, false, `post-processing not eligible at status ${status}`);
+    assert.equal(res.reason, 'post-processing');
+  }
+});
+
+test('canRunInParallel: accepts both bare fm and { fm } wrappers for tickets[] and newTicket (identical verdicts)', () => {
+  const bareBoard = [{ id: 'A', status: 'in-progress', agent: 'a1' }];
+  const wrappedBoard = [{ fm: { id: 'A', status: 'in-progress', agent: 'a1' } }];
+  const bareNew = { id: 'N', status: 'todo' };
+  const wrappedNew = { fm: { id: 'N', status: 'todo' } };
+  const a = canRunInParallel(bareBoard, bareNew, { limit: 3 });
+  const b = canRunInParallel(wrappedBoard, wrappedNew, { limit: 3 });
+  assert.deepEqual(a, b);
+  assert.deepEqual(a, { ok: true, reason: 'ok', freeSlots: 2 });
+});
+
+test('canRunInParallel is pure: does not mutate tickets, newTicket, or opts', () => {
+  const board = [T('A', 'in-progress', { agent: 'a1' }), T('B', 'todo')];
+  const newTicket = { fm: { id: 'N', status: 'todo' } };
+  const opts = { limit: 3, agentId: 'me' };
+  const boardSnap = JSON.stringify(board);
+  const newSnap = JSON.stringify(newTicket);
+  const optsSnap = JSON.stringify(opts);
+  canRunInParallel(board, newTicket, opts);
+  assert.equal(JSON.stringify(board), boardSnap, 'tickets untouched');
+  assert.equal(JSON.stringify(newTicket), newSnap, 'newTicket untouched');
+  assert.equal(JSON.stringify(opts), optsSnap, 'opts untouched');
+});
+
+test('canRunInParallel verdict composes with selectNextBatch (ok:true ⇒ among selectNextBatch candidates)', () => {
+  const board = [
+    T('TASK-001', 'in-progress', { agent: 'a1' }), // 1 active → 2 free @ limit 3
+    T('TASK-110', 'todo'),
+    T('TASK-111', 'todo'),
+  ];
+  const verdict = canRunInParallel(board, T('TASK-110', 'todo').fm, { limit: 3 });
+  assert.equal(verdict.ok, true);
+  const batch = selectNextBatch(board, { limit: 3 }).map((t) => t.fm.id);
+  assert.ok(batch.includes('TASK-110'), 'ok:true ticket is among selectNextBatch candidates');
 });
 
 // ---------------------------------------------------------------------------

@@ -1,9 +1,10 @@
-const { app, BrowserWindow, dialog, ipcMain, globalShortcut, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, globalShortcut, shell, powerSaveBlocker } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const fsp = fs.promises;
 const { execFile } = require('child_process');
 const { spawnShell } = require('./lib/pty');
+const { shouldKeepAwake } = require('./lib/keep-awake');
 const envStore = require('./lib/env-store');
 const aws = require('./lib/aws');
 const cloudLogs = require('./lib/cloud-logs');
@@ -117,8 +118,25 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
   const wc = mainWindow.webContents;
+  // TASK-049: the renderer is the only source of keep-awake activity reports
+  // ('tasks:activity'); if it crashes or hangs while the last reported count was
+  // > 0, main.js would otherwise keep the powerSaveBlocker held with a stale count
+  // until shutdown — an unnecessary battery-drain window. Approach chosen (the
+  // lightest reliable one): on 'render-process-gone' (crash) and 'unresponsive'
+  // (hang) reset the count to 0 via updateKeepAwake(0), which releases the lock.
+  // No heartbeat/timer is needed — the next positive 'tasks:activity' report from
+  // a live or reloaded renderer re-engages the lock automatically. A reload spawns
+  // a fresh renderer that re-reports on its next board render, so it reconciles the
+  // same way. updateKeepAwake(0) delegates to stopKeepAwake (a guarded no-op when
+  // nothing is held), so the single-blocker / try-catch / shutdown invariants and
+  // the "already released -> no-op" edge are all preserved.
   wc.on('render-process-gone', (_e, details) => {
     console.error('[renderer crashed]', details);
+    updateKeepAwake(0);
+  });
+  wc.on('unresponsive', () => {
+    console.error('[renderer unresponsive] releasing keep-awake wake-lock');
+    updateKeepAwake(0);
   });
   wc.on('preload-error', (_e, preloadPath, error) => {
     console.error('[preload error]', preloadPath, error);
@@ -137,6 +155,9 @@ function createWindow() {
       try { proc.kill(); } catch (_) {}
     }
     ptys.clear();
+    // No renderer left to report activity — release the wake-lock so power
+    // management resumes (TASK-036).
+    stopKeepAwake();
     mainWindow = null;
   });
 }
@@ -155,8 +176,76 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+  stopKeepAwake();
   if (process.platform !== 'darwin') app.quit();
 });
+
+// ── Keep-awake wake-lock (TASK-036) ──────────────────────────────────────────
+// While at least one orchestrate ticket is actively being worked (defining /
+// in-progress / testing / post-processing) the OS must not sleep or suspend. The
+// renderer owns the board state, so it reports the live app-wide active count
+// over the fire-and-forget 'tasks:activity' channel; we translate that into a
+// single Electron powerSaveBlocker. We use 'prevent-display-sleep' (keep the
+// screen on, like moving the mouse) rather than 'prevent-app-suspension' so the
+// display stays awake while work runs. Exactly one blocker is ever held: startKeepAwake is a
+// no-op while one is active, stopKeepAwake is a no-op when none is. The stored
+// block id is the single source of truth; every powerSaveBlocker call is guarded
+// so a platform where it is unavailable can never crash the app.
+let keepAwakeBlockerId = null;
+
+function keepAwakeActive() {
+  try {
+    return keepAwakeBlockerId !== null
+      && !!powerSaveBlocker
+      && powerSaveBlocker.isStarted(keepAwakeBlockerId);
+  } catch (_) {
+    return false;
+  }
+}
+
+function startKeepAwake() {
+  if (keepAwakeActive()) return; // already held — never stack a second blocker
+  try {
+    if (!powerSaveBlocker || typeof powerSaveBlocker.start !== 'function') return;
+    keepAwakeBlockerId = powerSaveBlocker.start('prevent-display-sleep');
+  } catch (e) {
+    keepAwakeBlockerId = null;
+    console.error('[keep-awake] start failed', e);
+  }
+}
+
+function stopKeepAwake() {
+  if (keepAwakeBlockerId === null) return; // nothing to release
+  try {
+    if (powerSaveBlocker && powerSaveBlocker.isStarted(keepAwakeBlockerId)) {
+      powerSaveBlocker.stop(keepAwakeBlockerId);
+    }
+  } catch (e) {
+    console.error('[keep-awake] stop failed', e);
+  } finally {
+    keepAwakeBlockerId = null;
+  }
+}
+
+// Reconcile the wake-lock to the reported activity. The pure yes/no decision
+// lives in lib/keep-awake so it stays unit-testable; here we only apply it.
+function updateKeepAwake(activeCount) {
+  if (shouldKeepAwake(activeCount)) startKeepAwake();
+  else stopKeepAwake();
+}
+
+// The renderer reports the app-wide count of actively-worked tickets. Payload is
+// a bare number (see preload tasks.reportActivity); tolerate an { active } object
+// too. Fire-and-forget — no response is sent.
+ipcMain.on('tasks:activity', (_evt, payload) => {
+  const count = typeof payload === 'number'
+    ? payload
+    : (payload && typeof payload === 'object' ? payload.active : 0);
+  updateKeepAwake(count);
+});
+
+// Belt-and-braces: never leak the wake-lock past shutdown.
+app.on('will-quit', () => { stopKeepAwake(); });
 
 ipcMain.handle('dialog:pickFolder', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {

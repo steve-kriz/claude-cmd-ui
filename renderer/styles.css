@@ -2567,7 +2567,7 @@ body {
 .tasks-lane[data-status="defining"] .tasks-lane-header { border-top-color: #d7ba7d; }
 .tasks-lane[data-status="in-progress"] .tasks-lane-header { border-top-color: #1177bb; }
 .tasks-lane[data-status="testing"] .tasks-lane-header { border-top-color: #c586c0; }
-.tasks-lane[data-status="failed-testing"] .tasks-lane-header { border-top-color: #f14c4c; }
+.tasks-lane[data-status="post-processing"] .tasks-lane-header { border-top-color: #ce9178; }
 .tasks-lane[data-status="done"] .tasks-lane-header { border-top-color: #4ec9b0; }
 .tasks-lane[data-status="unknown"] .tasks-lane-header { border-top-color: #f14c4c; }
 /* Out-of-enum tickets get a dedicated lane rather than being dumped into `todo`.
@@ -2584,6 +2584,23 @@ body {
   min-width: 16px;
   text-align: center;
 }
+/* Add affordance on the post-processing lane header (TASK-028): a small "+"
+   button that creates a new post-processing ticket directly in that lane. Only
+   the post-processing lane carries this button in the DOM. */
+.tasks-lane-add {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  line-height: 16px;
+  font-size: 14px;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  background: #2d2d30;
+  color: #ccc;
+  cursor: pointer;
+}
+.tasks-lane-add:hover { border-color: #1177bb; color: #fff; }
 .tasks-lane-cards {
   flex: 1 1 auto;
   min-height: 0;
@@ -2626,6 +2643,21 @@ body {
   font-size: 10px;
   color: #7a7a7a;
   margin-top: 4px;
+}
+/* Claiming agent id (TASK-021): the orchestrate swarm stamps the claiming agent's
+   id into an in-flight ticket's frontmatter; surface it as a small, muted label so
+   the parallelism is visible. Styled like .task-card-meta (monospace, muted) but
+   distinct from the accounting line, and clamped to one line with ellipsis so a
+   long/unusual agent id never breaks the card layout. Present in the DOM only when
+   the ticket carries a non-empty `agent`. */
+.task-card-agent {
+  font-family: Consolas, monospace;
+  font-size: 10px;
+  color: #7a7a7a;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* Per-card "being worked on" indicator. Present in the DOM only when the
    ticket's status is an actively-worked state (in-progress / testing); idle
@@ -2825,5 +2857,63 @@ body {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+/* New-ticket bug mode (TASK-031). The Bug button toggles the create flow into
+   creating a NEW bug ticket linked to an original via `bug-of`; it sits at the
+   left of the action row (pushed away from Cancel/Create by margin-right:auto).
+   The original-ticket selector row is hidden until bug mode is entered. */
+.newtask-bug { margin-right: auto; }
+.newtask-bug.hidden { display: none; }
+.newtask-bug.active {
+  background: #5a3a3a;
+  border-color: #a05252;
+  color: #ffdede;
+}
+.newtask-bug-of-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #ccc;
+}
+.newtask-bug-of-row.hidden { display: none; }
+.newtask-bug-of-label { color: #9a9a9a; }
+.newtask-bug-of {
+  flex: 1 1 auto;
+  background: #1e1e1e;
+  color: #eee;
+  border: 1px solid #555;
+  border-radius: 3px;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+.newtask-bug-of:focus { outline: none; border-color: #1177bb; }
+/* Forward-switch dangling-fold warning (TASK-042). Shown when the user switches
+   the selected original after a STEP-1 `## Bug Reports` fold has already been
+   committed against a DIFFERENT original this session: that prior fold is left in
+   place (not auto-removed), so we surface a non-blocking amber warning. */
+.newtask-bug-warn {
+  font-size: 11px;
+  color: #e0b050;
+  line-height: 1.35;
+}
+.newtask-bug-warn.hidden { display: none; }
+/* Bug-report modal (TASK-020). Opened when a `done` card is dragged onto the
+   `todo` lane: the user describes the bug, it is appended to the ticket's
+   `## Bug Reports` section, then the ticket moves back to `todo` for a re-build. */
+.bugreport-title {
+  flex: 1 1 auto;
+  font-size: 13px;
+  color: #eee;
+}
+.bugreport-desc,
+.plan-desc {
+  font-size: 11px;
+  color: #9a9a9a;
+  line-height: 1.5;
+}
+.bugreport-desc code {
+  font-family: Consolas, monospace;
+  color: #c7c7c7;
 }
 
