@@ -61,19 +61,33 @@ Rules for the frontmatter:
 
 - `id` is authoritative (the filename slug is cosmetic). Scan `tasks/*.md`
   non-recursively; ignore subfolders.
-- `status` is one of the six-value enum: `todo`, `defining`, `in-progress`,
-  `testing`, `failed-testing`, `done`. Statuses live **only** in frontmatter —
-  never track them anywhere else. The board renders these as lanes in this exact
-  left-to-right order, matching how work moves:
-  `todo → defining → in-progress → testing → failed-testing → done`.
+- `status` is one of the valid enum values: `todo`, `defining`, `in-progress`,
+  `testing`, `post-processing`, `done`, plus `failed-testing`. Statuses live
+  **only** in frontmatter — never track them anywhere else. The board renders
+  **six lanes** in this exact left-to-right order, matching how work moves:
+  `todo → defining → in-progress → testing → post-processing → done`.
   - `todo` — where new tickets are first created, awaiting work.
   - `defining` — the **business-analyst** agent is defining the task (writing
     acceptance criteria and Gherkin) before any coding.
   - `in-progress` — the **coder** agent is implementing the ticket.
   - `testing` — the **tester** agent is creating/checking tests.
-  - `failed-testing` — the ticket's tests failed; its board marker turns **red**
-    and the fix loop runs before returning it to `testing`.
+  - `post-processing` — holds **post-processing tickets** (see below), the "final
+    events" run against every normal task after its tests pass but before it is
+    marked `done`. These tickets are **never built/tested/claimed by the swarm**.
   - `done` — complete.
+  - `failed-testing` — the ticket's tests failed; its board marker turns **red**
+    and the fix loop runs before returning it to `testing`. It **remains the
+    fix-loop failure status** and stays claimable, but it **no longer has a
+    dedicated lane**: its cards fold into the **Testing** lane (keeping the red
+    marker). It still owns its `tasks/failed-testing/` folder.
+- **Post-processing tickets** are a distinct **kind** of ticket, identified by a
+  `kind: post-processing` frontmatter key (an extra key the serializer keeps after
+  the leading keys, round-tripped untouched by the board). They live in the
+  `post-processing` lane/status and describe final events the user wants applied to
+  every normal task after review passes and before `done`. They are **excluded
+  from the build swarm entirely** — never planned, built, tested, or claimed like a
+  normal ticket (`isPostProcessingTicket` in `lib/ticket-lanes.js` marks them
+  un-claimable even if their status were tampered to `todo`/`failed-testing`).
 - `created` and `updated` are ISO-8601 timestamps. Bump `updated` on **every**
   write. Preserve `created`.
 - `agent` (optional) is the **claim** field: the id of the single agent currently
@@ -103,7 +117,9 @@ Each phase dispatches to its own dedicated subagent type (defined in the
 project's `.claude/agents/`), not the generic `general-purpose` agent:
 
 - **Phase 1 (Plan / Define)** → `orchestrate-ba` — read/search only; never writes
-  implementation code.
+  implementation code. Dispatch this planning subagent on `claude-fable-5` when
+  available, otherwise fall back to `claude-opus-4-8`. (This model directive
+  applies to Phase 1 planning only.)
 - **Phase 2 (Build)** → `orchestrate-coder` — edit/write/bash.
 - **Phase 3 (Test)** → `orchestrate-tester` — scoped to writing/running tests.
 - **Phase 4 (Review)** → `orchestrate-tech-lead` — read/search only; reviews a
@@ -135,7 +151,8 @@ writes implementation code or edits/creates source files.
    find the highest `TASK-<nnn>` so new ids continue the sequence.
 2. Launch **one** subagent (Task tool, `orchestrate-ba`; fall back to
    `general-purpose` and report it if that definition is missing) with a
-   business-analyst persona. Its job: thoroughly analyze the relevant codebase
+   business-analyst persona, dispatched on `claude-fable-5` when available,
+   otherwise `claude-opus-4-8`. Its job: thoroughly analyze the relevant codebase
    (reading/searching **all** relevant files) and break the feature request into
    small, independently testable tickets. Each ticket must capture, in its body,
    **all** the information a coder needs to build it before any build begins. For
@@ -181,7 +198,18 @@ is left to drive:
 1. Re-scan `tasks/*.md` (do this fresh at the top of every iteration — the user
    may drag new tickets into `todo` or create them from the board while you
    work). Note the current claims (`agent` fields) and how many tickets are
-   already actively worked (`in-progress` / `testing`).
+   already actively worked (`in-progress` / `testing`). When a ticket is created
+   **mid-build** (a Phase 4 follow-up fix ticket, or one the user adds), do not
+   wait for the next full iteration to consider it: call `canRunInParallel(board,
+   newTicket, { limit, agentId })` in `lib/ticket-queue.js`. If it returns
+   `ok: true` (a free slot exists **and** the new ticket is claimable, unclaimed
+   or claimed by you, and not active), claim it (`claimTicket`) and start its
+   build immediately in that free slot; otherwise (`ok: false` — no free slot, or
+   the ticket is not eligible) **leave it queued** in `todo` for a later top-up.
+   This introduces **no new status**: the created ticket stays `todo` until it is
+   claimed like any other, and `canRunInParallel`'s verdict composes with
+   `selectNextBatch` (an `ok: true` ticket is exactly one `selectNextBatch` would
+   pick for that board).
 2. **Select the next batch** with `selectNextBatch` in `lib/ticket-queue.js`. It
    fills only the **free slots** = `limit − active count`, where the batch size /
    limit is `DEFAULT_CONCURRENCY` (default **3**) and any caller-supplied override
@@ -257,11 +285,12 @@ scenarios. The project test runner is `node --test`.
 2. Decide from the result:
    - **All green** → only when **both** the e2e and unit tests have actually run
      under `node --test` and passed. Do **not** mark the ticket `done` yet: first
-     run the **tech-lead review** (Phase 4 below) — the ordering is
-     `testing → tech-lead review → done`. Only once that review has completed do
-     you set `status: done`, write the file, and move to the next ticket. If either
-     kind of test is missing or was not run green, it is **not** "all green": treat
-     it as a failure (next bullet).
+     run the **tech-lead review** (Phase 4 below) and then the **post-processing**
+     step — the ordering is `testing → tech-lead review → post-processing → done`.
+     Only once the review has completed and every defined post-processing ticket's
+     instructions have been run do you set `status: done`, write the file, and move
+     to the next ticket. If either kind of test is missing or was not run green, it
+     is **not** "all green": treat it as a failure (next bullet).
    - **Any failure** (including a missing e2e or unit test kind) → set
      `status: failed-testing`, write the file, then immediately launch a coder
      subagent with the ticket **plus the failure output** to fix the code. When
@@ -270,12 +299,16 @@ scenarios. The project test runner is `node --test`.
    third attempt, leave it in `failed-testing`, summarize what is failing, and
    ask the user how to proceed.
 
-## Phase 4 — Tech-lead review (reviewer), then done
+## Phase 4 — Tech-lead review (reviewer), post-processing, then done
 
 A ticket that has **passed testing** is **not** marked `done` immediately. First
-it goes through a **tech-lead review**, so the ordering is
-`testing → tech-lead review → done`. This review is a **flow step, not a new board
-status** — it introduces no new value into the six-status enum.
+it goes through a **tech-lead review**, then a **post-processing** step, so the
+ordering is `testing → tech-lead review → post-processing → done`. The review is a
+**flow step, not a new board status** — it introduces no new value into the enum.
+The post-processing step runs the instructions of every defined **post-processing
+ticket** (the tickets in the `post-processing` lane, `kind: post-processing`)
+against the reviewed task before it is marked `done`; those tickets are the
+user's "final events" and are themselves never built/tested/claimed.
 
 1. Launch a reviewer subagent (Task tool, `orchestrate-tech-lead`; fall back to
    `general-purpose` and report it if that definition is missing) with the **full
@@ -300,11 +333,18 @@ status** — it introduces no new value into the six-status enum.
    `TASK-020` and `TASK-021`. Creating these follow-ups **does not change the
    reviewed ticket's status or frontmatter**; the follow-up `todo` tickets are
    picked up by a later build swarm like any other ticket.
-3. **Mark the reviewed ticket `done`.** Its own acceptance criteria and tests
+3. **Run post-processing, then mark the reviewed ticket `done`.** After the
+   review passes, run each defined post-processing ticket's instructions (every
+   ticket in the `post-processing` lane, `kind: post-processing`) against the
+   reviewed task — these are the user's "final events" applied to every normal
+   task. Post-processing tickets are **never built/tested/claimed** and are **not**
+   themselves marked `done` by this flow; you only run their instructions. Then set
+   `status: done` on the reviewed ticket. Its own acceptance criteria and tests
    passed, so it reaches `done` regardless of what the review turned up — the
    review never re-opens it. This `done` transition is the ticket's normal terminal
-   state, written by you (the orchestrator); the review step itself does not change
-   the reviewed ticket's status/frontmatter beyond letting it proceed to `done`.
+   state, written by you (the orchestrator); neither the review nor the
+   post-processing step changes the reviewed ticket's status/frontmatter beyond
+   letting it proceed to `done`.
 
 ## Concurrency, claims, and isolation
 
@@ -319,6 +359,15 @@ below and are unit-tested.
   the free slots (`limit − active count`), so it never starts a build when N
   tickets are already `in-progress`/`testing`. Tickets past the bound wait in the
   queue and are picked up as slots free.
+- **Dispatch a newly-created ticket into a free slot.** When a single ticket is
+  created during a build, decide whether it can run **right now** with
+  `canRunInParallel(tickets, newTicket, { limit, agentId })`. It reuses the same
+  eligibility and slot math as `selectNextBatch` (`freeSlots = limit − active
+  count`) and returns `{ ok, reason, freeSlots }` — decision-only, it never claims
+  or writes. On `ok: true`, claim (`claimTicket`) and build the ticket immediately
+  in the free slot; on `ok: false` (`no-ticket` / `post-processing` / `claimed` /
+  `already-active` / `not-claimable` / `no-slots`) leave it queued in `todo`. It
+  never invents a status and never dispatches a `kind: post-processing` ticket.
 - **At most one agent per ticket.** A ticket is claimed (`claimTicket`) by writing
   your build's id into its `agent` frontmatter field together with
   `status: in-progress`, in a single whole-file write, and only when the freshly
@@ -350,6 +399,8 @@ below and are unit-tested.
 - Claim before you build: write the `status: in-progress` + `agent` transition
   before starting the work it names, and never touch a ticket claimed by another
   agent.
-- Never invent a status outside the six-value enum (`todo`, `defining`,
-  `in-progress`, `testing`, `failed-testing`, `done`).
+- Never invent a status outside the valid enum (`todo`, `defining`,
+  `in-progress`, `testing`, `post-processing`, `done`, and `failed-testing` — the
+  latter is a valid, claimable status that folds into the Testing lane rather than
+  having its own).
 - Timestamps: preserve `created`, always bump `updated`.

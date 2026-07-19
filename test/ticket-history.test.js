@@ -223,3 +223,169 @@ test('non-string input is handled by treating the body as empty', () => {
   assert.match(out, /## History/);
   assert.match(out, /### 2026-07-18T01:00:00\.000Z — coder/);
 });
+
+// ---------------------------------------------------------------------------
+// TASK-025 — Neutralize heading-forging in history entry text
+// ---------------------------------------------------------------------------
+//
+// An agent-supplied prompt/response may contain a line beginning `## …`. Because
+// splitSections delimits sections on `/^## /`, such a line would forge a phantom
+// level-2 section on every later re-parse and corrupt the ticket (the same class
+// TASK-022 fixed for bug text). formatHistoryEntry/appendHistoryEntry now run the
+// agent bodies through neutralizeBugText (reused from lib/ticket-bug-reports.js),
+// which escapes the leading `#` run so the line renders as literal `## …` text but
+// is no longer a section boundary. The `### <ts> — <role>` entry heading and the
+// `**Prompt:**` / `**Response:**` labels we emit are NOT neutralized.
+
+// Ordered list of the REAL level-2 section headings, using the SAME boundary
+// detector (`/^## /`) the module uses. A forged section would show up here.
+function realSections(md) {
+  return md.split('\n').filter((l) => /^## /.test(l)).map((l) => l.trim());
+}
+
+test('formatHistoryEntry escapes a response line `## Summary` so it cannot forge a section', () => {
+  const lines = formatHistoryEntry({
+    role: 'coder',
+    prompt: 'ordinary prompt',
+    response: 'Here is a heading:\n## Summary\nand a tail line',
+    timestamp: '2026-07-18T03:00:00.000Z',
+  });
+  const joined = lines.join('\n');
+  // Re-parsed on `/^## /`, the produced entry contributes NO `## Summary` boundary.
+  assert.ok(!lines.some((l) => /^## /.test(l)), 'no line in the entry begins with `## `');
+  assert.match(joined, /\\## Summary/, 'the body heading is escaped as `\\## Summary`');
+  assert.match(joined, /and a tail line/, 'the rest of the body survives');
+});
+
+test('appendHistoryEntry: a response `## Summary` does not forge a section; body appears escaped', () => {
+  const out = appendHistoryEntry(SAMPLE, {
+    role: 'tester',
+    prompt: 'plain',
+    response: 'lead in\n## Summary\ntrailer',
+    timestamp: '2026-07-18T03:00:00.000Z',
+  });
+  // Re-parsing the whole body on `/^## /` yields no forged `## Summary` section.
+  assert.equal((out.match(/^## Summary$/gm) || []).length, 0, 'no forged `## Summary` section');
+  assert.ok(!realSections(out).includes('## Summary'), 'Summary is not a real section boundary');
+  // The body line survives, escaped.
+  assert.match(out, /\\## Summary/, 'the body line appears escaped as `\\## Summary`');
+});
+
+test('appendHistoryEntry: a prompt with `## Additional Context` / `## History` lines forges nothing; real Additional Context stays last verbatim', () => {
+  const acBefore = sectionSlice(SAMPLE, ADDITIONAL_CONTEXT_HEADING);
+  const out = appendHistoryEntry(SAMPLE, {
+    role: 'coder',
+    prompt: 'attempts to forge:\n## Additional Context\n## History\nend',
+    response: 'ok',
+    timestamp: '2026-07-18T03:30:00.000Z',
+  });
+  // Exactly one real Additional Context (the base one) — none forged from the prompt body.
+  assert.equal((out.match(/^## Additional Context$/gm) || []).length, 1, 'exactly one real Additional Context');
+  // Exactly one real History (the section the append created) — the body `## History` did not forge one.
+  assert.equal((out.match(/^## History$/gm) || []).length, 1, 'exactly one real History section');
+  // Only the genuine sections exist, and Additional Context is last.
+  assert.deepEqual(
+    realSections(out),
+    ['## Description', '## Acceptance Criteria', '## History', '## Additional Context'],
+    'genuine sections only; Additional Context is last',
+  );
+  // The real Additional Context is byte-for-byte unchanged and genuinely last.
+  assert.equal(sectionSlice(out, ADDITIONAL_CONTEXT_HEADING), acBefore, 'Additional Context verbatim');
+  const acIdx = out.split('\n').findIndex((l) => l.trim() === ADDITIONAL_CONTEXT_HEADING);
+  const tail = out.split('\n').slice(acIdx + 1);
+  assert.ok(!tail.some((l) => /^## /.test(l)), 'Additional Context is genuinely the last section');
+  // Both forging lines survive escaped inside the entry.
+  assert.match(out, /\\## Additional Context/, 'forged Additional Context line escaped');
+  assert.match(out, /\\## History/, 'forged History line escaped');
+});
+
+test('the emitted entry heading and Prompt/Response labels are NOT escaped (no backslash)', () => {
+  const out = appendHistoryEntry(SAMPLE, {
+    role: 'coder',
+    // deliberately heading-like bodies to prove ONLY the bodies get escaped
+    prompt: '## forge prompt',
+    response: '## forge response',
+    timestamp: '2026-07-18T04:00:00.000Z',
+  });
+  // The structural lines we emit appear literally, with NO leading backslash.
+  assert.match(out, /^### 2026-07-18T04:00:00\.000Z — coder$/m, 'entry heading emitted literally');
+  assert.match(out, /^\*\*Prompt:\*\*$/m, '`**Prompt:**` label emitted literally (unescaped)');
+  assert.match(out, /^\*\*Response:\*\*$/m, '`**Response:**` label emitted literally (unescaped)');
+  // No `\###` / `\**` — the labels/heading are never neutralized.
+  assert.ok(!/\\### /.test(out), 'entry heading not escaped');
+  assert.ok(!/\\\*\*Prompt:/.test(out), 'Prompt label not escaped');
+  assert.ok(!/\\\*\*Response:/.test(out), 'Response label not escaped');
+  // Only the agent bodies got the backslash.
+  assert.match(out, /\\## forge prompt/, 'prompt body escaped');
+  assert.match(out, /\\## forge response/, 'response body escaped');
+});
+
+test('REGRESSION: ordinary prose prompt/response (no leading `#`) yields the exact same output as before', () => {
+  const out = appendHistoryEntry(SAMPLE, {
+    role: 'coder',
+    prompt: 'Implement the widget and add a test.',
+    response: 'Done: added widget.js and widget.test.js, all green.',
+    timestamp: '2026-07-18T05:00:00.000Z',
+  });
+  // The whole History section must be byte-for-byte the pre-neutralizer shape.
+  const expectedHistory = [
+    '## History',
+    '',
+    '### 2026-07-18T05:00:00.000Z — coder',
+    '',
+    '**Prompt:**',
+    '',
+    'Implement the widget and add a test.',
+    '',
+    '**Response:**',
+    '',
+    'Done: added widget.js and widget.test.js, all green.',
+  ].join('\n');
+  assert.equal(sectionSlice(out, HISTORY_HEADING), expectedHistory, 'History section byte-for-byte unchanged for plain prose');
+  // No backslash anywhere in the History section for plain prose.
+  assert.ok(!/\\/.test(sectionSlice(out, HISTORY_HEADING)), 'no escaping introduced for ordinary text');
+  // formatHistoryEntry alone also round-trips plain prose with no escaping.
+  const lines = formatHistoryEntry({
+    role: 'coder',
+    prompt: 'Implement the widget and add a test.',
+    response: 'Done: added widget.js and widget.test.js, all green.',
+    timestamp: '2026-07-18T05:00:00.000Z',
+  });
+  assert.deepEqual(lines, [
+    '### 2026-07-18T05:00:00.000Z — coder',
+    '',
+    '**Prompt:**',
+    '',
+    'Implement the widget and add a test.',
+    '',
+    '**Response:**',
+    '',
+    'Done: added widget.js and widget.test.js, all green.',
+  ]);
+});
+
+test('multi-line response: only `## ...` lines are escaped, other lines are intact', () => {
+  const response = [
+    'first line, ordinary',
+    '## should escape',
+    'middle line, ordinary',
+    '### keeps three (still escaped run of #)',
+    'last line',
+  ].join('\n');
+  const lines = formatHistoryEntry({
+    role: 'coder',
+    prompt: 'p',
+    response,
+    timestamp: '2026-07-18T06:00:00.000Z',
+  });
+  const joined = lines.join('\n');
+  // Ordinary lines untouched.
+  assert.match(joined, /^first line, ordinary$/m);
+  assert.match(joined, /^middle line, ordinary$/m);
+  assert.match(joined, /^last line$/m);
+  // The `## ` line is escaped so it is no longer a section boundary.
+  assert.match(joined, /^\\## should escape$/m, 'the `## ` line is escaped');
+  assert.ok(!lines.some((l) => /^## /.test(l)), 'no body line begins with `## `');
+  // The `### ` body line is a heading-run too, so it is escaped (neutralizeBugText escapes any leading `#+`).
+  assert.match(joined, /^\\### keeps three/m, 'the `### ` body line is also escaped');
+});

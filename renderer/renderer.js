@@ -457,6 +457,7 @@ function createTab() {
       slackSendBtn: ws.querySelector('.slackSendBtn'),
       tasksStatus: ws.querySelector('.tasksStatus'),
       tasksConcurrency: ws.querySelector('.tasksConcurrency'),
+      tasksPlanBtn: ws.querySelector('.tasksPlanBtn'),
       tasksNewBtn: ws.querySelector('.tasksNewBtn'),
       tasksBuildBtn: ws.querySelector('.tasksBuildBtn'),
       tasksRefresh: ws.querySelector('.tasksRefresh'),
@@ -485,6 +486,7 @@ function createTab() {
   });
   tab.els.tasksRefresh.addEventListener('click', () => pollTasksOnce(tab, true));
   tab.els.tasksInstallSkillBtn.addEventListener('click', () => installOrchestrateSkill(tab));
+  tab.els.tasksPlanBtn.addEventListener('click', () => openPlanModal(tab));
   tab.els.tasksNewBtn.addEventListener('click', () => openNewTaskModal(tab));
   tab.els.tasksBuildBtn.addEventListener('click', () => toggleAutoBuild(tab));
   if (tab.els.tasksConcurrency) {
@@ -773,6 +775,9 @@ function closeTab(id) {
   tab.els.ws.remove();
   tab.els.tabBtn.remove();
   TABS.delete(id);
+  // A closed tab's tickets no longer count toward the keep-awake wake-lock
+  // (TASK-036) — re-report the app-wide active count without it.
+  reportTasksActivity();
 
   if (activeTabId === id) {
     activeTabId = null;
@@ -5099,24 +5104,42 @@ function tryDispatchNextPrompt(tab) {
 
 // ───────────────────────────────────────────────────────── tasks board
 
-// Canonical six-value status enum, in board left-to-right order (TASK-006).
+// Canonical LANE status enum, in board left-to-right order (TASK-006/028).
 // Mirrors LANE_STATUSES in lib/ticket-lanes.js for the browser side, which
-// cannot require Node modules. `todo` is where new tickets are created;
-// `defining` is the BA phase (acceptance criteria + Gherkin) before coding.
-const TASKS_LANE_STATUSES = ['todo', 'defining', 'in-progress', 'testing', 'failed-testing', 'done'];
+// cannot require Node modules — KEEP IN LOCKSTEP. `todo` is where new tickets
+// are created; `defining` is the BA phase (acceptance criteria + Gherkin) before
+// coding; `post-processing` holds post-processing tickets (kind: post-processing)
+// run against normal tasks after tests pass, and is excluded from the build swarm.
+// `failed-testing` is deliberately absent — it is a valid status without its own
+// lane (its cards fold into Testing; see TASKS_VALID_STATUSES).
+const TASKS_LANE_STATUSES = ['todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done'];
+// The full set of valid, persistable statuses: every lane status PLUS
+// `failed-testing`, which stays a real, claimable status (owns its own
+// tasks/failed-testing/ folder) even though it has no dedicated board lane.
+// Mirrors VALID_STATUSES in lib/ticket-lanes.js.
+const TASKS_VALID_STATUSES = [...TASKS_LANE_STATUSES, 'failed-testing'];
 // Statuses that mean an agent is actively working the ticket right now (BA while
 // defining, coder while in-progress, tester while testing). Cards in one of
 // these states show the per-card blue "being worked on" dot; idle states
-// (todo / done / failed-testing) show no active dot. Mirrors ACTIVE_STATUSES in
-// lib/ticket-lanes.js.
+// (todo / done / failed-testing / post-processing) show no active dot. Mirrors
+// ACTIVE_STATUSES in lib/ticket-lanes.js.
 const TASKS_ACTIVE_STATUSES = ['defining', 'in-progress', 'testing'];
-// Status whose tests failed — its card shows a red "failed" marker. Mirrors
-// FAILED_STATUS in lib/ticket-lanes.js.
+// Status whose tests failed — its card shows a red "failed" marker, now folded
+// into the Testing lane. Mirrors FAILED_STATUS in lib/ticket-lanes.js.
 const TASKS_FAILED_STATUS = 'failed-testing';
+// Post-processing status/lane and the matching ticket `kind` (TASK-028). Mirrors
+// POST_PROCESSING_STATUS / POST_PROCESSING_KIND in lib/ticket-lanes.js.
+const TASKS_POST_PROCESSING_STATUS = 'post-processing';
+const TASKS_POST_PROCESSING_KIND = 'post-processing';
 // Dedicated lane for out-of-enum tickets so an unknown status is rendered
 // gracefully instead of being silently dumped into `todo`. Mirrors
 // UNKNOWN_STATUS in lib/ticket-lanes.js.
 const TASKS_UNKNOWN_STATUS = 'unknown';
+// True when `fm` is a post-processing ticket. Mirrors isPostProcessingTicket in
+// lib/ticket-lanes.js.
+function isTasksPostProcessingTicket(fm) {
+  return !!fm && fm.kind === TASKS_POST_PROCESSING_KIND;
+}
 const TASKS_POLL_MS = 2500;
 
 // Which task card is currently being dragged, and the status it started in
@@ -5209,8 +5232,11 @@ function compareTicketOrder(a, b) {
 
 // Subfolder name (relative to tasks/) a ticket with this status belongs in, or
 // null for out-of-enum statuses (left in place, never filed into a status folder).
+// Driven by the valid-statuses set so both post-processing and failed-testing own
+// their own subfolders (failed-testing has no lane but still files into
+// tasks/failed-testing/). Mirrors folderForStatus in lib/ticket-folders.js.
 function ticketFolderForStatus(status) {
-  return TASKS_LANE_STATUSES.includes(status) ? status : null;
+  return TASKS_VALID_STATUSES.includes(status) ? status : null;
 }
 
 // True when the folder a file currently sits in (relative to tasks/, '' = top
@@ -5259,13 +5285,27 @@ function dedupeTicketsByFolder(entries) {
   return Array.from(byId.values());
 }
 
+// Newline-neutralize a single-line frontmatter value (TASK-041). Frontmatter is a
+// flat, one-key-per-physical-line contract, and parseTicketFrontmatter treats any
+// embedded newline as the start of a new line (a forged `key: value`, or a
+// premature `---` close). Collapsing CR/LF to a single space keeps each emitted
+// value on one physical line so an untrusted `title` (bug/create path) cannot
+// inject frontmatter keys or close the block early after a serialize→parse
+// round-trip. Values with no CR/LF are byte-identical to before.
+function frontmatterValueLine(v) {
+  return String(v).replace(/[\r\n]+/g, ' ');
+}
+
 // Serialize back to disk, preserving the body verbatim and writing frontmatter
-// keys in a fixed order (unknown keys kept, appended after the known ones).
+// keys in a fixed order (unknown keys kept, appended after the known ones). Each
+// frontmatter value is newline-neutralized (see frontmatterValueLine) so the flat
+// one-line-per-key contract holds for every key regardless of caller; the body is
+// left free-form.
 function serializeTicket(fm, body) {
   const order = ['id', 'title', 'status', 'created', 'updated'];
   const keys = order.filter((k) => fm[k] != null);
   for (const k of Object.keys(fm)) if (!keys.includes(k)) keys.push(k);
-  const fmLines = keys.map((k) => `${k}: ${fm[k]}`);
+  const fmLines = keys.map((k) => `${k}: ${frontmatterValueLine(fm[k])}`);
   return ['---', ...fmLines, '---', body || ''].join('\n');
 }
 
@@ -5406,6 +5446,7 @@ function resetTasksForFolder(tab) {
   tab.els.tasksSkillBanner.classList.add('hidden');
   tab.els.tasksNewBtn.disabled = true;
   updateBuildBtn(tab);
+  updatePlanBtn(tab);
   // Populate + restore the parallel-build dropdown from this folder's stored
   // value (or the default). Runs on every folder (re)open so each folder shows
   // its own persisted concurrency; a corrupt/missing entry falls back to 3.
@@ -5420,6 +5461,7 @@ function initTasksTab(tab) {
     tab.els.tasksSkillBanner.classList.add('hidden');
     tab.els.tasksNewBtn.disabled = true;
     updateBuildBtn(tab);
+    updatePlanBtn(tab);
     return;
   }
   tab.els.tasksNewBtn.disabled = false;
@@ -5440,6 +5482,7 @@ async function checkOrchestrateSkill(tab) {
   tab.tasks.skillInstalled = installed;
   tab.els.tasksSkillBanner.classList.toggle('hidden', installed);
   updateBuildBtn(tab);
+  updatePlanBtn(tab);
   return installed;
 }
 
@@ -5593,13 +5636,18 @@ function renderTasksBoard(tab) {
     return String(a.fm.id).localeCompare(String(b.fm.id), undefined, { numeric: true });
   });
   for (const tk of tickets) {
-    // Route to a lane. Known statuses go to their own lane; anything outside the
-    // six-value enum is treated as unknown and routed to the dedicated `unknown`
-    // lane (a clearly-marked card) rather than being silently dumped into `todo`.
-    // If the unknown lane is somehow absent from the DOM, fall back to `todo` so
-    // the board never crashes on bad data.
-    const unknown = !TASKS_LANE_STATUSES.includes(tk.fm.status);
-    let laneKey = unknown ? TASKS_UNKNOWN_STATUS : tk.fm.status;
+    // Route to a lane (mirrors laneForStatus in lib/ticket-lanes.js). Lane
+    // statuses go to their own lane; `failed-testing` has no dedicated lane so it
+    // folds into `testing` (keeping its red marker there) — never dumped into
+    // `todo`; anything outside the valid enum is treated as unknown and routed to
+    // the dedicated `unknown` lane (a clearly-marked card) rather than being
+    // silently dumped into `todo`. If the target lane is somehow absent from the
+    // DOM, fall back to `todo` so the board never crashes on bad data.
+    const unknown = !TASKS_VALID_STATUSES.includes(tk.fm.status);
+    let laneKey;
+    if (unknown) laneKey = TASKS_UNKNOWN_STATUS;
+    else if (tk.fm.status === TASKS_FAILED_STATUS) laneKey = 'testing';
+    else laneKey = tk.fm.status;
     if (!lanes[laneKey]) laneKey = 'todo';
     const lane = lanes[laneKey];
     const card = document.createElement('div');
@@ -5688,6 +5736,21 @@ function renderTasksBoard(tab) {
       metaEl.textContent = acctParts.join(' · ');
       card.appendChild(metaEl);
     }
+    // Claiming agent id (TASK-021): while the orchestrate swarm builds tickets in
+    // parallel, claimTicket stamps the claiming agent's id into the in-flight
+    // ticket's frontmatter (lib/ticket-queue.js). Surface it as a small,
+    // unobtrusive label so the parallelism is visible. Derived purely from
+    // persisted frontmatter and rendered only when `agent` is non-empty (mirroring
+    // the ticketFieldNonEmpty guard), so it appears/updates/clears on the normal
+    // poll cycle and nothing is fabricated. Shown regardless of status (including
+    // out-of-enum cards) whenever a non-empty agent is present.
+    if (ticketFieldNonEmpty(tk.fm.agent)) {
+      const agentEl = document.createElement('div');
+      agentEl.className = 'task-card-agent';
+      agentEl.textContent = String(tk.fm.agent).trim();
+      agentEl.title = String(tk.fm.agent).trim();
+      card.appendChild(agentEl);
+    }
     card.addEventListener('click', () => openTaskModal(tab, tk));
     lane.cards.appendChild(card);
     lane.count++;
@@ -5704,9 +5767,44 @@ function renderTasksBoard(tab) {
   const showEmpty = total === 0 && t.skillInstalled !== false;
   tab.els.tasksEmpty.classList.toggle('hidden', !showEmpty);
   const polling = t.pollTimer ? ' · polling' : '';
-  tab.els.tasksStatus.textContent = total ? `${total} ticket${total === 1 ? '' : 's'}${polling}` : '';
+  // Live concurrent-build count (TASK-021): how many tickets are actively being
+  // worked right now, i.e. status in TASKS_ACTIVE_STATUSES (the same set that
+  // paints the blue dot), so the count matches the visible dots — a merely
+  // claimed but non-active card must NOT inflate it. Derived purely from persisted
+  // frontmatter, so it updates on the normal poll cycle. Omitted entirely (not
+  // "0 running") when nothing is active, leaving the existing status text intact.
+  const running = tickets.reduce(
+    (n, tk) => n + (TASKS_ACTIVE_STATUSES.includes(tk.fm.status) ? 1 : 0), 0);
+  const runningFrag = running ? ` · ${running} running` : '';
+  tab.els.tasksStatus.textContent = total
+    ? `${total} ticket${total === 1 ? '' : 's'}${runningFrag}${polling}`
+    : '';
   updateBuildBtn(tab);
+  updatePlanBtn(tab);
   maybeContinueBuild(tab);
+  reportTasksActivity();
+}
+
+// Keep-awake signal (TASK-036). Report the app-wide count of tickets that are
+// actively being worked to the main process so it can hold / release a single OS
+// wake-lock while any orchestrate work is running. Aggregated across ALL tabs
+// (every project board contributes) because the wake-lock is one app-wide
+// resource — reporting only the current tab would let another tab's active build
+// be forgotten. The status set mirrors lib/keep-awake.js's KEEP_AWAKE_STATUSES
+// (the board's active statuses PLUS post-processing). Cheap enough to run on every
+// board render; main.js de-dupes (start/stop are no-ops when already in state).
+const TASKS_KEEP_AWAKE_STATUSES = ['defining', 'in-progress', 'testing', 'post-processing'];
+function reportTasksActivity() {
+  if (!window.api || !window.api.tasks || !window.api.tasks.reportActivity) return;
+  let active = 0;
+  for (const tb of TABS.values()) {
+    const tickets = tb.tasks && tb.tasks.tickets;
+    if (!tickets || typeof tickets.values !== 'function') continue;
+    for (const tk of tickets.values()) {
+      if (tk && tk.fm && TASKS_KEEP_AWAKE_STATUSES.includes(tk.fm.status)) active++;
+    }
+  }
+  try { window.api.tasks.reportActivity(active); } catch (_) {}
 }
 
 // Ticket detail/edit modal. Loads the freshest copy from disk, lets the user
@@ -5735,7 +5833,26 @@ function openTaskModal(tab, ticket) {
   const fill = (fmObj, body) => {
     idEl.textContent = fmObj.id || '';
     titleInput.value = fmObj.title || '';
-    statusSel.value = TASKS_LANE_STATUSES.includes(fmObj.status) ? fmObj.status : 'todo';
+    // Preserve the stored status even when it is not one of the select's fixed
+    // options (TASK-028): the <select> offers only the six lane statuses, but a
+    // ticket may legitimately be `failed-testing` (a valid status with no lane).
+    // Injecting the current value as a selected option means saving does NOT
+    // silently rewrite it to `todo` — status only changes if the user actually
+    // picks a different option. Any prior injected option is removed first so
+    // re-fills (the disk-refresh pass) never accumulate duplicates.
+    const prevInjected = statusSel.querySelector('option[data-injected="1"]');
+    if (prevInjected) prevInjected.remove();
+    const curStatus = fmObj.status != null && String(fmObj.status).trim() !== ''
+      ? String(fmObj.status) : 'todo';
+    const hasOption = Array.from(statusSel.options).some((o) => o.value === curStatus);
+    if (!hasOption) {
+      const opt = document.createElement('option');
+      opt.value = curStatus;
+      opt.textContent = curStatus;
+      opt.dataset.injected = '1';
+      statusSel.appendChild(opt);
+    }
+    statusSel.value = curStatus;
     bodyArea.value = body || '';
     // Build accounting (TASK-003): read-only build time / cost summary, hidden
     // when the ticket carries no accounting data.
@@ -5992,10 +6109,19 @@ function onTasksConcurrencyChange(tab) {
   } catch (_) {}
 }
 
-// Counts of tickets per status, from the last poll snapshot.
+// Counts of tickets per status, from the last poll snapshot. `post-processing`
+// is tracked (TASK-028) but deliberately NOT part of the Build pending count
+// (todo + failed-testing) — post-processing tickets are never built by the swarm.
 function taskStatusCounts(tab) {
-  const counts = { todo: 0, defining: 0, 'in-progress': 0, testing: 0, 'failed-testing': 0, done: 0, other: 0 };
+  const counts = { todo: 0, defining: 0, 'in-progress': 0, testing: 0, 'failed-testing': 0, 'post-processing': 0, done: 0, other: 0 };
   for (const tk of tab.tasks.tickets.values()) {
+    // A ticket with `kind: post-processing` is never built by the swarm
+    // (lib/ticket-queue.js refuses to dispatch it), so keep it out of the
+    // buildable `todo`/`failed-testing` buckets even if its status was tampered
+    // to one of those — otherwise the Build pending count and maybeContinueBuild
+    // would treat it as pending work and spin forever. Lane placement (which is
+    // status-driven, elsewhere) is unaffected by this counting-only exclusion.
+    if (isTasksPostProcessingTicket(tk.fm)) { counts['post-processing']++; continue; }
     const s = tk.fm.status;
     if (counts[s] === undefined) counts.other++; else counts[s]++;
   }
@@ -6023,6 +6149,20 @@ function updateBuildBtn(tab) {
   btn.disabled = !t.skillInstalled || pending === 0;
   btn.title = t.skillInstalled
     ? 'Build queued tickets until the board is clear'
+    : 'Install the orchestration skill first';
+}
+
+// Gate the Plan button the same way Build is gated (TASK-030): usable only when a
+// folder is open AND the orchestration skill is installed, since planning hands
+// `/orchestrate plan …` to the same skill-driven flow Build uses. Refreshed on the
+// same board updates that call updateBuildBtn.
+function updatePlanBtn(tab) {
+  const btn = tab.els.tasksPlanBtn;
+  if (!btn) return;
+  const installed = !!(tab.folder && tab.tasks.skillInstalled);
+  btn.disabled = !installed;
+  btn.title = installed
+    ? 'Describe a feature and let the planner break it into tickets'
     : 'Install the orchestration skill first';
 }
 
@@ -6098,6 +6238,22 @@ function bindTaskLaneDrop(tab) {
   tab.tasks.lanesBound = true;
   for (const laneEl of tab.els.tasksLanes) {
     const status = laneEl.dataset.status;
+    // Post-processing lane Add affordance (TASK-028): only this lane has one.
+    // Clicking it opens the new-ticket modal in post-processing mode, creating a
+    // ticket with status AND kind: post-processing. stopPropagation so the click
+    // never bubbles into a card/lane handler.
+    if (status === TASKS_POST_PROCESSING_STATUS) {
+      const addBtn = laneEl.querySelector('.tasks-lane-add');
+      if (addBtn) {
+        addBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          openNewTaskModal(tab, {
+            status: TASKS_POST_PROCESSING_STATUS,
+            kind: TASKS_POST_PROCESSING_KIND,
+          });
+        });
+      }
+    }
     // The `unknown` lane is a read-only holding area for out-of-enum tickets;
     // it isn't a real status, so don't let a drop write `status: unknown`.
     if (status === TASKS_UNKNOWN_STATUS) continue;
@@ -6111,7 +6267,16 @@ function bindTaskLaneDrop(tab) {
       e.preventDefault();
       laneEl.classList.remove('drag-over');
       const file = e.dataTransfer && e.dataTransfer.getData('text/plain');
-      if (file) moveTicketToStatus(tab, file, status);
+      if (!file) return;
+      // TASK-020: dragging a `done` ticket back onto `todo` means the user found a
+      // bug. Don't move immediately — open the bug-capture modal, which appends the
+      // bug to the ticket then moves it to `todo` on submit (aborts on cancel).
+      const dragged = tab.tasks.tickets.get(file);
+      if (dragged && dragged.fm && dragged.fm.status === 'done' && status === 'todo') {
+        openBugReportModal(tab, file);
+        return;
+      }
+      moveTicketToStatus(tab, file, status);
     });
   }
 }
@@ -6240,10 +6405,113 @@ function nextTaskId(tab) {
   return 'TASK-' + String(max + 1).padStart(3, '0');
 }
 
-// New-ticket modal. Writes a fresh `todo` ticket following the skill's file
-// contract so the orchestrator (and the build loop) can pick it up.
-function openNewTaskModal(tab) {
+// Browser-side mirror of lib/modal-actions.js's `bindActionOnce` (TASK-024).
+// The renderer can't `require` the lib module, so the listener-lifecycle logic
+// is duplicated here — same lib-canonical + renderer-mirror convention as the
+// TASK-021 (ticket-progress) / TASK-020 (bug-report append) helpers. Keep this
+// byte-for-byte behaviour-identical to lib/modal-actions.js: changing one
+// without the other is a bug.
+//
+// Why it exists: modal openers attach submit/cancel `click` handlers on every
+// open. Without this, re-opening a modal before dismissing it left the prior
+// invocation's handler — bound to the EARLIER `file` — still attached, so a
+// submit could fire against a stale ticket. bindActionOnce FIRST detaches
+// whatever it previously bound for this (el, event), then attaches the fresh
+// handler with `{ once: true }`, so a re-open never leaves a stale listener and
+// the handler fires at most once.
+const _modalBoundHandlers = new WeakMap();
+function bindActionOnce(el, event, handler) {
+  if (!el || typeof el.addEventListener !== 'function') {
+    throw new TypeError('bindActionOnce: el must expose addEventListener');
+  }
+  let perEvent = _modalBoundHandlers.get(el);
+  if (!perEvent) { perEvent = new Map(); _modalBoundHandlers.set(el, perEvent); }
+
+  // Detach the previously-bound handler for this (el, event) FIRST.
+  const prev = perEvent.get(event);
+  if (prev && typeof el.removeEventListener === 'function') {
+    el.removeEventListener(event, prev);
+  }
+
+  el.addEventListener(event, handler, { once: true });
+  perEvent.set(event, handler);
+
+  return function dispose() {
+    const cur = _modalBoundHandlers.get(el);
+    if (cur && cur.get(event) === handler) {
+      if (typeof el.removeEventListener === 'function') {
+        el.removeEventListener(event, handler);
+      }
+      cur.delete(event);
+    }
+  };
+}
+
+// Browser-side mirror of lib/bug-switch-warning.js (TASK-042 logic, hardened by
+// TASK-044). The renderer can't `require` the lib module, so the bug-create
+// "forward switch" warning logic is duplicated here — same lib-canonical +
+// renderer-mirror convention as bindActionOnce above. Keep these byte-for-byte
+// behaviour-identical to lib/bug-switch-warning.js: the drift guard in
+// test/task-044-bug-switch-warning.e2e.test.js fails if they diverge.
+//
+// Decision: given the ORIGINAL ids this session has already folded a STEP-1
+// `## Bug Reports` entry against, `staleBugSwitchTargets` returns those that are
+// NOT the currently-selected original (the folds that would dangle); the warning
+// is advisory and NEVER blocks Create.
+function staleBugSwitchTargets(selectedOriginalId, committedFoldTargets) {
+  const out = [];
+  if (!committedFoldTargets) return out;
+  for (const originalId of committedFoldTargets) {
+    if (originalId !== selectedOriginalId) out.push(originalId);
+  }
+  return out;
+}
+function shouldWarnBugSwitch(selectedOriginalId, committedFoldTargets) {
+  return staleBugSwitchTargets(selectedOriginalId, committedFoldTargets).length > 0;
+}
+// The original-select is a PERSISTENT element that survives modal re-opens, so a
+// `change` listener bound on every open would accumulate. We stash the current
+// handler on the element (`_bugSwitchWarnHandler`); attaching FIRST detaches any
+// prior handler, guaranteeing AT MOST ONE live `change` listener. The disposer
+// removes it (only if still current) on modal cleanup. bindActionOnce's
+// `{ once: true }` is wrong here — the user may switch the select repeatedly.
+function attachBugSwitchWarning(el, handler) {
+  if (!el || typeof el.addEventListener !== 'function') {
+    throw new TypeError('attachBugSwitchWarning: el must expose addEventListener');
+  }
+  const prev = el._bugSwitchWarnHandler;
+  if (prev && typeof el.removeEventListener === 'function') {
+    el.removeEventListener('change', prev);
+  }
+  el._bugSwitchWarnHandler = handler;
+  el.addEventListener('change', handler);
+  return function dispose() {
+    if (el._bugSwitchWarnHandler === handler) {
+      if (typeof el.removeEventListener === 'function') {
+        el.removeEventListener('change', handler);
+      }
+      el._bugSwitchWarnHandler = null;
+    }
+  };
+}
+// Write the warning via textContent — NEVER innerHTML — so an original id like
+// `<script>…` lands as literal text and cannot inject markup / child nodes.
+function writeBugWarnText(el, text) {
+  if (!el) return;
+  el.textContent = text == null ? '' : String(text);
+}
+
+// New-ticket modal. Writes a fresh ticket following the skill's file contract so
+// the orchestrator (and the build loop) can pick it up. `opts` selects the mode
+// (TASK-028): with no opts the toolbar "New ticket" button creates a `todo`
+// ticket with NO kind field; the post-processing lane's Add button passes
+// { status: 'post-processing', kind: 'post-processing' } to create a
+// post-processing ticket (status AND kind: post-processing) in tasks/post-processing/.
+function openNewTaskModal(tab, opts) {
   if (!tab.folder) return;
+  const mode = opts || {};
+  const status = mode.status || 'todo';
+  const kind = mode.kind || null;
   const modal = document.getElementById('newTaskModal');
   if (!modal) return;
   const idEl = modal.querySelector('.newtask-id');
@@ -6252,29 +6520,174 @@ function openNewTaskModal(tab) {
   const errEl = modal.querySelector('.newtask-error');
   const cancelBtn = modal.querySelector('.newtask-cancel');
   const createBtn = modal.querySelector('.newtask-create');
+  const bugBtn = modal.querySelector('.newtask-bug');
+  const bugOfRow = modal.querySelector('.newtask-bug-of-row');
+  const bugOfSelect = modal.querySelector('.newtask-bug-of');
+  const bugWarnEl = modal.querySelector('.newtask-bug-warn');
 
   const id = nextTaskId(tab);
   idEl.textContent = id;
   titleInput.value = '';
   bodyArea.value = '';
   errEl.textContent = '';
+
+  // ── Bug mode (TASK-031) ────────────────────────────────────────────────────
+  // The Bug button toggles the create flow into creating a NEW bug ticket in
+  // `todo` that is (a) linked to an ORIGINAL ticket via a `bug-of` frontmatter
+  // key and (b) folded into that original's `## Bug Reports` section. This is
+  // DISTINCT from openBugReportModal (drag done→todo), which appends to the SAME
+  // ticket and creates no second ticket. Normal (non-bug) create is unchanged.
+  const NORMAL_BODY_PLACEHOLDER = "Describe what needs doing and why. This becomes the ticket's Description.";
+  const BUG_BODY_PLACEHOLDER = 'Describe the bug: steps to reproduce, expected vs actual behaviour…';
+  const NORMAL_CREATE_LABEL = 'Create ticket';
+  const BUG_CREATE_LABEL = 'Create bug ticket';
+
+  // Only the plain toolbar "New ticket" path (no opts) offers Bug mode; the
+  // post-processing Add path passes { status/kind } and keeps Bug hidden.
+  const allowBug = !!bugBtn && !kind && status === 'todo';
+  if (bugBtn) bugBtn.classList.toggle('hidden', !allowBug);
+
+  // Populate the original-ticket selector from the live board (tab.tasks.tickets
+  // Map values → fm.id), deduped and numeric-sorted. Rebuilt on every open so it
+  // reflects the current board.
+  if (bugOfSelect) {
+    const ids = [];
+    const seen = new Set();
+    for (const tk of tab.tasks.tickets.values()) {
+      const tid = tk && tk.fm && tk.fm.id;
+      if (tid && !seen.has(tid)) { seen.add(tid); ids.push(tid); }
+    }
+    ids.sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
+    bugOfSelect.innerHTML = '';
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = 'Select original ticket…';
+    bugOfSelect.appendChild(placeholder);
+    for (const tid of ids) {
+      const opt = document.createElement('option');
+      opt.value = tid;
+      opt.textContent = tid;
+      bugOfSelect.appendChild(opt);
+    }
+    bugOfSelect.value = '';
+  }
+
+  let bugMode = false;
+  // Session-scoped set of COMMITTED STEP-1 folds (TASK-042, replacing the TASK-038
+  // single-slot `{ originalId, id }` memo). When a bug-create attempt succeeds at
+  // STEP 1 (folding the report into the original) but the same target is revisited
+  // later in the session — either a same-target STEP-2 retry (TASK-038) or a
+  // switch-back A→B→A — we must NOT re-fold a second `## Bug Reports` entry. The
+  // single-slot memo only remembered the MOST-RECENT target, so a switch-back
+  // double-folded. We instead remember EVERY committed fold this session, keyed on
+  // the composite (originalId, id) pair via foldKey. `id` is fixed per modal
+  // session, so the key effectively partitions by originalId. Reset (cleared) by
+  // leaveBugMode() — which runs on open, cancel/cleanup, and bug-mode toggle-off —
+  // so a fresh open, a cancel, or a toggle-off starts a genuinely clean session.
+  const bugFoldedTargets = new Set();
+  const foldKey = (origId, bugId) => origId + ' ' + bugId;
+  // Recover the originalId from a foldKey given the session-constant `id` suffix
+  // (`<originalId> <id>`): used only to name the stale target in the switch warning.
+  const foldKeyOriginal = (key) => key.slice(0, key.length - (id.length + 1));
+  // Forward-switch dangling-fold warning (TASK-042, option b). If STEP 1 committed
+  // a fold against original A and the user then switches the select to a DIFFERENT
+  // original B, A keeps its `Reported as <id>` entry even though the bug may end up
+  // filed against B. We do NOT auto-remove that fold (avoids extra writes); instead
+  // we surface a non-blocking amber warning. Recomputed on every select change and
+  // cleared when leaving bug mode.
+  const updateBugSwitchWarning = () => {
+    if (!bugWarnEl) return;
+    const selected = bugOfSelect ? bugOfSelect.value : '';
+    // Map the committed foldKeys back to their originals and let the mirrored
+    // decision helper pick the stale (cross-target) ones. Equivalent to the old
+    // per-key `key !== foldKey(selected, id)` scan (id is session-constant, so
+    // key-equality iff original-equality) — behaviour-identical, now sharing the
+    // lib/bug-switch-warning.js logic.
+    const stale = bugMode
+      ? staleBugSwitchTargets(selected, Array.from(bugFoldedTargets, foldKeyOriginal))
+      : [];
+    if (stale.length) {
+      writeBugWarnText(bugWarnEl, 'Heads up: ' + stale.join(', ') + ' already has a recorded bug report (Reported as ' + id + ') from this session. Switching the target leaves that fold in place — it will not be removed automatically.');
+      bugWarnEl.classList.remove('hidden');
+    } else {
+      writeBugWarnText(bugWarnEl, '');
+      bugWarnEl.classList.add('hidden');
+    }
+  };
+  const enterBugMode = () => {
+    bugMode = true;
+    if (bugOfRow) bugOfRow.classList.remove('hidden');
+    bodyArea.placeholder = BUG_BODY_PLACEHOLDER;
+    createBtn.textContent = BUG_CREATE_LABEL;
+    if (bugBtn) bugBtn.classList.add('active');
+    errEl.textContent = '';
+  };
+  const leaveBugMode = () => {
+    bugMode = false;
+    if (bugOfRow) bugOfRow.classList.add('hidden');
+    if (bugOfSelect) bugOfSelect.value = '';
+    bodyArea.placeholder = NORMAL_BODY_PLACEHOLDER;
+    createBtn.textContent = NORMAL_CREATE_LABEL;
+    if (bugBtn) bugBtn.classList.remove('active');
+    // Clear ALL committed-fold tracking (TASK-042, superseding the TASK-038 single
+    // memo). leaveBugMode runs on open, cancel/cleanup, and toggle-off, so any of
+    // those starts a genuinely fresh bug-create session that will fold new
+    // `## Bug Reports` entries rather than skip STEP 1. Also drop the switch warning.
+    bugFoldedTargets.clear();
+    if (bugWarnEl) { bugWarnEl.textContent = ''; bugWarnEl.classList.add('hidden'); }
+  };
+  // Every (re)open resets to normal create mode: no stale original selection,
+  // no lingering bug-mode UI from a prior open.
+  leaveBugMode();
+  errEl.textContent = '';
+
   modal.classList.remove('hidden');
   titleInput.focus();
 
+  // Sibling of the bug modal — same stale-listener risk, so it gets the same
+  // fix (TASK-024): bindActionOnce detaches any prior open's handler first, then
+  // binds fresh with `{ once: true }`. Retry paths (empty title / create error)
+  // re-arm via armCreate since `{ once: true }` self-detaches on fire.
+  let disposeCreate = null;
+  let disposeCancel = null;
+  let disposeBug = null;
+  let disposeBugSwitch = null;
   const cleanup = () => {
     modal.classList.add('hidden');
-    createBtn.removeEventListener('click', onCreate);
-    cancelBtn.removeEventListener('click', onCancel);
+    if (disposeCreate) disposeCreate();
+    if (disposeCancel) disposeCancel();
+    if (disposeBug) disposeBug();
+    if (disposeBugSwitch) disposeBugSwitch();
+    leaveBugMode();
   };
+  const armCreate = () => { disposeCreate = bindActionOnce(createBtn, 'click', onCreate); };
+  const armBug = () => { if (bugBtn) disposeBug = bindActionOnce(bugBtn, 'click', onBug); };
   const onCancel = () => cleanup();
-  const onCreate = async () => {
+  const onBug = () => {
+    // Toggle bug mode. bindActionOnce is `{ once: true }` so it self-detaches on
+    // fire — re-arm to keep the toggle live.
+    if (bugMode) leaveBugMode(); else enterBugMode();
+    armBug();
+  };
+
+  // Normal create path (unchanged behaviour): a plain `todo`/post-processing
+  // ticket with NO bug-of link.
+  const onCreateNormal = async () => {
     const title = titleInput.value.trim();
-    if (!title) { errEl.textContent = 'Title is required.'; titleInput.focus(); return; }
+    if (!title) { errEl.textContent = 'Title is required.'; titleInput.focus(); armCreate(); return; }
     createBtn.disabled = true;
     try {
       const now = new Date().toISOString();
-      const fm = { id, title, status: 'todo', created: now, updated: now };
-      const description = bodyArea.value.trim() || 'What needs doing and why.';
+      const fm = { id, title, status, created: now, updated: now };
+      // Post-processing tickets carry kind: post-processing (TASK-028) so the
+      // swarm excludes them; serializeTicket keeps it after the leading keys.
+      if (kind) fm.kind = kind;
+      // Route the user's description through the shared heading-escape mirror
+      // (TASK-033) so a line like `## Additional Context` can't forge a section
+      // boundary and hijack a user-owned section on the next parse. Same helper
+      // the bug-report path uses; covers both the toolbar New-ticket path and the
+      // post-processing Add path since both flow through here.
+      const description = neutralizeBugText(bodyArea.value.trim()) || 'What needs doing and why.';
       const body = [
         '',
         '## Description',
@@ -6287,11 +6700,11 @@ function openNewTaskModal(tab) {
         '(User-owned. Read it before building. Never overwrite it.)',
         ''
       ].join('\n');
-      // Folder-per-status layout (TASK-008): new tickets are `todo`, so write them
-      // straight into tasks/todo/ rather than the top level, avoiding an immediate
-      // reconciliation move on the next poll.
+      // Folder-per-status layout (TASK-008): write the new ticket straight into
+      // its status subfolder (tasks/todo/ or tasks/post-processing/) rather than
+      // the top level, avoiding an immediate reconciliation move on the next poll.
       const tasksDir = tasksJoin(tab.folder, 'tasks');
-      const subfolder = ticketFolderForStatus('todo');
+      const subfolder = ticketFolderForStatus(status);
       const destDir = subfolder ? tasksJoin(tasksDir, subfolder) : tasksDir;
       await window.api.fs.mkdir(destDir);
       const filePath = tasksJoin(destDir, `${id}-${taskSlug(title)}.md`);
@@ -6299,6 +6712,7 @@ function openNewTaskModal(tab) {
       if (!wr || !wr.ok) {
         errEl.textContent = 'Create failed: ' + ((wr && wr.error) || 'unknown');
         createBtn.disabled = false;
+        armCreate();
         return;
       }
       createBtn.disabled = false;
@@ -6307,10 +6721,368 @@ function openNewTaskModal(tab) {
     } catch (err) {
       errEl.textContent = 'Create failed: ' + (err.message || err);
       createBtn.disabled = false;
+      armCreate();
     }
   };
-  createBtn.addEventListener('click', onCreate);
-  cancelBtn.addEventListener('click', onCancel);
+
+  // Bug create path (TASK-031). WRITE ORDER: update the ORIGINAL first (re-read +
+  // append + write); only if that succeeds do we create the NEW bug ticket. A
+  // failure to update the original therefore aborts before any bug ticket is
+  // written, so we never leave an orphaned bug ticket pointing at an un-updated
+  // original. Reuses appendBugReportToMarkdown + neutralizeBugText + the create
+  // write path — no bespoke append/escape logic.
+  const onCreateBug = async () => {
+    const title = titleInput.value.trim();
+    const originalId = bugOfSelect ? bugOfSelect.value : '';
+    const bugDesc = bodyArea.value.trim();
+    if (!title) { errEl.textContent = 'Title is required.'; titleInput.focus(); armCreate(); return; }
+    if (!originalId) { errEl.textContent = 'Select the original ticket this bug is against.'; if (bugOfSelect) bugOfSelect.focus(); armCreate(); return; }
+    if (!bugDesc) { errEl.textContent = 'Describe the bug before creating.'; bodyArea.focus(); armCreate(); return; }
+    // Validate the original exists on the board BEFORE writing anything, so we
+    // never create a bug ticket linking to a nonexistent original.
+    let originalTicket = null;
+    for (const tk of tab.tasks.tickets.values()) {
+      if (tk && tk.fm && tk.fm.id === originalId) { originalTicket = tk; break; }
+    }
+    if (!originalTicket) { errEl.textContent = 'Original ticket ' + originalId + ' is no longer on the board.'; armCreate(); return; }
+    createBtn.disabled = true;
+    try {
+      const now = new Date().toISOString();
+
+      // ── STEP 1: update the ORIGINAL first. Re-read the freshest copy so a
+      // concurrent agent write isn't clobbered, fold the bug into `## Bug
+      // Reports` (inserted before `## Additional Context`, which is never
+      // overwritten/moved), bump updated, preserve created, whole-file write.
+      //
+      // Retry / switch-back idempotence (TASK-042, generalising TASK-038): if a
+      // STEP-1 fold already committed for THIS (originalId, id) pair this session,
+      // skip it entirely — the original already carries the `## Bug Reports` entry
+      // and re-appending would fold a duplicate. Because we track EVERY committed
+      // target (not just the most-recent), a switch-back A→B→A recognises A as
+      // already-folded and skips STEP 1, where the old single-slot memo (holding B)
+      // would have wrongly double-folded A. A same-target STEP-2 retry (TASK-038)
+      // stays correct — its key is still in the set.
+      const key = foldKey(originalId, id);
+      const step1AlreadyDone = bugFoldedTargets.has(key);
+      if (!step1AlreadyDone) {
+        const origPath = originalTicket.path;
+        let origFm = originalTicket.fm;
+        let origBody = originalTicket.body;
+        let read = null;
+        try {
+          read = await window.api.fs.readFile(origPath);
+        } catch (e) {
+          errEl.textContent = 'Cannot read original ticket ' + originalId + ': ' + (e.message || e);
+          createBtn.disabled = false; armCreate(); return;
+        }
+        if (!read || !read.ok || read.binary) {
+          errEl.textContent = 'Cannot read original ticket ' + originalId + ((read && read.error) ? ': ' + read.error : '.');
+          createBtn.disabled = false; armCreate(); return;
+        }
+        const parsed = parseTicketFrontmatter(read.content);
+        if (!parsed) {
+          errEl.textContent = 'Original ticket ' + originalId + ' is not a valid ticket file.';
+          createBtn.disabled = false; armCreate(); return;
+        }
+        origFm = parsed.fm; origBody = parsed.body;
+        // Name the new bug ticket id in the original's folded entry so the link is
+        // bidirectional (TASK-037): the new ticket already references the original
+        // (bug-of + `Bug against <ID>` body line), and now the original references
+        // the new ticket via a `Reported as <NEW_ID>` line prefixed onto the bug
+        // text. The WHOLE composed string (id line + desc) is passed as `bug`, so
+        // appendBugReportToMarkdown's internal neutralizeBugText escapes it — the id
+        // cannot forge a `## ` section boundary either.
+        const newOrigBody = appendBugReportToMarkdown(origBody, { bug: 'Reported as ' + id + '\n' + bugDesc, timestamp: now });
+        const newOrigFm = Object.assign({}, origFm);
+        newOrigFm.updated = now;
+        if (!newOrigFm.created) newOrigFm.created = now;
+        const owr = await window.api.fs.writeFile(origPath, serializeTicket(newOrigFm, newOrigBody));
+        if (!owr || !owr.ok) {
+          errEl.textContent = 'Failed to update original ticket: ' + ((owr && owr.error) || 'unknown');
+          createBtn.disabled = false; armCreate(); return;
+        }
+        // Keep the in-memory copy fresh so a subsequent poll/read isn't stale.
+        originalTicket.body = newOrigBody;
+        originalTicket.fm = newOrigFm;
+        // STEP 1 committed — record this (originalId, id) fold so any later revisit
+        // this session (same-target STEP-2 retry OR a switch-back to this original)
+        // skips STEP 1 and cannot fold a duplicate `## Bug Reports` entry. STEP-1
+        // FAILURE paths above return without adding, so a retry redoes STEP 1.
+        bugFoldedTargets.add(key);
+        // A newly-committed fold may now be stale relative to the current selection
+        // if the user subsequently switches; refresh the switch warning state.
+        updateBugSwitchWarning();
+      }
+
+      // ── STEP 2: create the NEW bug ticket in tasks/todo/, linked via `bug-of`.
+      // The extra `bug-of` key is appended after the leading five by
+      // serializeTicket and round-trips through parseTicketFrontmatter.
+      const fm = { id, title, status: 'todo', created: now, updated: now };
+      fm['bug-of'] = originalId;
+      const description = neutralizeBugText(bugDesc);
+      const body = [
+        '',
+        '## Description',
+        'Bug against ' + neutralizeBugText(originalId),
+        '',
+        description,
+        '',
+        '## Acceptance Criteria',
+        '- [ ] First testable criterion',
+        '',
+        '## Additional Context',
+        '(User-owned. Read it before building. Never overwrite it.)',
+        ''
+      ].join('\n');
+      const tasksDir = tasksJoin(tab.folder, 'tasks');
+      const subfolder = ticketFolderForStatus('todo');
+      const destDir = subfolder ? tasksJoin(tasksDir, subfolder) : tasksDir;
+      await window.api.fs.mkdir(destDir);
+      const filePath = tasksJoin(destDir, `${id}-${taskSlug(title)}.md`);
+      const wr = await window.api.fs.writeFile(filePath, serializeTicket(fm, body));
+      if (!wr || !wr.ok) {
+        // STEP 2 failed but STEP 1 already committed. Leave this target's key in
+        // bugFoldedTargets so a retry (TASK-038) skips STEP 1 and re-attempts only
+        // STEP 2 — no duplicate `## Bug Reports` entry gets folded on retry.
+        errEl.textContent = 'Bug ticket create failed (original was updated, retry writes only the bug ticket): ' + ((wr && wr.error) || 'unknown');
+        createBtn.disabled = false;
+        armCreate();
+        return;
+      }
+      createBtn.disabled = false;
+      cleanup();
+      pollTasksOnce(tab, true);
+    } catch (err) {
+      errEl.textContent = 'Bug create failed: ' + (err.message || err);
+      createBtn.disabled = false;
+      armCreate();
+    }
+  };
+
+  const onCreate = async () => {
+    if (bugMode) { await onCreateBug(); return; }
+    await onCreateNormal();
+  };
+
+  disposeCancel = bindActionOnce(cancelBtn, 'click', onCancel);
+  armBug();
+  armCreate();
+
+  // Forward-switch dangling-fold warning wiring (TASK-042, hardened TASK-044). A
+  // persistent `change` listener on the original-select recomputes the warning
+  // whenever the user picks a different original. attachBugSwitchWarning (mirror
+  // of lib/bug-switch-warning.js) detaches any handler a prior open left on this
+  // persistent DOM element, binds exactly one, and returns a disposer for cleanup
+  // — guaranteeing no listener accumulation across modal re-opens.
+  if (bugOfSelect) {
+    disposeBugSwitch = attachBugSwitchWarning(bugOfSelect, updateBugSwitchWarning);
+  }
+}
+
+// Open the planning modal (TASK-030). The user describes a feature (free text,
+// typically a bullet list); on submit we hand it to the orchestrate plan flow by
+// composing `/orchestrate plan <text>` and enqueuing it onto tab.promptQueue —
+// the SAME prompt-queue handoff the Build button uses (there is no programmatic
+// agent API). This button writes NO ticket files; the planner does that. Modeled
+// on openNewTaskModal/openBugReportModal for the open/clear/focus/bindActionOnce
+// lifecycle. The user's text is passed verbatim as a SINGLE prompt string — no
+// truncation, no newline splitting.
+function openPlanModal(tab) {
+  if (!tab.folder) return;
+  const modal = document.getElementById('planModal');
+  if (!modal) return;
+  const bodyArea = modal.querySelector('.plan-body');
+  const errEl = modal.querySelector('.plan-error');
+  const cancelBtn = modal.querySelector('.plan-cancel');
+  const submitBtn = modal.querySelector('.plan-submit');
+
+  bodyArea.value = '';
+  errEl.textContent = '';
+  submitBtn.disabled = false;
+  modal.classList.remove('hidden');
+  bodyArea.focus();
+
+  let disposeSubmit = null;
+  let disposeCancel = null;
+  const cleanup = () => {
+    modal.classList.add('hidden');
+    if (disposeSubmit) disposeSubmit();
+    if (disposeCancel) disposeCancel();
+  };
+  // Re-arm the once-submit listener for the empty-input retry path that leaves the
+  // modal open: `{ once: true }` self-detaches on fire (mirror openNewTaskModal).
+  const armSubmit = () => { disposeSubmit = bindActionOnce(submitBtn, 'click', onSubmit); };
+  const onCancel = () => cleanup();
+  const onSubmit = () => {
+    const text = bodyArea.value.trim();
+    if (!text) {
+      errEl.textContent = 'Describe what you want built.';
+      bodyArea.focus();
+      armSubmit();
+      return;
+    }
+    // Compose the plan command and enqueue it exactly like saveQueuePrompt/queueBuild:
+    // push onto the queue, repaint, and only dispatch immediately when the agent is
+    // idle (finished). Multi-line text stays a single string — no newline split.
+    tab.promptQueue.push('/orchestrate plan ' + text);
+    renderQueue(tab);
+    if (tab.status === 'finished') tryDispatchNextPrompt(tab);
+    cleanup();
+  };
+  disposeCancel = bindActionOnce(cancelBtn, 'click', onCancel);
+  armSubmit();
+}
+
+// ── Bug reports (TASK-020) ──────────────────────────────────────────────────
+// Browser-side mirror of lib/ticket-bug-reports.js (the renderer can't require
+// Node modules, so the append logic is duplicated here — same pattern as the
+// TASK-003/007/008 helpers). Appends a `## Bug Reports` entry, preserving every
+// other section verbatim and keeping the user-owned `## Additional Context`
+// section at the tail. Kept in sync with the pure lib helper.
+
+// Neutralize heading-forging in user bug text (TASK-022). Escapes the leading
+// run of `#`s on each line with a backslash so no body line starts with `## `
+// and forges a level-2 section boundary when the ticket is re-parsed, while the
+// text still renders as the literal `## …`. MUST stay byte-for-byte in step
+// with the canonical shared helper `escapeLeadingHeadingRun` in
+// lib/markdown-escape.js (TASK-027).
+function neutralizeBugText(text) {
+  const s = text == null ? '' : String(text);
+  return s
+    .split('\n')
+    .map((line) => line.replace(/^(\s*)(#+)(\s)/, '$1\\$2$3'))
+    .join('\n');
+}
+
+function appendBugReportToMarkdown(markdown, { bug, timestamp } = {}) {
+  const BUG_REPORTS_HEADING = '## Bug Reports';
+  const ADDITIONAL_CONTEXT_HEADING = '## Additional Context';
+  const body = typeof markdown === 'string' ? markdown : '';
+  const isSection = (headingLine, section) =>
+    headingLine.trim().toLowerCase() === section.toLowerCase();
+
+  const lines = body.split('\n');
+  const preamble = [];
+  const sections = [];
+  let current = null;
+  for (const line of lines) {
+    if (/^## /.test(line)) {
+      if (current) sections.push(current);
+      current = { heading: line, lines: [] };
+    } else if (current) {
+      current.lines.push(line);
+    } else {
+      preamble.push(line);
+    }
+  }
+  if (current) sections.push(current);
+
+  const ts = timestamp || new Date().toISOString();
+  const bugText = neutralizeBugText(bug == null ? '' : String(bug).trim());
+  const entryLines = [`### ${ts}`, '', bugText];
+
+  const idx = sections.findIndex((s) => isSection(s.heading, BUG_REPORTS_HEADING));
+  if (idx !== -1) {
+    const sec = sections[idx];
+    const kept = sec.lines.slice();
+    while (kept.length && kept[kept.length - 1].trim() === '') kept.pop();
+    sec.lines = kept.length ? [...kept, '', ...entryLines] : ['', ...entryLines];
+  } else {
+    const newSection = { heading: BUG_REPORTS_HEADING, lines: ['', ...entryLines] };
+    const acIdx = sections.findIndex((s) => isSection(s.heading, ADDITIONAL_CONTEXT_HEADING));
+    if (acIdx !== -1) sections.splice(acIdx, 0, newSection);
+    else sections.push(newSection);
+  }
+
+  const out = preamble.slice();
+  for (const sec of sections) {
+    out.push(sec.heading);
+    for (const l of sec.lines) out.push(l);
+  }
+  return out.join('\n');
+}
+
+// Open the bug-capture modal for a `done` ticket dragged onto `todo` (TASK-020).
+// On submit with non-empty text: re-read the freshest file, append the bug to the
+// `## Bug Reports` section (preserving all other sections incl. Additional
+// Context), write the whole file back, then move the ticket to `todo`. Cancel or
+// empty input aborts without touching the ticket.
+function openBugReportModal(tab, file) {
+  const ticket = tab.tasks.tickets.get(file);
+  if (!ticket) return;
+  const modal = document.getElementById('bugReportModal');
+  if (!modal) return;
+  const idEl = modal.querySelector('.bugreport-id');
+  const bodyArea = modal.querySelector('.bugreport-body');
+  const errEl = modal.querySelector('.bugreport-error');
+  const cancelBtn = modal.querySelector('.bugreport-cancel');
+  const submitBtn = modal.querySelector('.bugreport-submit');
+
+  idEl.textContent = (ticket.fm && ticket.fm.id) || '';
+  bodyArea.value = '';
+  errEl.textContent = '';
+  submitBtn.disabled = false;
+  modal.classList.remove('hidden');
+  bodyArea.focus();
+
+  let disposeSubmit = null;
+  let disposeCancel = null;
+  const cleanup = () => {
+    modal.classList.add('hidden');
+    if (disposeSubmit) disposeSubmit();
+    if (disposeCancel) disposeCancel();
+  };
+  // Re-arm the once-submit listener for retry paths (empty input / save error)
+  // that intentionally leave the modal open: `{ once: true }` self-detaches on
+  // fire, so a subsequent submit click would be dead without re-binding.
+  const armSubmit = () => { disposeSubmit = bindActionOnce(submitBtn, 'click', onSubmit); };
+  const onCancel = () => cleanup();
+  const onSubmit = async () => {
+    const bug = bodyArea.value.trim();
+    if (!bug) { errEl.textContent = 'Describe the bug before submitting.'; bodyArea.focus(); armSubmit(); return; }
+    submitBtn.disabled = true;
+    try {
+      const filePath = ticket.path;
+      let fm = ticket.fm;
+      let body = ticket.body;
+      // Re-read the freshest copy so a concurrent agent write isn't clobbered.
+      try {
+        const fr = await window.api.fs.readFile(filePath);
+        if (fr && fr.ok && !fr.binary) {
+          const parsed = parseTicketFrontmatter(fr.content);
+          if (parsed) { fm = parsed.fm; body = parsed.body; }
+        }
+      } catch (_) {}
+      const newBody = appendBugReportToMarkdown(body, { bug, timestamp: new Date().toISOString() });
+      const newFm = Object.assign({}, fm);
+      newFm.updated = new Date().toISOString();
+      if (!newFm.created) newFm.created = newFm.updated;
+      const wr = await window.api.fs.writeFile(filePath, serializeTicket(newFm, newBody));
+      if (!wr || !wr.ok) {
+        errEl.textContent = 'Save failed: ' + ((wr && wr.error) || 'unknown');
+        submitBtn.disabled = false;
+        armSubmit();
+        return;
+      }
+      // Keep the in-memory copy fresh so moveTicketToStatus re-reads/writes the
+      // bug body (it reads the freshest file anyway, but this avoids a stale body).
+      ticket.body = newBody;
+      ticket.fm = newFm;
+      cleanup();
+      await moveTicketToStatus(tab, file, 'todo');
+    } catch (err) {
+      errEl.textContent = 'Save failed: ' + (err.message || err);
+      submitBtn.disabled = false;
+      armSubmit();
+    }
+  };
+  // Bind via bindActionOnce (mirror of lib/modal-actions.js): each open first
+  // DETACHES the prior invocation's handler (bound to an earlier `file`) then
+  // binds fresh with `{ once: true }`. A re-open before dismissal therefore
+  // never leaves a stale-file submit listener attached, so a submit only ever
+  // writes/moves the ticket named by the most recent open.
+  disposeCancel = bindActionOnce(cancelBtn, 'click', onCancel);
+  armSubmit();
 }
 
 // ───────────────────────────────────────────────────────── slack channel

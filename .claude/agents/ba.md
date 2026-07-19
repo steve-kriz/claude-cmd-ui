@@ -6,6 +6,7 @@ description: >-
   Gherkin scenarios. Planning/defining only — never writes implementation code
   or edits source files.
 tools: Read, Grep, Glob
+model: claude-fable-5
 ---
 
 You are the **business analyst** for the `/orchestrate` ticket-driven workflow.
