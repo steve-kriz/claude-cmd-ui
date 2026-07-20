@@ -289,7 +289,13 @@ test('Scenario (edge): editing a failed-testing ticket in the detail modal does 
   assert.ok(!/value="failed-testing"/.test(sel), 'no failed-testing option in the modal select');
   assert.match(sel, /value="post-processing"/, 'post-processing option present');
   const optValues = [...sel.matchAll(/value="([^"]+)"/g)].map((m) => m[1]);
-  assert.deepEqual(optValues, LANE_STATUSES, 'select offers exactly the six lane statuses in order');
+  // `__`-prefixed values are modal-only pseudo-options (e.g. the TASK-074
+  // "Won't do" resolution, value="__wont-do__"), not real lane statuses — they
+  // are intentionally excluded from the lane-status check so the assertion still
+  // verifies the six REAL statuses are present and in order, and tolerates any
+  // future modal-only pseudo-options.
+  const laneOptValues = optValues.filter((v) => !v.startsWith('__'));
+  assert.deepEqual(laneOptValues, LANE_STATUSES, 'select offers exactly the six lane statuses in order');
 
   // When the modal fills a failed-testing ticket, it injects the stored status as a
   // selected option rather than defaulting the select to todo (source-scan of `fill`).

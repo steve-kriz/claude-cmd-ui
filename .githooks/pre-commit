@@ -1,0 +1,42 @@
+#!/bin/sh
+# Pre-commit guard: never commit real Slack tokens (or the secret-bearing .env).
+#
+# Intentional FAKE Slack tokens live in test/ and tasks/ fixtures (they exercise
+# the secret-redaction code) and .env.example ships an empty SLACK_TOKEN= — those
+# are allowlisted so they don't trip this guard. Real tokens belong only in .env,
+# which is git-ignored.
+#
+# Active when: git config core.hooksPath .githooks
+# Bypass (deliberate, non-secret only): git commit --no-verify
+
+fail=0
+
+# 1) Never commit an env file that holds real secrets.
+blocked_env=$(git diff --cached --name-only | grep -E '(^|/)\.env(\.local)?$' || true)
+if [ -n "$blocked_env" ]; then
+  echo "COMMIT BLOCKED: staged env file(s) that hold secrets:" >&2
+  echo "$blocked_env" | sed 's/^/  - /' >&2
+  fail=1
+fi
+
+# 2) Scan staged ADDED lines for real Slack token shapes, skipping fixture dirs.
+slack_re='xox[baprsc]-[0-9A-Za-z-]{6,}|xapp-[0-9A-Za-z-]{6,}'
+for f in $(git diff --cached --name-only --diff-filter=ACM); do
+  case "$f" in
+    test/*|tasks/*|.env.example) continue ;;  # intentional fake fixtures
+  esac
+  hits=$(git diff --cached -U0 -- "$f" | grep -E '^\+' | grep -v '^\+\+\+' | grep -EI "$slack_re" || true)
+  if [ -n "$hits" ]; then
+    echo "COMMIT BLOCKED: possible Slack token in staged changes to $f:" >&2
+    echo "$hits" | sed 's/^/    /' >&2
+    fail=1
+  fi
+done
+
+if [ "$fail" -ne 0 ]; then
+  echo "" >&2
+  echo "Keep secrets in .env (git-ignored). Remove the token and re-stage." >&2
+  echo "If this is a deliberate non-secret fixture, put it under test/ or tasks/." >&2
+  exit 1
+fi
+exit 0

@@ -5,11 +5,14 @@ const fsp = fs.promises;
 const { execFile } = require('child_process');
 const { spawnShell } = require('./lib/pty');
 const { shouldKeepAwake } = require('./lib/keep-awake');
+const { shouldRequestAttention } = require('./lib/window-attention');
 const envStore = require('./lib/env-store');
 const aws = require('./lib/aws');
 const cloudLogs = require('./lib/cloud-logs');
 const slack = require('./lib/slack');
 const slackOAuth = require('./lib/slack-oauth');
+const slackSummarize = require('./lib/slack-summarize');
+const { redactSecrets } = require('./lib/slack-proxy');
 
 const ptys = new Map();
 let mainWindow = null;
@@ -133,10 +136,14 @@ function createWindow() {
   wc.on('render-process-gone', (_e, details) => {
     console.error('[renderer crashed]', details);
     updateKeepAwake(0);
+    // No live renderer to re-report attention — clear any active taskbar flash so
+    // it can't stay stuck flashing after a crash (TASK-078).
+    setWindowAttention(false);
   });
   wc.on('unresponsive', () => {
     console.error('[renderer unresponsive] releasing keep-awake wake-lock');
     updateKeepAwake(0);
+    setWindowAttention(false);
   });
   wc.on('preload-error', (_e, preloadPath, error) => {
     console.error('[preload error]', preloadPath, error);
@@ -149,6 +156,14 @@ function createWindow() {
     wc.openDevTools({ mode: 'detach' });
   }
   globalShortcut_register(mainWindow);
+
+  // Focusing the window satisfies the "needs attention" cue — always clear the OS
+  // flash on focus (TASK-078). The renderer also re-reports on focus (verdict
+  // false), but clearing here as well guarantees the flash drops even if that
+  // report races or the renderer is mid-reload.
+  mainWindow.on('focus', () => {
+    setWindowAttention(false);
+  });
 
   mainWindow.on('closed', () => {
     for (const proc of ptys.values()) {
@@ -246,6 +261,56 @@ ipcMain.on('tasks:activity', (_evt, payload) => {
 
 // Belt-and-braces: never leak the wake-lock past shutdown.
 app.on('will-quit', () => { stopKeepAwake(); });
+
+// ── Window attention flash (TASK-078) ────────────────────────────────────────
+// When a tab is waiting/finished or a board ticket awaits an answer, and the
+// window is NOT focused, request OS attention (Windows taskbar flash / macOS dock
+// bounce) via BrowserWindow.flashFrame(true); clear it when no condition remains
+// or the window gains focus. The renderer owns the state and reports the app-wide
+// attention count over the fire-and-forget 'window:attention' channel; the pure
+// yes/no decision lives in lib/window-attention so it stays unit-testable. Here we
+// only apply it. Every flashFrame call is guarded (the window may be destroyed and
+// the API may throw on some platform) and deduped via the last-applied verdict so
+// repeated identical reports (e.g. a pty data tick while already waiting) never
+// spam the OS. `windowAttentionOn` is the single source of truth for the applied
+// state, mirroring the keep-awake single-blocker invariant.
+let windowAttentionOn = false;
+
+function setWindowAttention(on) {
+  const next = !!on;
+  if (next === windowAttentionOn) return; // deduped — already in this state
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    // No window to flash. Treat "clear" as reconciled (nothing is flashing); leave
+    // a stale "on" request unrecorded so a later live window can still be flashed.
+    if (!next) windowAttentionOn = false;
+    return;
+  }
+  try {
+    mainWindow.flashFrame(next);
+    windowAttentionOn = next;
+  } catch (e) {
+    console.error('[window-attention] flashFrame failed', e);
+  }
+}
+
+// The renderer reports the app-wide count of live attention conditions. Payload is
+// a bare number (see preload attention.report); tolerate an { count } object too.
+// The verdict also depends on window focus, read here from the live window. Junk
+// payloads coerce to a non-flashing verdict (shouldRequestAttention returns false
+// for anything that isn't a finite positive count). Fire-and-forget — no response.
+ipcMain.on('window:attention', (_evt, payload) => {
+  const attentionCount = typeof payload === 'number'
+    ? payload
+    : (payload && typeof payload === 'object' ? payload.count : NaN);
+  let windowFocused = true;
+  try {
+    windowFocused = !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused());
+  } catch (_) {
+    windowFocused = true;
+  }
+  const verdict = shouldRequestAttention({ attentionCount, windowFocused });
+  setWindowAttention(verdict);
+});
 
 ipcMain.handle('dialog:pickFolder', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
@@ -1652,6 +1717,48 @@ ipcMain.handle('slack:post', async (_evt, { token, channel, text, threadTs }) =>
     return await slack.postMessage(token, channel, text, threadTs);
   } catch (err) {
     return { ok: false, error: err.message };
+  }
+});
+
+// Upper bound on the text this handler will hand to the summarizer, mirroring
+// the renderer's cleanTerminalOutput tail bound (out.slice(-12000)). Normal
+// auto-post windows are already ≤12000 chars, so this never fires in practice;
+// it is defense-in-depth (TASK-077) so a regressed renderer pipeline — or the
+// IPC channel driven directly — can never forward an unbounded payload to the
+// external, billed Anthropic API. We keep the TAIL (last N chars) to match the
+// renderer exactly, and clamp BEFORE the summarizer so redactSecrets (injected
+// below) still runs on whatever will actually be sent.
+const SLACK_SUMMARIZE_MAX_INPUT_CHARS = 12000;
+
+// Summarize already-cleaned+redacted auto-post output with a fast Claude model
+// (TASK-073). The renderer's two auto-post paths call this with text that has
+// already passed through humanizeSlackOutput + redactSecrets; we read the
+// ANTHROPIC_API_KEY from the .env store (never logged, never returned) and hand
+// the text to the Electron-free summarizer with redactSecrets injected as a
+// defense-in-depth redact-before-send pass. Any failure (no key, disabled,
+// non-200, timeout, malformed) falls back to returning the INPUT text unchanged
+// so the renderer's final redactSecrets() reproduces TASK-071's output; this
+// handler never throws into the flush path.
+ipcMain.handle('slack:summarize', async (_evt, { text, enabled } = {}) => {
+  const raw = typeof text === 'string' ? text : '';
+  // Defense-in-depth length clamp (TASK-077): bound the payload before it can
+  // reach the external API. Keep the tail to mirror the renderer; the clamp is
+  // a no-op for the common ≤cap window and is safe on '' (slice on '' → '').
+  const input = raw.length > SLACK_SUMMARIZE_MAX_INPUT_CHARS
+    ? raw.slice(-SLACK_SUMMARIZE_MAX_INPUT_CHARS)
+    : raw;
+  try {
+    const apiKey = (envStore.get('ANTHROPIC_API_KEY') || '').trim();
+    const res = await slackSummarize.summarizeForSlack(input, {
+      apiKey,
+      enabled: !!enabled,
+      redact: redactSecrets
+    });
+    return { ok: true, text: res.text, summarized: res.summarized };
+  } catch (err) {
+    // Belt-and-braces: summarizeForSlack already swallows its own errors, but a
+    // thrown error here must still degrade to the fallback, never crash the run.
+    return { ok: true, text: input, summarized: false, error: err && err.message };
   }
 });
 

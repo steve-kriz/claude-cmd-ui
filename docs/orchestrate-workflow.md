@@ -65,7 +65,14 @@ reconciled (moved). Unknown statuses own no folder and are left in place.
 - **tester** (`orchestrate-tester`) — writes e2e cucumber + unit tests, mocks all
   DB calls, runs the suite, reports pass/fail.
 - **tech-lead** (`orchestrate-tech-lead`, read/search only) — reviews a passed
-  ticket before done; turns issues into new follow-up fix tickets.
+  ticket before done; turns issues into new follow-up fix tickets. For every
+  finding the reviewer also reports a short **"impact if not fixed"** statement
+  (the concrete consequence of leaving it unbuilt). Each follow-up fix ticket the
+  orchestrator creates carries a `review-of: <reviewed ticket id>` frontmatter key
+  (naming the ticket whose review produced it, e.g. `review-of: TASK-019`) and an
+  `## Impact If Not Fixed` section holding that statement, so the user can weigh
+  whether to build it. See the skill's Phase 4 and
+  [`.claude/agents/tech-lead.md`](../.claude/agents/tech-lead.md).
 
 If a named agent definition is missing at dispatch, `resolveAgentType` falls back
 to `general-purpose` and reports it rather than aborting.
@@ -80,6 +87,17 @@ Each build runs on its own per-ticket branch/worktree derived from the id
 builds never clobber each other; git-shared steps are serialized.
 `selectNextBatch` picks the oldest claimable tickets that fit the free slots;
 `canRunInParallel` decides whether a newly created ticket fits a slot right now.
+Free slots are `limit − slotOccupancyCount`, and `slotOccupancyCount` counts every
+`SLOT_OCCUPYING_STATUSES` ticket (`defining` / `in-progress` / `testing`) — so a
+`defining` ticket (a BA definition in flight for it) consumes a build slot too,
+keeping BA definitions and builds together under the bound. `defining` occupies a
+slot without being "active" (it stays unclaimable and lights no "being worked on"
+dot). One nuance (TASK-087): `slotOccupancyCount` uses `isSlotOccupyingTicket`,
+which exempts a `defining` ticket PARKED on an unanswered BA question
+(`isWaitingForAnswer` — non-empty `question`, empty `answer`), so it frees its slot
+and parked definitions never stall ready `todo`/`failed-testing` work; an
+actively-defining ticket (no open question) still counts, and a parked `defining`
+ticket stays unclaimable regardless.
 
 **Build accounting & run log.** The single latest build stamps `startedAt` /
 `finishedAt` (and optional `costUsd` / `tokens`) onto the frontmatter
@@ -101,9 +119,46 @@ ticket's build time (in minutes), cost, and token figures.
   ([`lib/ticket-history.js`](../lib/ticket-history.js)).
 - **Working indicator** — cards in `defining` / `in-progress` / `testing` show a
   blue "being worked on" dot (`ACTIVE_STATUSES`).
+- **Type bar** (TASK-075) — a thin colored strip between the ticket-id header and
+  the title encodes the ticket type, derived purely from frontmatter: red for a
+  bug ticket (non-empty `bug-of`), yellow for a PR-review ticket (non-empty
+  `review-of`), and green for every other ticket (the default, including
+  post-processing and unknown-status cards). Bug wins when both markers are
+  present (`isBugTicket` / `isReviewTicket` → `.task-card-type` in
+  [`renderer/renderer.js`](../renderer/renderer.js) /
+  [`renderer/styles.css`](../renderer/styles.css)). It renders on every card in
+  every lane, including inside the Done lane's "Archived (N)" expander.
+- **"Won't do" resolution** (TASK-074) — the ticket modal's status select carries
+  a fixed **"Won't do"** option. Choosing it persists the ticket as `status: done`
+  **plus** a `resolution: wont-do` frontmatter marker in a single whole-file write,
+  moving the card into the **done** lane while recording that it was declined
+  rather than completed. Such a card renders its title struck-through and muted
+  (`isWontDoTicket` → `.task-card-title.wont-do` in
+  [`renderer/styles.css`](../renderer/styles.css)), including inside the Done
+  lane's "Archived (N)" expander, and re-opening the modal shows "Won't do"
+  selected. This resolution is reachable **only** through the modal status select —
+  a plain drag onto the Done lane stays an ordinary `done` with no marker. Only an
+  exact `wont-do` value triggers the treatment; any other `resolution` round-trips
+  untouched.
 - **Parallel-build dropdown** — the toolbar lets you pick the concurrency; the
   choice is persisted per-folder and passed as `--concurrency <N>`
   ([`lib/tasks-settings.js`](../lib/tasks-settings.js)).
+- **Auto-define undefined tickets** (TASK-079) — a `todo` ticket added mid-build
+  that is not yet defined (no real, non-placeholder `## Acceptance Criteria` plus a
+  non-empty ```gherkin ``` block — `isTicketDefined` in
+  [`lib/ticket-definition.js`](../lib/ticket-definition.js)) is defined before any
+  build: the orchestrator parks it in `defining`, runs it through the
+  `orchestrate-ba` agent, then writes it back to `todo` and dispatches it **without
+  a review pause** (adding a ticket mid-run is implicit consent). An
+  already-defined ticket skips the BA and goes straight to dispatch. See the
+  skill's Phase 2 step 1.
+- **Auto-queue build on ticket creation** (TASK-079) — creating a ticket from the
+  app (New-ticket modal, bug-create, or the Slack `create ticket` command)
+  auto-starts an `/orchestrate build` run even when the auto-build toggle is off
+  (`autoQueueBuildOnCreate` in [`renderer/renderer.js`](../renderer/renderer.js)).
+  It reuses the same single-run guard as the continuous loop, so it is a no-op when
+  a run is already active/queued or Claude is not idle — that already-active run's
+  mid-build intake picks the new ticket up instead, and no overlapping run starts.
 
 **Skill install.** `tasks:installSkill` copies the bundled skill and the
 subagent definitions from `assets/` into the opened project's `.claude/skills/`
@@ -155,6 +210,9 @@ node --test test/ticket-queue.test.js test/ticket-lanes.test.js
 | `kind` | `post-processing` marks a post-processing ticket (never built by the swarm) |
 | `order` / `priority` | Numeric `todo` ordering |
 | `question` / `answer` | Clarifying Q/A (drives the yellow waiting dot) |
+| `resolution` | `wont-do` marks a done ticket the user declined via the modal (struck-through, muted title) |
+| `bug-of` | On a bug ticket: the id of the original ticket it was raised against (paints the card's type bar red) |
+| `review-of` | On a tech-lead follow-up fix ticket: the id of the reviewed ticket that produced it (paints the card's type bar yellow) |
 | `startedAt` / `finishedAt` / `costUsd` / `tokens` | Latest-build accounting |
 | `runs` | One-line JSON array: durable per-run accounting log |
 

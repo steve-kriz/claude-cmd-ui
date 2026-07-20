@@ -1,0 +1,132 @@
+[
+  {
+    "ts": "2026-07-19T07:31:04.618Z",
+    "source": "queue",
+    "prompt": "/orchestrate plan update slack integration\n- when user clicks connect, message is created in slack\n- all output from claude is posted to slack to this thread\n- all replyies from slack are captured and posted to claude cmd\n- add commands like \n- show me the tasks -> will show what tasks the agent is working on"
+  },
+  {
+    "ts": "2026-07-19T07:31:20.982Z",
+    "source": "user",
+    "prompt": "/model"
+  },
+  {
+    "ts": "2026-07-19T07:43:50.940Z",
+    "source": "user",
+    "prompt": "continue"
+  },
+  {
+    "ts": "2026-07-19T07:57:30.487Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-19T09:47:16.616Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-19T09:48:40.421Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-19T09:48:43.506Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-19T09:48:46.584Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-19T09:59:59.594Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-19T10:07:46.901Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-19T10:29:22.676Z",
+    "source": "slack",
+    "prompt": "Create new ticket change slack integration dont show all the filler words"
+  },
+  {
+    "ts": "2026-07-19T10:35:55.947Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-19T11:21:41.802Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-19T11:22:39.882Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-19T21:07:30.416Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-19T21:08:20.453Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-19T21:11:28.623Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-19T22:13:37.955Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-19T22:20:21.768Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-19T23:28:30.148Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-20T00:22:10.615Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-20T00:49:36.817Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-20T01:17:54.556Z",
+    "source": "user",
+    "prompt": "remove any slack token from being committed"
+  },
+  {
+    "ts": "2026-07-20T01:29:19.482Z",
+    "source": "user",
+    "prompt": "remove the token from commit history"
+  },
+  {
+    "ts": "2026-07-20T01:30:59.511Z",
+    "source": "user",
+    "prompt": "cb4a9a63c3880c9eba770bec6c8a10c4e4ca1a79"
+  },
+  {
+    "ts": "2026-07-20T01:31:24.356Z",
+    "source": "user",
+    "prompt": "test/slackredaction-shapes.test.js at line 38"
+  }
+]

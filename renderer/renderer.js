@@ -14,6 +14,10 @@ if (!window.api) {
 const IDLE_MS = 2500;
 const QUEUE_SEND_DELAY_MS = 300;
 const QUEUE_ENTER_DELAY_MS = 180;
+// While a run is busy, flush accumulated Claude output to the Slack anchor
+// thread on this fixed interval so long runs don't leave the thread silent
+// (TASK-061). slackOnFinished still posts the final remainder at idle.
+const SLACK_FLUSH_INTERVAL_MS = 30000;
 
 const TABS = new Map();
 let activeTabId = null;
@@ -223,12 +227,21 @@ function createTab() {
       channelName: '',
       botUserId: null,
       postReplies: true,
+      // LLM summarization of auto-posted output (TASK-073). OFF by default:
+      // it is opt-in because it requires an ANTHROPIC_API_KEY and sends output
+      // to an external service. When off the auto-post paths behave exactly as
+      // TASK-071 (mechanical cleanup + redaction only).
+      summarize: false,
       intervalMs: 5000,
       pollTimer: null,
       polling: false,
       fetching: false,
       // 'socket' (persistent WebSocket / Socket Mode) or 'poll' (HTTP polling).
       transport: null,
+      // Periodic flush of captureBuffer into the anchor thread during long busy
+      // runs (TASK-061). Started by startSlackListening, cleared everywhere the
+      // pollTimer is (stopSlackListening / disconnectSlack / resetSlackForFolder).
+      flushTimer: null,
       socket: null,
       socketClosing: false,
       socketReconnectTimer: null,
@@ -247,7 +260,12 @@ function createTab() {
       // The single anchor thread for this connect session. All outbound posts
       // and inbound-reply gating use this thread_ts; null means the proxy is
       // inactive (no-op in both directions). See lib/slack-proxy.js.
-      threadTs: null
+      threadTs: null,
+      // A pending multi-step command prompt (TASK-072), e.g. { name: 'create-ticket' }.
+      // While set, the next accepted anchor-thread reply is consumed by that
+      // prompt instead of being matched/forwarded. Cleared on disconnect / folder
+      // switch alongside the rest of the session state.
+      pendingCommand: null
     },
     tasks: {
       pollTimer: null,
@@ -257,7 +275,8 @@ function createTab() {
       skillInstalled: null,
       lastSig: '',
       autoBuild: false,
-      lanesBound: false
+      lanesBound: false,
+      archiveExpanded: false
     },
     els: {
       ws,
@@ -449,6 +468,7 @@ function createTab() {
       slackChannelInput: ws.querySelector('.slackChannelInput'),
       slackIntervalSelect: ws.querySelector('.slackIntervalSelect'),
       slackPostReplies: ws.querySelector('.slackPostReplies'),
+      slackSummarize: ws.querySelector('.slackSummarize'),
       slackTestConnectBtn: ws.querySelector('.slackTestConnectBtn'),
       slackConnectError: ws.querySelector('.slackConnectError'),
       slackChat: ws.querySelector('.slackChat'),
@@ -674,6 +694,12 @@ function createTab() {
     if (tab.els.slackPollToggle.checked) startSlackListening(tab);
     else stopSlackListening(tab);
   });
+  // AI-summarization toggle (TASK-073): update live so it can be flipped
+  // during a session (no reconnect needed) and persist per folder.
+  tab.els.slackSummarize.addEventListener('change', () => {
+    tab.slack.summarize = !!tab.els.slackSummarize.checked;
+    saveSlackConfig(tab);
+  });
   tab.els.slackSendBtn.addEventListener('click', () => sendSlackComposer(tab));
   tab.els.slackComposerInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -778,6 +804,9 @@ function closeTab(id) {
   // A closed tab's tickets no longer count toward the keep-awake wake-lock
   // (TASK-036) — re-report the app-wide active count without it.
   reportTasksActivity();
+  // A closed waiting/finished tab (or its tickets) no longer counts toward the
+  // OS attention flash (TASK-078) — re-report so it clears if it was the last one.
+  reportWindowAttention();
 
   if (activeTabId === id) {
     activeTabId = null;
@@ -1118,6 +1147,10 @@ function setTabStatus(tab, status) {
     tryDispatchNextPrompt(tab);
     maybeContinueBuild(tab);
   }
+  // Single status choke point — any tab entering/leaving waiting/finished changes
+  // the app-wide attention state (TASK-078). Only report on an actual transition
+  // so repeated same-status calls (e.g. per pty tick) don't spam IPC.
+  if (status !== prev) reportWindowAttention();
 }
 
 function bumpIdleTimer(tab) {
@@ -5196,6 +5229,34 @@ function isTicketWaitingForAnswer(fm) {
   return !!fm && ticketFieldNonEmpty(fm.question) && !ticketFieldNonEmpty(fm.answer);
 }
 
+// "Won't do" resolution (TASK-074). The user can decline any ticket via the modal
+// status select; the decision is persisted as `status: done` + a `resolution:
+// wont-do` frontmatter key (a locked decision — no status-enum change). This
+// predicate is the single source of truth for both the modal round-trip (select
+// "Won't do" when re-opening) and the struck-through card render. Only exactly
+// `wont-do` (trimmed) counts — any other `resolution` value (e.g. `fixed`) is a
+// plain done ticket and never triggers the won't-do treatment. Derived purely from
+// persisted frontmatter so it appears/clears on the normal poll cycle.
+function isWontDoTicket(fm) {
+  return !!fm && fm.status === 'done' &&
+    ticketFieldNonEmpty(fm.resolution) && String(fm.resolution).trim() === 'wont-do';
+}
+
+// Ticket "type" markers (TASK-075). A thin colored bar on each board card encodes
+// the ticket's type, derived purely from persisted frontmatter (no title text, no
+// new state) so it updates within one board poll once the file changes on disk. A
+// non-empty `bug-of` marks a bug ticket (red); a non-empty `review-of` marks a PR
+// review ticket (yellow, the marker shipped by TASK-074's create-review flow).
+// Everything else is a plain ticket (green default). Both are trimmed-non-empty
+// checks (ticketFieldNonEmpty), never raw-string truthiness. Precedence: bug wins
+// when both markers are present.
+function isBugTicket(fm) {
+  return !!fm && ticketFieldNonEmpty(fm['bug-of']);
+}
+function isReviewTicket(fm) {
+  return !!fm && ticketFieldNonEmpty(fm['review-of']);
+}
+
 // Persisted user-defined `todo` ordering (TASK-007). Mirrors
 // lib/ticket-queue.js's ticketOrderValue/compareTicketOrder for the browser side,
 // which cannot require Node modules (matching how TASK-003/004/005/006 duplicated
@@ -5414,6 +5475,110 @@ function ticketRunLines(fm) {
   }).filter((line) => line !== '');
 }
 
+// ── Per-activity cost view (TASK-070) display helpers ──────────────────────
+// Read-only mirror of lib/ticket-cost.js for the browser side, which cannot
+// require Node modules (matching how TASK-003/005/007/008/012 duplicated the tiny
+// pure helpers). The orchestrator appends one activity entry per dispatched phase
+// — { activity, model, startedAt, finishedAt, durationMs, tokensIn, tokensOut,
+// costUsd } — to a JSON array kept on a single flat `activities` frontmatter
+// field, giving a complete cost breakdown by activity (ba/code/test/review/
+// post-processing/…). These helpers parse, sum and format that log for display.
+
+// Parse the `activities` JSON array off a frontmatter object into an array of
+// entries. Tolerant: absent / non-string / invalid-JSON / non-array / non-object
+// members all yield a clean array (bad members filtered) so a hand-edited or
+// corrupt ticket never throws while rendering. Mirrors parseActivities in
+// lib/ticket-cost.js.
+function parseTicketActivities(fm) {
+  const raw = fm ? fm.activities : null;
+  if (raw == null) return [];
+  if (Array.isArray(raw)) return raw.filter((e) => e && typeof e === 'object');
+  if (typeof raw !== 'string' || raw.trim() === '') return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((e) => e && typeof e === 'object') : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+// Sum durationMs / tokensIn / tokensOut / costUsd across a parsed activity array,
+// counting only valid present values; a total is null when NO entry carried that
+// field (never NaN, never a fabricated 0). Mirrors totalActivities in
+// lib/ticket-cost.js and the isValidAmount gate.
+function totalTicketActivities(activities) {
+  const list = Array.isArray(activities) ? activities : [];
+  const valid = (v) => {
+    if (v == null || v === '') return false;
+    const n = typeof v === 'number' ? v : Number(v);
+    return Number.isFinite(n) && n >= 0;
+  };
+  const acc = { durationMs: null, tokensIn: null, tokensOut: null, costUsd: null };
+  for (const e of list) {
+    if (!e || typeof e !== 'object') continue;
+    for (const k of ['durationMs', 'tokensIn', 'tokensOut', 'costUsd']) {
+      if (valid(e[k])) acc[k] = (acc[k] == null ? 0 : acc[k]) + Number(e[k]);
+    }
+  }
+  return acc;
+}
+
+// Compact wall-clock label for a millisecond duration, e.g. "4m 30s". '' when
+// absent/malformed. Reuses the h/m/s shaping of formatBuildDuration.
+function formatDurationMs(v) {
+  if (v == null || v === '') return '';
+  const ms = Number(v);
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`;
+  if (m > 0) return `${m}m ${String(s).padStart(2, '0')}s`;
+  return `${s}s`;
+}
+
+// One display line per activity: "<activity> · <model> · <duration> · in/out ·
+// <cost>", dropping any fragment that is absent. Empty array in => empty array out.
+function ticketActivityLines(fm) {
+  return parseTicketActivities(fm).map((a) => {
+    const bits = [];
+    if (a.activity != null && String(a.activity).trim() !== '') bits.push(String(a.activity).trim());
+    if (a.model != null && String(a.model).trim() !== '') bits.push(String(a.model).trim());
+    const dur = formatDurationMs(a.durationMs);
+    if (dur) bits.push(dur);
+    const tin = formatTokens(a.tokensIn);
+    const tout = formatTokens(a.tokensOut);
+    if (tin || tout) {
+      const inLbl = tin ? tin.replace(/ tok$/, '') : '—';
+      const outLbl = tout ? tout.replace(/ tok$/, '') : '—';
+      bits.push(`${inLbl}↑/${outLbl}↓ tok`);
+    }
+    const cost = formatCostUsd(a.costUsd);
+    if (cost) bits.push(cost);
+    return bits.join('   ·   ');
+  }).filter((line) => line !== '');
+}
+
+// Totals display line summing the activity log, e.g. "Total: 6m 12s · 20k↑/5k↓
+// tok · $0.42", dropping absent fragments. '' when the log carries no summable data.
+function ticketActivityTotalLine(fm) {
+  const totals = totalTicketActivities(parseTicketActivities(fm));
+  const bits = [];
+  const dur = formatDurationMs(totals.durationMs);
+  if (dur) bits.push(dur);
+  const tin = totals.tokensIn != null ? formatTokens(totals.tokensIn) : '';
+  const tout = totals.tokensOut != null ? formatTokens(totals.tokensOut) : '';
+  if (tin || tout) {
+    const inLbl = tin ? tin.replace(/ tok$/, '') : '—';
+    const outLbl = tout ? tout.replace(/ tok$/, '') : '—';
+    bits.push(`${inLbl}↑/${outLbl}↓ tok`);
+  }
+  const cost = totals.costUsd != null ? formatCostUsd(totals.costUsd) : '';
+  if (cost) bits.push(cost);
+  return bits.length ? `Total: ${bits.join('   ·   ')}` : '';
+}
+
 // Ordered list of accounting fragments present on this ticket's frontmatter.
 // Empty when the ticket carries no start/cost/token data yet.
 function ticketAccountingParts(fm) {
@@ -5427,6 +5592,41 @@ function ticketAccountingParts(fm) {
   return parts;
 }
 
+// Stale-done archiving (TASK-065). Mirrors ARCHIVE_AFTER_MS / isArchived in
+// lib/ticket-archive.js for the browser side, which cannot require Node modules;
+// keep in sync. Archiving is DERIVED (no new status, no file move): a done
+// ticket whose last activity (fm.updated, else fm.created) is strictly more than
+// TASKS_ARCHIVE_AFTER_MS old is folded out of the normal Done list into the
+// collapsible "Archived (N)" expander. Every failure mode is fail-safe (show,
+// don't hide): non-done status, missing/invalid timestamp, missing/invalid
+// `now`, exactly-at-or-under the threshold (strict >), or a future timestamp
+// (negative age) → not archived. `now` is injected by the caller; Date.now() is
+// fine at the CALL SITE (like formatBuildDuration), never inside this predicate.
+const TASKS_ARCHIVE_AFTER_DAYS = 5;
+const TASKS_ARCHIVE_AFTER_MS = TASKS_ARCHIVE_AFTER_DAYS * 24 * 60 * 60 * 1000;
+function ticketArchiveTimestamp(fm) {
+  if (!fm) return null;
+  const parse = (v) => {
+    if (v == null || v === '') return null;
+    const n = new Date(String(v).trim()).getTime();
+    return Number.isNaN(n) ? null : n;
+  };
+  const updated = parse(fm.updated);
+  if (updated != null) return updated;
+  return parse(fm.created);
+}
+function ticketIsArchived(fm, now) {
+  if (!fm || fm.status !== 'done') return false;
+  const nowMs = typeof now === 'number' ? (Number.isFinite(now) ? now : null)
+    : (now instanceof Date ? (Number.isNaN(now.getTime()) ? null : now.getTime()) : null);
+  if (nowMs == null) return false;
+  const ts = ticketArchiveTimestamp(fm);
+  if (ts == null) return false;
+  const age = nowMs - ts;
+  if (age < 0) return false;
+  return age > TASKS_ARCHIVE_AFTER_MS;
+}
+
 // Wipe board state when the tab switches to a different folder, then re-init if
 // the Tasks tab is the one currently showing.
 function resetTasksForFolder(tab) {
@@ -5435,6 +5635,10 @@ function resetTasksForFolder(tab) {
   tab.tasks.lastSig = '';
   tab.tasks.skillInstalled = null;
   tab.tasks.autoBuild = false;
+  // Archived-done expander (TASK-065) is collapsed by default per folder; its
+  // open/closed state is UI-only and must survive board re-renders but reset when
+  // the tab switches folders.
+  tab.tasks.archiveExpanded = false;
   for (const laneEl of tab.els.tasksLanes) {
     const cards = laneEl.querySelector('.tasks-lane-cards');
     if (cards) cards.innerHTML = '';
@@ -5624,6 +5828,12 @@ function renderTasksBoard(tab) {
     cards.innerHTML = '';
     lanes[laneEl.dataset.status] = { el: laneEl, cards, count: 0 };
   }
+  // Stale-done archiving (TASK-065): sample the clock once at the render call
+  // site (like formatBuildDuration) and collect archived done cards to fold into
+  // the "Archived (N)" expander at the bottom of the Done lane. The Done lane
+  // count still counts these (total = visible + archived stays truthful).
+  const now = Date.now();
+  const archivedDoneCards = [];
   // Sort by numeric `id` across the board, but honour the user-defined order
   // within the `todo` lane (TASK-007): two todo tickets are compared by their
   // persisted `order` (falling back to id), while every other pairing stays in id
@@ -5706,7 +5916,41 @@ function renderTasksBoard(tab) {
     const titleEl = document.createElement('div');
     titleEl.className = 'task-card-title';
     titleEl.textContent = tk.fm.title || '(untitled)';
+    // "Won't do" resolution (TASK-074): a ticket the user declined (done +
+    // resolution: wont-do) shows a struck-through / muted title in the Done lane,
+    // including inside the Done lane's "Archived (N)" expander (the same card node
+    // is folded into the expander below, so the treatment carries over). Only an
+    // exact `wont-do` resolution triggers this (isWontDoTicket).
+    if (isWontDoTicket(tk.fm)) titleEl.classList.add('wont-do');
     card.appendChild(idEl);
+    // Ticket type bar (TASK-075): a thin horizontal colored strip between the id
+    // header and the title, encoding the ticket's type from persisted frontmatter
+    // only. Red (.bug) for a bug ticket (non-empty `bug-of`), yellow (.review) for
+    // a PR-review ticket (non-empty `review-of`), green (default, no modifier) for
+    // everything else — including post-processing and unknown-status cards. Bug
+    // wins when both markers are present. Rendered on every card in every lane
+    // (the same construction path feeds the Done lane's Archived expander and
+    // unknown-status cards), so the bar is universal.
+    const typeEl = document.createElement('div');
+    // Text alternative (TASK-082): the bar encodes type by color only, which
+    // excludes color-blind users. Mirror the status dot's `title` convention
+    // below (~5947) so the meaning is available on hover / to screen readers.
+    // The label is derived from the SAME predicates as the color class (bug
+    // checked first, so bug wins over review) so label and color can never
+    // disagree, and is a fixed literal per type (no ticket text interpolated,
+    // no injection surface). Set via attribute/property, never innerHTML.
+    const typeLabel = isBugTicket(tk.fm) ? 'Bug' : (isReviewTicket(tk.fm) ? 'Review' : 'Normal');
+    typeEl.className = 'task-card-type' +
+      (isBugTicket(tk.fm) ? ' bug' : (isReviewTicket(tk.fm) ? ' review' : ''));
+    typeEl.title = typeLabel;
+    typeEl.setAttribute('aria-label', typeLabel);
+    // Announceable role (TASK-083): `aria-label` on a role-less generic <div> is
+    // not guaranteed to be exposed by assistive tech. `role="img"` reliably
+    // exposes the label for this purely-decorative colored strip while keeping it
+    // non-interactive/non-focusable (no tabindex). Set via attribute, never
+    // innerHTML; the label/color logic above is unchanged.
+    typeEl.setAttribute('role', 'img');
+    card.appendChild(typeEl);
     card.appendChild(titleEl);
     // "Being worked on" indicator: shown while an agent is actively working the
     // ticket, or while the ticket is waiting for the user's answer. Derived
@@ -5752,8 +5996,48 @@ function renderTasksBoard(tab) {
       card.appendChild(agentEl);
     }
     card.addEventListener('click', () => openTaskModal(tab, tk));
-    lane.cards.appendChild(card);
+    // Archived stale-done cards (TASK-065) are held back from the normal Done
+    // list and folded into the expander below, but still counted so the Done
+    // lane count reports the true total. All card behaviour (click → modal,
+    // drag out of Done) is unchanged; only where the node is appended differs.
+    if (laneKey === 'done' && ticketIsArchived(tk.fm, now)) {
+      archivedDoneCards.push(card);
+    } else {
+      lane.cards.appendChild(card);
+    }
     lane.count++;
+  }
+  // Fold archived done cards into a collapsible "Archived (N)" expander at the
+  // bottom of the Done lane. No expander is rendered when the count is 0 (never
+  // "Archived (0)"). The open/closed state lives on tab.tasks.archiveExpanded so
+  // it survives the poll re-render (which wipes lane innerHTML each cycle); it is
+  // re-applied here every render and toggled synchronously on click so the panel
+  // opens/closes immediately without waiting for the next poll.
+  const doneLane = lanes.done;
+  if (doneLane && archivedDoneCards.length) {
+    const expander = document.createElement('div');
+    expander.className = 'tasks-archived';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'tasks-archived-toggle';
+    toggle.textContent = `Archived (${archivedDoneCards.length})`;
+    const body = document.createElement('div');
+    body.className = 'tasks-archived-cards';
+    for (const c of archivedDoneCards) body.appendChild(c);
+    const applyState = () => {
+      const open = !!t.archiveExpanded;
+      expander.classList.toggle('expanded', open);
+      body.classList.toggle('hidden', !open);
+      toggle.setAttribute('aria-expanded', String(open));
+    };
+    toggle.addEventListener('click', () => {
+      t.archiveExpanded = !t.archiveExpanded;
+      applyState();
+    });
+    applyState();
+    expander.appendChild(toggle);
+    expander.appendChild(body);
+    doneLane.cards.appendChild(expander);
   }
   for (const status of Object.keys(lanes)) {
     const countEl = lanes[status].el.querySelector('.tasks-lane-count');
@@ -5783,6 +6067,9 @@ function renderTasksBoard(tab) {
   updatePlanBtn(tab);
   maybeContinueBuild(tab);
   reportTasksActivity();
+  // Board question/answer state is fresh here — re-evaluate window attention so a
+  // newly-waiting (or newly-answered) ticket updates the OS flash (TASK-078).
+  reportWindowAttention();
 }
 
 // Keep-awake signal (TASK-036). Report the app-wide count of tickets that are
@@ -5807,6 +6094,28 @@ function reportTasksActivity() {
   try { window.api.tasks.reportActivity(active); } catch (_) {}
 }
 
+// Window-attention signal (TASK-078). Report the app-wide count of live "needs
+// attention" conditions to the main process so it can request / clear the OS
+// taskbar flash while the window is unfocused. Aggregated across ALL tabs and
+// boards (the flash is one app-wide resource). A condition is: a tab in `waiting`
+// (Claude paused on a TUI menu) or `finished` (idle, awaiting the next prompt), or
+// a board ticket waiting for an answer (isTicketWaitingForAnswer). attentionCount
+// sums all three — the main-side verdict only flashes when count > 0 AND the
+// window is unfocused, and dedupes, so this is cheap to call on every transition.
+function reportWindowAttention() {
+  if (!window.api || !window.api.attention || !window.api.attention.report) return;
+  let attentionCount = 0;
+  for (const tb of TABS.values()) {
+    if (tb && (tb.status === 'waiting' || tb.status === 'finished')) attentionCount++;
+    const tickets = tb && tb.tasks && tb.tasks.tickets;
+    if (!tickets || typeof tickets.values !== 'function') continue;
+    for (const tk of tickets.values()) {
+      if (tk && isTicketWaitingForAnswer(tk.fm)) attentionCount++;
+    }
+  }
+  try { window.api.attention.report(attentionCount); } catch (_) {}
+}
+
 // Ticket detail/edit modal. Loads the freshest copy from disk, lets the user
 // edit title/status/body, and guards against clobbering a concurrent agent write.
 function openTaskModal(tab, ticket) {
@@ -5818,6 +6127,7 @@ function openTaskModal(tab, ticket) {
   const pathEl = modal.querySelector('.task-modal-path');
   const acctEl = modal.querySelector('.task-modal-accounting');
   const runsEl = modal.querySelector('.task-modal-runs');
+  const costEl = modal.querySelector('.task-modal-cost');
   const questionEl = modal.querySelector('.task-modal-question');
   const questionTextEl = modal.querySelector('.task-modal-question-text');
   const answerInput = modal.querySelector('.task-modal-answer-input');
@@ -5853,6 +6163,13 @@ function openTaskModal(tab, ticket) {
       statusSel.appendChild(opt);
     }
     statusSel.value = curStatus;
+    // "Won't do" resolution (TASK-074): a ticket persisted as `status: done` +
+    // `resolution: wont-do` re-opens with the fixed "Won't do" pseudo-option
+    // selected instead of plain "Done". The pseudo-option's value (`__wont-do__`)
+    // is not a real status, so it never collides with the injected current-status
+    // option above (which only fires for out-of-enum statuses like `failed-testing`)
+    // and picking plain "Done" instead clears the marker on save (see doWrite).
+    if (isWontDoTicket(fmObj)) statusSel.value = '__wont-do__';
     bodyArea.value = body || '';
     // Build accounting (TASK-003): read-only build time / cost summary, hidden
     // when the ticket carries no accounting data.
@@ -5887,6 +6204,35 @@ function openTaskModal(tab, ticket) {
         }
       }
       runsEl.classList.toggle('hidden', lines.length === 0);
+    }
+    // Per-activity cost view (TASK-070): a read-only breakdown of the complete
+    // ticket cost by activity (ba/code/test/review/post-processing/…). Each row
+    // shows the activity, model, duration, tokens up/down and cost (absent
+    // fragments dropped), followed by a totals row. Hidden entirely when the
+    // ticket carries no activity data.
+    if (costEl) {
+      const lines = ticketActivityLines(fmObj);
+      const totalLine = ticketActivityTotalLine(fmObj);
+      costEl.textContent = '';
+      if (lines.length) {
+        const head = document.createElement('div');
+        head.className = 'task-modal-cost-label';
+        head.textContent = `Cost by activity (${lines.length})`;
+        costEl.appendChild(head);
+        for (const line of lines) {
+          const row = document.createElement('div');
+          row.className = 'task-modal-cost-row';
+          row.textContent = line;
+          costEl.appendChild(row);
+        }
+        if (totalLine) {
+          const trow = document.createElement('div');
+          trow.className = 'task-modal-cost-total';
+          trow.textContent = totalLine;
+          costEl.appendChild(trow);
+        }
+      }
+      costEl.classList.toggle('hidden', lines.length === 0);
     }
     // Question/answer (TASK-005): show the agent's question and let the user type
     // an answer inline. Shown only when the ticket carries a question in its
@@ -5931,7 +6277,21 @@ function openTaskModal(tab, ticket) {
   const doWrite = async () => {
     const newFm = Object.assign({}, fm);
     newFm.title = titleInput.value.trim();
-    newFm.status = statusSel.value;
+    // "Won't do" resolution (TASK-074): the "Won't do" pseudo-option maps to
+    // `status: done` + `resolution: wont-do` in this single whole-file write — no
+    // status-enum change, so the file reconciles into tasks/done/ via the existing
+    // reconcileTicketFolders flow. Picking any real status instead clears a prior
+    // `wont-do` marker (only when it was exactly `wont-do`, so an unrelated
+    // `resolution` value round-trips untouched as an unknown key).
+    if (statusSel.value === '__wont-do__') {
+      newFm.status = 'done';
+      newFm.resolution = 'wont-do';
+    } else {
+      newFm.status = statusSel.value;
+      if (newFm.resolution != null && String(newFm.resolution).trim() === 'wont-do') {
+        delete newFm.resolution;
+      }
+    }
     newFm.updated = new Date().toISOString();
     if (!newFm.created) newFm.created = newFm.updated;
     // Question/answer (TASK-005): fold the typed answer into the frontmatter when
@@ -6231,6 +6591,26 @@ function queueBuild(tab) {
   if (tab.status === 'finished') tryDispatchNextPrompt(tab);
 }
 
+// TASK-079 Part A: auto-start an "/orchestrate build" run the moment a ticket is
+// created (New-ticket modal, bug create, or Slack `create ticket`), even when the
+// auto-build toggle is OFF — so a newly added ticket is defined/built right away
+// without the user pressing Build. Reuses queueBuild/buildCommandFor and the SAME
+// single-run guard maybeContinueBuild relies on, so it NEVER launches a second
+// overlapping run: if the continuous auto-build loop is already on, or a build
+// command is already queued, or Claude is mid-dispatch / not idle-ready, this is a
+// no-op — the already-active run's mid-build intake (SKILL Phase 2 step 1) picks
+// the new ticket up instead.
+function autoQueueBuildOnCreate(tab) {
+  if (!tab || !tab.folder) return;
+  const t = tab.tasks;
+  if (!t || !t.skillInstalled) return;              // no skill installed -> no build run
+  if (t.autoBuild) return;                          // the continuous loop already drives it
+  if (tab.status !== 'finished') return;            // a run is in flight / Claude not idle-ready
+  if (tab.queueFiring) return;                      // mid-dispatch, don't stack
+  if (tab.promptQueue.some(isBuildCommand)) return; // a build run is already queued
+  queueBuild(tab);
+}
+
 // Attach drop targets to each lane once. Dropping a card rewrites that ticket's
 // `status` frontmatter to the lane it lands in.
 function bindTaskLaneDrop(tab) {
@@ -6300,6 +6680,16 @@ async function moveTicketToStatus(tab, file, newStatus) {
   } catch (_) {}
   const newFm = Object.assign({}, fm);
   newFm.status = newStatus;
+  // "Won't do" (TASK-074/TASK-080): the `resolution: wont-do` marker is reachable
+  // only via the task-modal status select; a plain drag means normal done. So when
+  // a moved ticket carries a lingering `wont-do` marker, clear it here — otherwise
+  // dragging a won't-do ticket out of Done and back would silently re-flag it
+  // struck-through with no modal involved. Only the exact trimmed `wont-do` value
+  // is cleared (mirrors doWrite's revert path); any other `resolution` value
+  // round-trips untouched, and tickets with no `resolution` key are unaffected.
+  if (newFm.resolution != null && String(newFm.resolution).trim() === 'wont-do') {
+    delete newFm.resolution;
+  }
   newFm.updated = new Date().toISOString();
   if (!newFm.created) newFm.created = newFm.updated;
   const wr = await window.api.fs.writeFile(filePath, serializeTicket(newFm, body));
@@ -6718,6 +7108,9 @@ function openNewTaskModal(tab, opts) {
       createBtn.disabled = false;
       cleanup();
       pollTasksOnce(tab, true);
+      // TASK-079 Part A: a newly created buildable ticket auto-starts a build run.
+      // Post-processing tickets are never built by the swarm, so skip those.
+      if (status === 'todo') autoQueueBuildOnCreate(tab);
     } catch (err) {
       errEl.textContent = 'Create failed: ' + (err.message || err);
       createBtn.disabled = false;
@@ -6852,6 +7245,8 @@ function openNewTaskModal(tab, opts) {
       createBtn.disabled = false;
       cleanup();
       pollTasksOnce(tab, true);
+      // TASK-079 Part A: the new bug ticket is a plain `todo`, so auto-start a run.
+      autoQueueBuildOnCreate(tab);
     } catch (err) {
       errEl.textContent = 'Bug create failed: ' + (err.message || err);
       createBtn.disabled = false;
@@ -7105,7 +7500,8 @@ function saveSlackConfig(tab) {
       channelId: tab.slack.channelId,
       channelName: tab.slack.channelName,
       intervalMs: tab.slack.intervalMs,
-      postReplies: tab.slack.postReplies
+      postReplies: tab.slack.postReplies,
+      summarize: tab.slack.summarize
     }));
   } catch (_) {}
 }
@@ -7125,6 +7521,9 @@ function resetSlackForFolder(tab) {
   stopSlackListening(tab);
   const s = tab.slack;
   s.connected = false;
+  // Stop and null the periodic flush timer for this tab (no leak across folder
+  // switches) even though stopSlackListening already cleared it (TASK-061).
+  if (s.flushTimer) { clearInterval(s.flushTimer); s.flushTimer = null; }
   s.token = '';
   s.appToken = '';
   s.channelId = '';
@@ -7141,6 +7540,8 @@ function resetSlackForFolder(tab) {
   s.awaitingResponse = false;
   s.captureBuffer = '';
   s.replyThreadTs = null;
+  // Clear any half-finished multi-step command prompt (TASK-072).
+  s.pendingCommand = null;
   // Drop any prior session anchor so reconnecting in this tab makes a fresh one.
   s.threadTs = null;
 
@@ -7157,6 +7558,10 @@ function resetSlackForFolder(tab) {
   if (cfg && typeof cfg.postReplies === 'boolean') {
     tab.els.slackPostReplies.checked = cfg.postReplies;
     s.postReplies = cfg.postReplies;
+  }
+  if (cfg && typeof cfg.summarize === 'boolean') {
+    tab.els.slackSummarize.checked = cfg.summarize;
+    s.summarize = cfg.summarize;
   }
   tab.els.slackConnectError.textContent = '';
   tab.els.slackTokenStatus.textContent = '';
@@ -7383,6 +7788,7 @@ async function connectSlack(tab) {
     s.botUserId = res.botUserId || null;
     s.intervalMs = Number(tab.els.slackIntervalSelect.value) || 5000;
     s.postReplies = !!tab.els.slackPostReplies.checked;
+    s.summarize = !!tab.els.slackSummarize.checked;
     // Baseline at "now" so we only react to messages sent from here on, not the
     // channel's entire backlog.
     s.lastTs = (Date.now() / 1000).toFixed(6);
@@ -7433,6 +7839,9 @@ function disconnectSlack(tab) {
   stopSlackListening(tab);
   const s = tab.slack;
   s.connected = false;
+  // Ensure the periodic flush timer is stopped and nulled (no leak) even though
+  // stopSlackListening already cleared it (TASK-061).
+  if (s.flushTimer) { clearInterval(s.flushTimer); s.flushTimer = null; }
   // Clear the session anchor + in-flight state so a later reconnect creates a
   // fresh single anchor rather than reusing a stale thread (criterion 7).
   s.threadTs = null;
@@ -7440,6 +7849,8 @@ function disconnectSlack(tab) {
   s.captureBuffer = '';
   s.replyThreadTs = null;
   s.inbox = [];
+  // Clear any half-finished multi-step command prompt (TASK-072).
+  s.pendingCommand = null;
   appendSlackMessage(tab, { who: 'system', text: 'Disconnected.' });
   updateSlackUI(tab);
 }
@@ -7454,6 +7865,8 @@ async function startSlackListening(tab) {
   if (!s.connected) return;
   s.polling = true;
   updateSlackUI(tab);
+  // Start streaming mid-run output to the anchor thread (TASK-061).
+  startSlackFlushTimer(tab);
   if (s.appToken) {
     const ok = await startSlackSocket(tab);
     if (ok) return;
@@ -7468,6 +7881,7 @@ async function startSlackListening(tab) {
 function stopSlackListening(tab) {
   stopSlackSocket(tab);
   stopSlackPolling(tab);
+  stopSlackFlushTimer(tab);
   tab.slack.transport = null;
 }
 
@@ -7790,6 +8204,419 @@ function slackShouldDispatchIncoming(msg, s) {
   return true;
 }
 
+// Should the accumulated capture buffer be flushed to the anchor thread on a
+// periodic tick WHILE the run is still busy? True only when the proxy is
+// enabled, replies are being posted, there is buffered output, and the run is
+// busy. Mirrors shouldFlushCapture in lib/slack-proxy.js; keep in sync.
+function slackShouldFlushCapture(s) {
+  return !!(
+    slackProxyEnabled(s) &&
+    s.postReplies &&
+    typeof s.captureBuffer === 'string' &&
+    s.captureBuffer.length > 0 &&
+    s.busy === true
+  );
+}
+
+// Mask common secret shapes in AUTO-POSTED terminal output before it reaches
+// Slack (slackFlushTick + slackOnFinished). Runs AFTER cleanTerminalOutput,
+// which strips ANSI/chrome but does NO secret redaction. Deliberately
+// CONSERVATIVE to avoid mangling ordinary prose/code: anchors on known token
+// prefixes and high-entropy length thresholds. Each match → '***REDACTED***'.
+// Covers: secret-looking KEY=VALUE / KEY: VALUE pairs, Bearer <token>, sk-…,
+// xoxb-/xoxp-/xoxe-/xoxd-/xapp-…, ghp_…, github_pat_…, glpat-…, npm_…, dop_v1_…,
+// AIza…, SG.<id>.<secret>, bare JWTs, AKIA…/ASIA… and hex(>=32)/base64(>=40) blobs.
+// Never throws: null/undefined/non-string → ''.
+// Mirrors redactSecrets in lib/slack-proxy.js; keep in sync.
+function redactSecrets(text) {
+  if (typeof text !== 'string' || !text) return '';
+  const R = '***REDACTED***';
+  let out = text;
+  // KEY=VALUE / KEY: VALUE with a secret-looking key name (mask value, keep key).
+  out = out.replace(
+    /\b([\w.-]*(?:secret|token|key|password|passwd|pwd|apikey)[\w.-]*)(\s*[:=]\s*)("[^"\n]*"|'[^'\n]*'|[^\s]+)/gi,
+    (m, key, sep) => key + sep + R
+  );
+  // Bearer <token> (keep the scheme word, mask the credential).
+  out = out.replace(/\bBearer\s+[A-Za-z0-9\-._~+/]+=*/g, 'Bearer ' + R);
+  // Inline connection-string credentials scheme://user:password@host — mask
+  // ONLY the password (group 2), keeping scheme+user (group 1) and the '@'
+  // (group 3) readable; also covers the password-only form scheme://:pass@host
+  // (empty user). Char classes exclude '@', whitespace and '/' so the match
+  // cannot run past the authority, and a URL with no ':pass@' segment (e.g.
+  // https://example.com/path or http://host:8080/path) is left untouched.
+  // Linear — no nested quantifiers, so backtracking-safe.
+  out = out.replace(/([a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^\s:@/]*:)([^@\s/]+)(@)/g, '$1' + R + '$3');
+  // Known token prefixes with plausible length/charset.
+  out = out.replace(/\bsk-[A-Za-z0-9_-]{16,}/g, R);
+  out = out.replace(/\bx(?:ox[baprsed]|app)-[A-Za-z0-9-]{8,}/g, R);
+  out = out.replace(/\bgh[pousr]_[A-Za-z0-9]{20,}/g, R);
+  out = out.replace(/\bgithub_pat_[A-Za-z0-9_]{20,}/g, R);
+  out = out.replace(/\bglpat-[A-Za-z0-9_-]{16,}/g, R);
+  out = out.replace(/\bnpm_[A-Za-z0-9]{30,}/g, R);
+  out = out.replace(/\bdop_v1_[A-Za-z0-9]{40,}/g, R);
+  out = out.replace(/\bAIza[A-Za-z0-9_-]{20,}/g, R);
+  out = out.replace(/\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}/g, R);
+  out = out.replace(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, R);
+  // Bare JWTs (base64url header.payload.signature) — mask BEFORE the blob rules.
+  out = out.replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, R);
+  // High-entropy blobs above a length threshold (hex first, then base64). These
+  // mask UNCONDITIONALLY: over-redaction (e.g. masking a bare git SHA) is the safe
+  // direction for a security boundary that posts to an external destination.
+  // A blanket 40-hex exemption was tried (TASK-069) and reverted — real secrets
+  // are also exactly 40 hex (legacy GitHub OAuth tokens, hex-encoded 160-bit keys)
+  // and would have leaked unlabeled.
+  out = out.replace(/\b[0-9a-fA-F]{32,}\b/g, R);
+  out = out.replace(/(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{40,}={0,2}(?![A-Za-z0-9+/=])/g, R);
+  return out;
+}
+
+// Mechanical, deterministic readability pass for the two AUTO-POST paths
+// (slackFlushTick + slackOnFinished). Runs BETWEEN cleanTerminalOutput and
+// redactSecrets so redactSecrets stays the LAST transform before posting and
+// the TASK-063 guarantee is untouched. Dedupe / strip / collapse ONLY — never
+// rewrites, reorders or summarizes: collapses consecutive identical lines,
+// drops whole Claude-TUI noise lines (spinner "…ing…" progress lines,
+// "(esc to interrupt)" hints, standalone elapsed/token counters, ⏵⏵ mode
+// hints), collapses 2+ blank-line runs to one, trims. Never throws:
+// null/undefined/non-string → ''.
+// Mirrors humanizeSlackOutput in lib/slack-proxy.js; keep in sync.
+function humanizeSlackOutput(text) {
+  if (typeof text !== 'string' || !text) return '';
+  // Whole-line Claude-TUI noise patterns, tested against the TRIMMED line so a
+  // real content line that merely contains such a glyph mid-line is never hit.
+  const NOISE = [
+    // Spinner progress line: leading spinner glyph + a "…ing…" gerund phrase,
+    // e.g. "✻ Thinking… (esc to interrupt)".
+    /^[✻✽✶✢✳✷✴✵✺∗·]\s+.*[A-Za-z]+ing(?:…|\.\.\.)/,
+    // Standalone "(esc to interrupt)" hint line.
+    /^\(?\s*esc to interrupt\s*\)?$/i,
+    // Standalone elapsed / token counter line, e.g. "12s", "↑ 1.2k tokens",
+    // "5s · 234 tokens".
+    /^[·•\s]*(?:\d+(?:\.\d+)?\s*[smh](?:\s+\d+(?:\.\d+)?\s*[smh])*|[↑↓⚒]?\s*[\d.,]+\s*[kKmM]?\s*tokens?)(?:\s*·\s*(?:\d+(?:\.\d+)?\s*[smh](?:\s+\d+(?:\.\d+)?\s*[smh])*|[↑↓⚒]?\s*[\d.,]+\s*[kKmM]?\s*tokens?))*$/i,
+    // Mode/permission hint line, e.g. "⏵⏵ accept edits on (shift+tab to cycle)".
+    /^⏵/,
+  ];
+  const kept = [];
+  let prev = null;
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.replace(/\r/g, '');
+    const trimmed = line.trim();
+    if (trimmed && NOISE.some((re) => re.test(trimmed))) continue;
+    if (line === prev) continue; // collapse consecutive identical (TUI redraw)
+    kept.push(line);
+    prev = line;
+  }
+  // Collapse any remaining 2+ blank-line runs to a single blank line, then trim.
+  return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// Neutralize ("defang") Slack broadcast/mention CONTROL SEQUENCES in app-posted
+// command / failure replies so crafted, semi-trusted content (thread text,
+// ticket titles, error strings) cannot induce a channel-wide ping or a mention.
+// Replace the opening `<` of a `<!…>` / `<@…>` / `<#…>` token with `&lt;`, which
+// Slack renders as a literal `<`, so the token displays inertly and is never
+// interpreted. A lone `<` in ordinary prose/code is untouched. Never throws.
+// Applied on the command/failure reply path only (handleSlackCommand); the
+// user-composed and Claude-output post paths are deliberately left alone.
+// Mirrors defangSlackControlSequences in lib/slack-proxy.js; keep in sync.
+function defangSlackControlSequences(text) {
+  if (typeof text !== 'string' || !text) return '';
+  return text.replace(/<([!@#][^>\n]*)>/g, '&lt;$1>');
+}
+
+// ── Slack command core (mirrors lib/slack-commands.js) ─────────────────────
+// The renderer cannot require() the lib module, so the pure command-decision
+// functions are mirrored VERBATIM here and kept in sync with
+// lib/slack-commands.js. See that file for the full rationale. Handlers do NOT
+// live in the pure core — they are wired below in SLACK_COMMAND_HANDLERS keyed
+// by the entry `name`.
+
+// The built-in command registry. The `tasks` command (TASK-058) answers "show
+// me the tasks" (and aliases) in-thread with the live board; the `help` command
+// (TASK-059) lists every registered command. Handlers live below in
+// SLACK_COMMAND_HANDLERS keyed by `name`.
+// Mirrors DEFAULT_COMMANDS in lib/slack-commands.js; keep in sync.
+const SLACK_DEFAULT_COMMANDS = [
+  {
+    name: 'tasks',
+    description: 'Show the tasks board and what is being worked on',
+    patterns: ['show me the tasks', 'show tasks', 'list tasks', 'tasks', 'what are you working on'],
+  },
+  {
+    name: 'help',
+    description: 'List the commands this thread understands',
+    patterns: ['help', 'commands', 'show commands', 'what can you do'],
+  },
+  {
+    name: 'status',
+    description: 'Show session status: folder, Claude activity, queue and active tickets',
+    patterns: ['status', 'show status', "what's your status", 'are you busy'],
+  },
+  {
+    name: 'create-ticket',
+    description: 'Create a new ticket on the tasks board',
+    patterns: ['create ticket', 'create a ticket', 'new ticket', 'add ticket'],
+  },
+];
+
+// Normalize a raw Slack message into the canonical form used for matching:
+// lowercase, trimmed, internal whitespace runs collapsed to single spaces, and
+// trailing punctuation (. ! ? …) stripped. Never throws: anything that is not a
+// string returns ''.
+// Mirrors normalizeCommandInput in lib/slack-commands.js; keep in sync.
+function normalizeCommandInput(text) {
+  if (typeof text !== 'string') return '';
+  return text
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[.!?…]+$/u, '')
+    .trim();
+}
+
+// Match a message against a registry. `text` is normalized, then the FIRST entry
+// (registry order) whose `patterns` (each normalized) contains that string wins.
+// Matching is WHOLE-PHRASE after normalization — never substring/fuzzy. Returns
+// { name, command } or null. Never throws.
+// Mirrors matchCommand in lib/slack-commands.js; keep in sync.
+function matchCommand(text, registry = SLACK_DEFAULT_COMMANDS) {
+  const normalized = normalizeCommandInput(text);
+  if (!normalized) return null;
+  if (!Array.isArray(registry)) return null;
+  for (const entry of registry) {
+    if (!entry || !Array.isArray(entry.patterns)) continue;
+    for (const pattern of entry.patterns) {
+      if (typeof pattern !== 'string') continue;
+      if (normalizeCommandInput(pattern) === normalized) {
+        return { name: entry.name, command: entry };
+      }
+    }
+  }
+  return null;
+}
+
+// List the commands in a registry as [{ name, description }] in registry order.
+// Returns [] for a null/empty/non-array registry and never throws; malformed
+// entries are skipped.
+// Mirrors listCommands in lib/slack-commands.js; keep in sync.
+function listCommands(registry = SLACK_DEFAULT_COMMANDS) {
+  if (!Array.isArray(registry)) return [];
+  const out = [];
+  for (const entry of registry) {
+    if (!entry) continue;
+    out.push({ name: entry.name, description: entry.description });
+  }
+  return out;
+}
+
+// Format the tasks board into a single Slack mrkdwn string (TASK-058). Input is
+// an array of ticket wrappers `{ fm }` (as produced by the board poll) OR bare
+// frontmatter objects — both are tolerated. See the handler below for how the
+// board is read. Never throws: empty/null input → "The tasks board is empty.";
+// tickets missing id/title render "(no id)"/"(untitled)" placeholders.
+// Mirrors formatTasksSummary in lib/slack-commands.js; keep in sync. ADAPTATION:
+// the lib version pulls LANE_STATUSES/ACTIVE_STATUSES/FAILED_STATUS/laneForStatus
+// from require('./ticket-lanes'); the renderer cannot require Node modules, so it
+// reuses the EXISTING renderer lane mirrors (TASKS_LANE_STATUSES /
+// TASKS_ACTIVE_STATUSES / TASKS_FAILED_STATUS / TASKS_UNKNOWN_STATUS, ~5123) and
+// inlines laneForStatus (failed-testing → testing; out-of-enum → unknown).
+function formatTasksSummary(tickets) {
+  if (!Array.isArray(tickets) || tickets.length === 0) {
+    return 'The tasks board is empty.';
+  }
+
+  const fms = tickets.map((t) => (t && t.fm ? t.fm : t) || {});
+  const idOf = (fm) => (fm.id != null && String(fm.id).trim() !== '' ? String(fm.id).trim() : '(no id)');
+  const titleOf = (fm) => (fm.title != null && String(fm.title).trim() !== '' ? String(fm.title).trim() : '(untitled)');
+  const lineOf = (fm) => `${idOf(fm)} — ${titleOf(fm)} (${fm.status})`;
+  // Inline laneForStatus (see ADAPTATION note above).
+  const laneOf = (status) => {
+    if (status === TASKS_FAILED_STATUS) return 'testing';
+    return TASKS_LANE_STATUSES.includes(status) ? status : TASKS_UNKNOWN_STATUS;
+  };
+
+  const active = fms.filter((fm) => TASKS_ACTIVE_STATUSES.includes(fm.status));
+  const failed = fms.filter((fm) => fm.status === TASKS_FAILED_STATUS);
+
+  const counts = new Map(TASKS_LANE_STATUSES.map((s) => [s, 0]));
+  let unknown = 0;
+  for (const fm of fms) {
+    const lane = laneOf(fm.status);
+    if (counts.has(lane)) counts.set(lane, counts.get(lane) + 1);
+    else unknown += 1;
+  }
+
+  const parts = ['*Currently working on:*'];
+  if (active.length) {
+    for (const fm of active) parts.push(lineOf(fm));
+  } else {
+    parts.push('Nothing is being worked on right now.');
+  }
+
+  if (failed.length) {
+    parts.push('', '*Failed testing:*');
+    for (const fm of failed) parts.push(lineOf(fm));
+  }
+
+  const countPieces = TASKS_LANE_STATUSES.map((s) => `${s} ${counts.get(s)}`);
+  if (unknown > 0) countPieces.push(`unknown ${unknown}`);
+  parts.push('', countPieces.join(' · '));
+
+  return parts.join('\n');
+}
+
+// Format the command registry into a single Slack mrkdwn help string (TASK-059).
+// Iterates the SAME registry the matcher uses, so help can never drift from the
+// commands that actually work. One line per command, in registry order:
+//   *<name>* — <description> (say: "<pattern1>", "<pattern2>", …)
+// Entries with a missing/empty description render "(no description)"; entries
+// with no usable (non-empty string) patterns omit the "(say: …)" suffix. An
+// empty/null/non-array registry (or one with no renderable entries) returns
+// "No commands are available." Never throws; malformed entries are skipped.
+// Mirrors formatHelp in lib/slack-commands.js; keep in sync.
+function formatHelp(registry = SLACK_DEFAULT_COMMANDS) {
+  if (!Array.isArray(registry) || registry.length === 0) {
+    return 'No commands are available.';
+  }
+  const lines = [];
+  for (const entry of registry) {
+    if (!entry) continue;
+    const name = entry.name != null && String(entry.name).trim() !== '' ? String(entry.name).trim() : '(unnamed)';
+    const description = entry.description != null && String(entry.description).trim() !== '' ? String(entry.description).trim() : '(no description)';
+    let line = `*${name}* — ${description}`;
+    const patterns = Array.isArray(entry.patterns)
+      ? entry.patterns.filter((p) => typeof p === 'string' && p.trim() !== '')
+      : [];
+    if (patterns.length) {
+      line += ` (say: ${patterns.map((p) => `"${p}"`).join(', ')})`;
+    }
+    lines.push(line);
+  }
+  if (lines.length === 0) return 'No commands are available.';
+  return lines.join('\n');
+}
+
+// Format a one-shot session snapshot into a single Slack mrkdwn string
+// (TASK-060). Pure formatting: the status handler below gathers the live `info`
+// object and this function shapes it into text. Every field is optional — a
+// missing/partial/non-object `info` renders placeholders and NEVER throws.
+// Mirrors formatStatusReply in lib/slack-commands.js; keep in sync (BYTE-IDENTICAL).
+function formatStatusReply(info) {
+  const i = info && typeof info === 'object' ? info : {};
+  const folder = i.folder ? String(i.folder) : '(no folder open)';
+  const claude = i.claudeState === 'busy' ? 'busy' : 'idle';
+  const transport = i.transport === 'socket' ? 'Socket Mode' : i.transport === 'poll' ? 'polling' : 'none';
+  const queued = typeof i.queued === 'number' && Number.isFinite(i.queued) ? i.queued : 0;
+  const activeTickets = i.activeTickets == null ? 'unknown' : i.activeTickets;
+  return [
+    '*Session status*',
+    `Folder: ${folder}`,
+    `Claude: ${claude}`,
+    `Transport: ${transport}`,
+    `Queued: ${queued}`,
+    `Active tickets: ${activeTickets}`,
+  ].join('\n');
+}
+
+// Parse a two-step "create ticket" reply into a ticket draft (TASK-072). See the
+// full rules in the lib comment: case-insensitive `title:`/`description:` labels
+// in either order, comma/newline-preceded field boundaries, first-label-wins,
+// multiline/comma-tolerant description, required non-empty title, missing/empty
+// description → default. Never throws.
+// Mirrors parseCreateTicketReply in lib/slack-commands.js; keep in sync (BYTE-IDENTICAL).
+function parseCreateTicketReply(text) {
+  if (typeof text !== 'string') return { ok: false, error: 'Expected a text reply.' };
+  const re = /(^|[,\n])\s*(title|description)\s*:/gi;
+  const matches = [];
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    matches.push({ field: m[2].toLowerCase(), boundary: m.index, valueStart: m.index + m[0].length });
+  }
+  const fields = {};
+  for (let i = 0; i < matches.length; i++) {
+    const end = i + 1 < matches.length ? matches[i + 1].boundary : text.length;
+    const value = text.slice(matches[i].valueStart, end).trim();
+    if (!(matches[i].field in fields)) fields[matches[i].field] = value;
+  }
+  const title = (fields.title || '').trim();
+  if (!title) return { ok: false, error: 'Missing title.' };
+  const description = (fields.description || '').trim() || 'What needs doing and why.';
+  return { ok: true, title, description };
+}
+
+// TASK-072: the two-step create-ticket prompt strings. Both restate the exact
+// reply format the parser accepts; the re-prompt fires on an unparseable reply.
+const CREATE_TICKET_PROMPT = 'What ticket should I create? Reply with `title: <your title>, description: <your description>` (description optional), or say `cancel`.';
+const CREATE_TICKET_REPROMPT = "Sorry, I couldn't read that. Reply with `title: <your title>, description: <your description>` (description optional), or say `cancel`.";
+
+// Renderer-side handler map: command `name` → async (tab, msg) => reply text.
+// Handlers return a reply STRING; handleSlackCommand posts it into the anchor
+// thread (with chunkText/postToSlack chunking) and never forwards it to Claude.
+const SLACK_COMMAND_HANDLERS = {
+  // TASK-058: reply with the live tasks board. Force-refreshes the board first
+  // (the `true` flag bypasses the "tasks tab visible" gate) and reads the map
+  // AFTER the awaited poll so the summary is never a stale snapshot. A failed
+  // poll leaves an empty map → formatTasksSummary returns "The tasks board is
+  // empty." rather than throwing.
+  tasks: async (tab) => {
+    if (!tab.folder) return 'No project folder is open.';
+    let exists = false;
+    try {
+      const res = await window.api.fs.exists(tasksJoin(tab.folder, 'tasks'));
+      exists = !!(res && res.ok && res.exists);
+    } catch (_) {
+      exists = false;
+    }
+    if (!exists) return 'No tasks board found in this project.';
+    await pollTasksOnce(tab, true);
+    return formatTasksSummary(Array.from(tab.tasks.tickets.values()));
+  },
+  // TASK-059: list every registered command from the live registry so help can
+  // never drift from what the matcher actually understands. Pure formatting, no
+  // I/O — works even while Claude is busy.
+  help: async () => formatHelp(SLACK_DEFAULT_COMMANDS),
+  // TASK-060: one-shot session snapshot — open folder, Claude activity, live
+  // transport, queued Slack messages and how many tickets are actively worked.
+  // Reads live state only; posts in-thread and never forwards to Claude, so it
+  // works while Claude is busy and correctly reports "busy". The board read is
+  // force-refreshed (bypasses the "tasks tab visible" gate) and wrapped in
+  // try/catch: no folder OR any failure → activeTickets = null ("unknown"),
+  // never crashing / never a silent no-reply.
+  status: async (tab) => {
+    let activeTickets = null;
+    if (tab.folder) {
+      try {
+        await pollTasksOnce(tab, true);
+        activeTickets = 0;
+        for (const tk of tab.tasks.tickets.values()) {
+          if (tk && tk.fm && TASKS_ACTIVE_STATUSES.includes(tk.fm.status)) activeTickets += 1;
+        }
+      } catch (_) {
+        activeTickets = null;
+      }
+    }
+    const info = {
+      folder: tab.folder,
+      claudeState: tab.status,
+      transport: tab.slack.transport,
+      queued: (tab.slack.inbox || []).length,
+      activeTickets,
+    };
+    return formatStatusReply(info);
+  },
+  // TASK-072: begin the two-step create-ticket prompt. Refuses (setting NO
+  // pending state) when no folder is open; otherwise records the pending prompt
+  // on tab.slack and returns the prompt text. Re-issuing "create ticket" while a
+  // prompt is already open is handled by the pending check in
+  // handleIncomingSlackMessage (which re-prompts) — at most one pending command.
+  'create-ticket': async (tab) => {
+    if (!tab.folder) return 'No project folder is open.';
+    tab.slack.pendingCommand = { name: 'create-ticket' };
+    return CREATE_TICKET_PROMPT;
+  },
+};
+
 // Common ingest funnel for both transports (Socket Mode + polling). Advances
 // the ts baseline, applies the pure dispatch decision (which includes seenTs
 // dedup + bot-self filtering + anchor-thread gating), then marks the ts seen so
@@ -7809,9 +8636,143 @@ function handleIncomingSlackMessage(tab, msg) {
   const text = decodeSlackText(msg.text || '');
   if (!text.trim()) return;
 
+  // The user's message always shows in the pane first.
   appendSlackMessage(tab, { who: 'slack', author: msg.user || 'user', text, ts: msg.ts });
+
+  // Pending two-step prompt (TASK-072)? A create-ticket prompt consumes the next
+  // accepted anchor-thread reply BEFORE any command match: while pending, this
+  // reply is never matched against the registry (so "status"/"help"/etc. do NOT
+  // run), never pushed to s.inbox and never forwarded to Claude. `cancel` exits;
+  // anything else is parsed by the create-ticket flow.
+  if (s.pendingCommand && s.pendingCommand.name === 'create-ticket') {
+    handleCreateTicketReply(tab, text);
+    return;
+  }
+
+  // App-handled command? Answer it in-thread and RETURN — the message never
+  // enters the inbox and no pty write ever occurs for it. Commands run even
+  // while Claude is busy (they bypass the idle gate in slackTryDispatch).
+  const matched = matchCommand(text, SLACK_DEFAULT_COMMANDS);
+  if (matched) {
+    handleSlackCommand(tab, matched, msg);
+    return;
+  }
+
   s.inbox.push({ text, ts: msg.ts, user: msg.user });
   slackTryDispatch(tab);
+}
+
+// Run an app-side command matched in the anchor thread and post its reply back
+// into that SAME thread. Never forwards to Claude, never touches the idle gate
+// or dispatch state (awaitingResponse / captureBuffer / tab.status), and never
+// crashes the renderer — a throwing/rejecting handler posts a short failure
+// reply instead.
+async function handleSlackCommand(tab, matched, msg) {
+  const s = tab.slack;
+  const handler = SLACK_COMMAND_HANDLERS[matched.name];
+  if (typeof handler !== 'function') {
+    // Command is known to the registry but has no handler wired in this build.
+    postToSlack(tab, "That command isn't available in this session.", s.threadTs);
+    return;
+  }
+  try {
+    // Defang Slack control sequences (mentions/broadcasts) in handler replies:
+    // TASK-058/059/060 echo semi-trusted thread/ticket/error content, so a
+    // crafted <!channel> etc. must not become a live ping via the reply.
+    const replyText = defangSlackControlSequences(await handler(tab, msg));
+    if (typeof replyText === 'string' && replyText.trim()) {
+      postToSlack(tab, replyText, s.threadTs);
+      appendSlackMessage(tab, { who: 'system', text: replyText });
+    }
+  } catch (err) {
+    // Caught sync throws AND rejected promises: post a failure reply, never crash.
+    // Error messages can carry attacker-derived content, so defang before posting.
+    const detail = (err && err.message) || String(err);
+    postToSlack(tab, defangSlackControlSequences('Command failed: ' + detail), s.threadTs);
+  }
+}
+
+// Post a reply from the create-ticket pending flow (TASK-072). Every reply this
+// flow emits (prompt echo, re-prompt, confirmation, errors) is defanged so a
+// crafted <!channel> in a title/description can never become a live ping, then
+// posted into the anchor thread and mirrored into the Slack pane — exactly like
+// handleSlackCommand's reply path.
+function postCreateTicketReply(tab, text) {
+  const s = tab.slack;
+  const reply = defangSlackControlSequences(text);
+  if (!reply) return;
+  postToSlack(tab, reply, s.threadTs);
+  appendSlackMessage(tab, { who: 'system', text: reply });
+}
+
+// Consume a reply while a create-ticket prompt is pending (TASK-072). `cancel`
+// (normalized) clears the pending state and confirms cancellation. Otherwise the
+// reply is parsed by parseCreateTicketReply: an unparseable/empty-title reply
+// STAYS pending and re-prompts; a successful parse creates the ticket exactly
+// like the New-ticket modal path (onCreateNormal) — force-poll, nextTaskId,
+// identical body template, serializeTicket into tasks/todo/, then re-poll and a
+// confirmation reply. File I/O only (never touches Claude), so it works while
+// Claude is busy. Never throws — any failure clears pending and reports it.
+async function handleCreateTicketReply(tab, text) {
+  const s = tab.slack;
+  // `cancel` always exits the pending prompt.
+  if (normalizeCommandInput(text) === 'cancel') {
+    s.pendingCommand = null;
+    postCreateTicketReply(tab, 'Ticket creation cancelled.');
+    return;
+  }
+  const parsed = parseCreateTicketReply(text);
+  if (!parsed.ok) {
+    // Unparseable / empty title → restate the format and stay pending.
+    postCreateTicketReply(tab, CREATE_TICKET_REPROMPT);
+    return;
+  }
+  try {
+    // Force-refresh the board so nextTaskId sees the latest ids, then build the
+    // ticket with the SAME frontmatter + body template as onCreateNormal. The
+    // title is newline-neutralized by serializeTicket/frontmatterValueLine (no
+    // frontmatter injection); the description runs through neutralizeBugText so a
+    // line like "## Additional Context" cannot forge a section boundary.
+    // Residual race: two near-simultaneous creates can compute the same id
+    // between this poll and the write; the board reconciles on the next poll.
+    await pollTasksOnce(tab, true);
+    const id = nextTaskId(tab);
+    const now = new Date().toISOString();
+    const fm = { id, title: parsed.title, status: 'todo', created: now, updated: now };
+    const description = neutralizeBugText(parsed.description) || 'What needs doing and why.';
+    const body = [
+      '',
+      '## Description',
+      description,
+      '',
+      '## Acceptance Criteria',
+      '- [ ] First testable criterion',
+      '',
+      '## Additional Context',
+      '(User-owned. Read it before building. Never overwrite it.)',
+      ''
+    ].join('\n');
+    const tasksDir = tasksJoin(tab.folder, 'tasks');
+    const subfolder = ticketFolderForStatus('todo');
+    const destDir = subfolder ? tasksJoin(tasksDir, subfolder) : tasksDir;
+    await window.api.fs.mkdir(destDir);
+    const filePath = tasksJoin(destDir, `${id}-${taskSlug(parsed.title)}.md`);
+    const wr = await window.api.fs.writeFile(filePath, serializeTicket(fm, body));
+    if (!wr || !wr.ok) {
+      s.pendingCommand = null;
+      postCreateTicketReply(tab, 'Create failed: ' + ((wr && wr.error) || 'unknown'));
+      return;
+    }
+    s.pendingCommand = null;
+    await pollTasksOnce(tab, true);
+    postCreateTicketReply(tab, `Created ${id} — ${parsed.title} (todo).`);
+    // TASK-079 Part A: the Slack-created ticket is a plain `todo`, so auto-start a
+    // build run (no-op if one is already active — the same single-run guard).
+    autoQueueBuildOnCreate(tab);
+  } catch (err) {
+    s.pendingCommand = null;
+    postCreateTicketReply(tab, 'Create failed: ' + ((err && err.message) || String(err)));
+  }
 }
 
 // Slack wraps links/mentions like <http://x|x>, <@U123>, &amp; etc. Normalise
@@ -7860,25 +8821,55 @@ function slackTryDispatch(tab) {
   }
 }
 
+// Request an LLM summary of already-cleaned+redacted auto-post text from the
+// main process (TASK-073). ALWAYS resolves to a string and NEVER throws into
+// the flush path: when the toggle is off, no key is configured, the window is
+// too short, or the call fails/times out, it returns the INPUT text unchanged
+// so the caller's final redactSecrets() reproduces exactly TASK-071's output.
+// The `text` passed in MUST already be redacted (it is, in both callers) — the
+// external summarizer must never receive un-redacted secrets.
+async function slackSummarizeOutput(tab, text) {
+  const s = tab.slack;
+  if (!s || !s.summarize || !text) return text;
+  try {
+    const res = await window.api.slack.summarize(text, true);
+    if (res && res.ok && typeof res.text === 'string' && res.text) return res.text;
+  } catch (_) { /* fall through to the unchanged input */ }
+  return text;
+}
+
 // Called when the cmd pane goes idle ("finished"). If a Slack prompt was in
 // flight, post Claude's captured reply back to the channel, then dispatch the
-// next queued Slack message (if any).
-function slackOnFinished(tab) {
+// next queued Slack message (if any). Async because it may await an LLM summary
+// (TASK-073); the buffer + in-flight flags are cleared SYNCHRONOUSLY before any
+// await so a finished run can never be double-posted or leave dispatch stuck.
+async function slackOnFinished(tab) {
   const s = tab.slack;
   // No-op unless the proxy is active. Always clear the in-flight flag so a run
   // that finished can never leave dispatch permanently stuck.
   if (!s || !slackProxyEnabled(s)) { if (s) s.awaitingResponse = false; return; }
 
   // Flush whatever Claude output accumulated into the single anchor thread,
-  // regardless of what triggered the run (Slack reply or direct typing).
-  const reply = cleanTerminalOutput(s.captureBuffer);
+  // regardless of what triggered the run (Slack reply or direct typing). Clean
+  // chrome, then run the readability pass (TASK-071), then redact secrets so the
+  // text is fully redacted BEFORE it can reach the external summarizer (TASK-073
+  // redact-before-send). Shared with slackFlushTick so NO auto-post path ever
+  // posts, or sends to the summarizer, un-redacted output.
+  const inner = redactSecrets(humanizeSlackOutput(cleanTerminalOutput(s.captureBuffer)));
   s.captureBuffer = '';
   s.awaitingResponse = false;
   s.replyThreadTs = null;
-  if (reply) {
-    appendSlackMessage(tab, { who: 'claude', text: reply });
-    if (s.postReplies) {
-      postToSlack(tab, reply, s.threadTs);
+  if (inner) {
+    // TASK-073 pipeline: redact → summarize → redact (redaction stays LAST).
+    // slackSummarizeOutput returns `inner` unchanged when summarization is
+    // disabled/unavailable/errors, so the fallback is exactly TASK-071 output.
+    const summarized = await slackSummarizeOutput(tab, inner);
+    const reply = redactSecrets(summarized);
+    if (reply) {
+      appendSlackMessage(tab, { who: 'claude', text: reply });
+      if (s.postReplies) {
+        await postToSlack(tab, reply, s.threadTs);
+      }
     }
   }
   // Give the TUI a beat to settle, then dispatch the next queued Slack message
@@ -7886,6 +8877,62 @@ function slackOnFinished(tab) {
   if (s.inbox.length) {
     setTimeout(() => slackTryDispatch(tab), QUEUE_SEND_DELAY_MS);
   }
+}
+
+// Periodic flush during a long busy run (TASK-061). onCmdData keeps appending to
+// s.captureBuffer while the proxy is enabled; without this the anchor thread stays
+// silent for minutes until slackOnFinished posts at idle. Each tick consumes the
+// buffer so the interval flush and the finish flush together post every byte of
+// output exactly once — no overlap, no duplicate posts.
+async function slackFlushTick(tab) {
+  const s = tab.slack;
+  if (!s) return;
+  // Build the decision state and defer to the mirrored pure helper.
+  const state = {
+    connected: s.connected,
+    threadTs: s.threadTs,
+    postReplies: s.postReplies,
+    captureBuffer: s.captureBuffer,
+    busy: tab.status === 'busy',
+  };
+  if (!slackShouldFlushCapture(state)) return; // no-op when disabled/idle/empty/unchecked
+
+  // CLEAR the buffer BEFORE the await so any output that arrives during the post
+  // lands in the next window — never lost, never double-sent. Clean chrome, then
+  // run the readability pass (TASK-071), then redact secrets so the text is
+  // fully redacted BEFORE it can reach the external summarizer (TASK-073
+  // redact-before-send). Shared with slackOnFinished so NO auto-post path ever
+  // posts, or sends to the summarizer, un-redacted output.
+  const inner = redactSecrets(humanizeSlackOutput(cleanTerminalOutput(s.captureBuffer)));
+  s.captureBuffer = '';
+  // Pure TUI redraw noise cleans to '' → skip the post, buffer stays consumed.
+  if (!inner) return;
+  // TASK-073 pipeline: redact → summarize → redact (redaction stays LAST). On
+  // disabled/unavailable/error slackSummarizeOutput returns `inner` unchanged,
+  // so this falls back to exactly TASK-071's cleaned+redacted output. The call
+  // is time-bounded in main so it can never stall the periodic flush.
+  const summarized = await slackSummarizeOutput(tab, inner);
+  const text = redactSecrets(summarized);
+  if (!text) return;
+  appendSlackMessage(tab, { who: 'claude', text });
+  // A failure here is surfaced by postToSlack's own error path; this text is not
+  // retried (the buffer is already consumed) and the interval keeps running.
+  await postToSlack(tab, text, s.threadTs);
+}
+
+// Start the periodic flush timer. Clear any prior one first so rapid
+// connect/disconnect/reconnect leaves exactly one timer alive (mirrors the
+// pollTimer clear-before-set guard in startSlackPolling).
+function startSlackFlushTimer(tab) {
+  const s = tab.slack;
+  if (s.flushTimer) clearInterval(s.flushTimer);
+  s.flushTimer = setInterval(() => slackFlushTick(tab), SLACK_FLUSH_INTERVAL_MS);
+}
+
+// Stop the periodic flush timer (timer nulled; no leak — mirrors stopSlackPolling).
+function stopSlackFlushTimer(tab) {
+  const s = tab.slack;
+  if (s.flushTimer) { clearInterval(s.flushTimer); s.flushTimer = null; }
 }
 
 async function postToSlack(tab, text, threadTs) {
@@ -8057,6 +9104,12 @@ async function restoreSession() {
 dom.browseBtn2.addEventListener('click', pickFolderForNewTab);
 dom.newTabBtn.addEventListener('click', pickFolderForNewTab);
 
+// Focus changes flip the OS-flash verdict (flash only while unfocused), so
+// re-report on both edges to re-evaluate immediately: blur can start a flash if an
+// attention condition already holds; focus clears it (TASK-078).
+window.addEventListener('focus', reportWindowAttention);
+window.addEventListener('blur', reportWindowAttention);
+
 if (window.api && window.api.pty) {
   window.api.pty.onData(({ id, data }) => {
     const info = ptyToTab.get(id);
@@ -8075,6 +9128,9 @@ if (window.api && window.api.pty) {
     if (t) t.write(`\r\n[process exited]\r\n`);
     info.tab[info.slot].id = null;
     ptyToTab.delete(id);
+    // A pty exiting can end a waiting/finished condition — re-report so the OS
+    // attention flash clears if this was the last one (TASK-078).
+    reportWindowAttention();
   });
 }
 

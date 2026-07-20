@@ -79,10 +79,26 @@ usage, and API/IPC references.
   role, and rewrite `~/.aws/credentials`.
 - **[Slack bridge](docs/slack-bridge.md)** — two-way channel/agent proxy via a
   `SLACK_TOKEN` bot token or the **Sign in with Slack** OAuth flow.
+- **[Slack integration — thread commands & continuous output](docs/slack-integration.md)** —
+  in-thread `tasks`/`help`/`status` commands, 30s continuous output flushing, and
+  secret redaction / mention defang on everything the app posts.
 - **[Tasks board & the Orchestrate workflow](docs/orchestrate-workflow.md)** —
   the ticket-driven kanban board and its multi-agent build swarm.
+- **[Ticket archiving](docs/ticket-archiving.md)** — stale done tickets (last
+  activity > 5 days old) fold into a collapsible "Archived (N)" expander at the
+  bottom of the Done lane (derived, no file move, no new status).
+- **[BA planner clarifying questions](docs/ba-planner-clarifying-questions.md)** —
+  Phase-1 planning surfaces clarifying questions and the orchestrator gets every
+  one answered (AskUserQuestion or the ticket question/answer frontmatter) before
+  planning completes.
+- **[Per-activity ticket cost log](docs/ticket-cost.md)** — each ticket records a
+  per-activity (ba/code/test/review/post-processing) cost log — model, timing,
+  tokens, and cost — surfaced as a cost view in the ticket modal.
 - **[Keep-awake wake-lock](docs/keep-awake.md)** — hold the OS awake while builds
   run.
+- **[Attention when waiting for input](docs/window-attention.md)** — pulse the
+  waiting tab's dot and flash the OS taskbar when Claude needs input and the
+  window is unfocused.
 - **[Configuration & environment](docs/configuration.md)** — every env var and
   state file in one place.
 
@@ -276,8 +292,13 @@ The full per-feature documentation set lives in [`docs/`](docs):
 | [docs/tests-tab.md](docs/tests-tab.md) | Discovering and running project tests |
 | [docs/aws-sso.md](docs/aws-sso.md) | SSO login, account/role selection, credential rewrite |
 | [docs/slack-bridge.md](docs/slack-bridge.md) | Slack Web API client, OAuth, two-way thread proxy |
+| [docs/slack-integration.md](docs/slack-integration.md) | Slack thread commands, continuous output flushing, redaction & defang |
 | [docs/orchestrate-workflow.md](docs/orchestrate-workflow.md) | Tasks board, ticket contract, build swarm |
+| [docs/ticket-archiving.md](docs/ticket-archiving.md) | Stale-done card archiving into the Done-lane "Archived (N)" expander |
+| [docs/ba-planner-clarifying-questions.md](docs/ba-planner-clarifying-questions.md) | Phase-1 BA clarifying questions and answer-before-planning-completes flow |
+| [docs/ticket-cost.md](docs/ticket-cost.md) | Per-activity ticket cost log (`activities`) and the modal cost view |
 | [docs/keep-awake.md](docs/keep-awake.md) | OS wake-lock while builds run |
+| [docs/window-attention.md](docs/window-attention.md) | Waiting-tab dot pulse and OS taskbar flash when Claude needs input |
 | [docs/configuration.md](docs/configuration.md) | Every env var and state file |
 
 ## Security notes

@@ -91,6 +91,11 @@ body {
 .ws-tab.status-waiting .ws-tab-dot {
   background: #e5c100;
   box-shadow: 0 0 7px rgba(229,193,0,0.7);
+  /* Attention pulse (TASK-078): a waiting tab (Claude paused on a TUI menu) must
+     be impossible to miss. Pulse the dot so it stays visible even when the tab is
+     .active (which overrides the tab background but not the dot). busy/idle/
+     finished dots do not pulse. Reuses the board's waiting-dot keyframe. */
+  animation: task-card-dot-pulse-waiting 1.4s ease-in-out infinite;
 }
 .ws-tab.status-waiting {
   background: #3a3318;
@@ -2635,6 +2640,66 @@ body {
   overflow: hidden;
 }
 .task-card.unknown-status { border-left: 2px solid #f14c4c; }
+/* Ticket type bar (TASK-075): a thin horizontal strip between the id header and
+   the title whose color encodes the ticket type, derived purely from persisted
+   frontmatter in renderTasksBoard. Green is the default (plain ticket); .bug
+   paints it red (non-empty bug-of) and .review yellow (non-empty review-of). It
+   sits inline in the card flow so it never overlaps the absolutely-positioned
+   top-right working/waiting/failed dot, and is visually distinct from the red
+   left border on .task-card.unknown-status. */
+.task-card-type {
+  height: 3px;
+  border-radius: 2px;
+  margin-top: 3px;
+  background: #6a9955;
+}
+.task-card-type.bug { background: #f14c4c; }
+.task-card-type.review { background: #e5c100; }
+/* "Won't do" resolution (TASK-074): a ticket the user declined is persisted as
+   done + resolution: wont-do and lands in the Done lane. Its title is struck
+   through and muted so a skipped-on-purpose ticket reads at a glance, both in the
+   normal Done list and inside the "Archived (N)" expander. */
+.task-card-title.wont-do {
+  text-decoration: line-through;
+  color: #6a6a6a;
+}
+/* Stale-done archiving (TASK-065): a collapsible "Archived (N)" expander folded
+   into the bottom of the Done lane. Archived done cards (last activity >5 days
+   old) are hidden from the normal Done list until the user opens this panel;
+   they keep full card behaviour (click opens the modal, drag out of Done still
+   works). Collapsed by default; the toggle flips it and the open/closed state
+   persists across board re-renders (stored on tab.tasks.archiveExpanded). */
+.tasks-archived {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+.tasks-archived-toggle {
+  width: 100%;
+  text-align: left;
+  padding: 4px 8px;
+  font-size: 10px;
+  color: #858585;
+  background: #2a2a2a;
+  border: 1px dashed #3c3c3c;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.tasks-archived-toggle:hover { color: #ccc; border-color: #1177bb; }
+.tasks-archived-toggle::before {
+  content: '\25B8'; /* ▸ */
+  display: inline-block;
+  margin-right: 4px;
+}
+.tasks-archived.expanded .tasks-archived-toggle::before {
+  content: '\25BE'; /* ▾ */
+}
+.tasks-archived-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+.tasks-archived-cards.hidden { display: none; }
 /* Build accounting (TASK-003): unobtrusive time/cost line on a card. Rendered
    only when the ticket carries startedAt/cost/token data; absent otherwise.
    Sits below the title and clear of the top-right working-indicator dot. */
@@ -2800,6 +2865,31 @@ body {
   margin-bottom: 2px;
 }
 .task-modal-runs-row { padding: 1px 0; }
+/* Per-activity cost view in the ticket detail modal (TASK-070). Read-only
+   breakdown of the complete ticket cost by activity (activity · model · duration ·
+   tokens up/down · cost), one row per activity plus a totals row; hidden when the
+   ticket carries no activity data. */
+.task-modal-cost {
+  font-family: Consolas, monospace;
+  font-size: 11px;
+  color: #9a9a9a;
+}
+.task-modal-cost.hidden { display: none; }
+.task-modal-cost-label {
+  font-family: inherit;
+  font-size: 10px;
+  color: #6e6e6e;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+}
+.task-modal-cost-row { padding: 1px 0; }
+.task-modal-cost-total {
+  padding: 2px 0 1px;
+  margin-top: 2px;
+  border-top: 1px solid #333;
+  color: #c8c8c8;
+}
 /* Question/answer block in the ticket detail modal (TASK-005). Shown only when
    the ticket carries a question in its frontmatter; the yellow border echoes the
    waiting dot. The user types an answer here and clicks Save to store it. */
