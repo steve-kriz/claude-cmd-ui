@@ -63,6 +63,14 @@ contextBridge.exposeInMainWorld('api', {
     reportActivity: (activeCount) => ipcRenderer.send('tasks:activity', activeCount)
   },
 
+  attention: {
+    // Fire-and-forget: report the app-wide count of live "needs attention"
+    // conditions (waiting/finished tabs + board tickets awaiting an answer) so the
+    // main process can request/clear the OS taskbar flash while the window is
+    // unfocused (TASK-078). Mirror of tasks.reportActivity.
+    report: (attentionCount) => ipcRenderer.send('window:attention', attentionCount)
+  },
+
   prompts: {
     read: (cwd) => ipcRenderer.invoke('prompts:read', { cwd }),
     append: (cwd, entry) => ipcRenderer.invoke('prompts:append', { cwd, entry }),
@@ -111,6 +119,10 @@ contextBridge.exposeInMainWorld('api', {
     fetch: (token, channel, oldest, limit) => ipcRenderer.invoke('slack:fetch', { token, channel, oldest, limit }),
     fetchReplies: (token, channel, ts, oldest, limit) => ipcRenderer.invoke('slack:fetchReplies', { token, channel, ts, oldest, limit }),
     post: (token, channel, text, threadTs) => ipcRenderer.invoke('slack:post', { token, channel, text, threadTs }),
+    // TASK-073: request an LLM summary of already-cleaned+redacted auto-post
+    // text. `enabled` reflects the per-folder summarization toggle; main reads
+    // the ANTHROPIC_API_KEY and falls back to the input text when unavailable.
+    summarize: (text, enabled) => ipcRenderer.invoke('slack:summarize', { text, enabled }),
     openSocket: (appToken) => ipcRenderer.invoke('slack:openSocket', { appToken }),
     startOAuth: () => ipcRenderer.invoke('slack:startOAuth'),
     onOAuthStarted: (cb) => {

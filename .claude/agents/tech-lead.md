@@ -45,8 +45,18 @@ it produced — not a rubber stamp:
 
 Every problem you find becomes a **new follow-up fix ticket** — one ticket per
 issue — with `status: todo`. Report each finding to the orchestrator with enough
-detail (what is wrong, where, and why it matters) that it can write a well-formed
-follow-up ticket. New ticket ids **continue the `TASK-nnn` sequence** from the true
+detail that it can write a well-formed follow-up ticket. For **every** finding,
+report **all** of:
+
+- **what** is wrong,
+- **where** it is (file/function/line),
+- **why** it matters, and
+- a short **impact if not fixed** statement (1–3 sentences) spelling out the
+  concrete consequence of leaving the issue unfixed — the harm, risk, or
+  regression the user should weigh when deciding whether to build the follow-up.
+
+The impact statement is required on every finding; the orchestrator copies it into
+each follow-up ticket's `## Impact If Not Fixed` section. New ticket ids **continue the `TASK-nnn` sequence** from the true
 maximum id found across all status subfolders (`tasks/*/TASK-*.md`) — never reuse
 an existing id and never skip ahead of the real maximum. If two issues are found
 and the current max is `TASK-019`, the follow-ups are `TASK-020` and `TASK-021`.

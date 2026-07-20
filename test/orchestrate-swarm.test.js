@@ -110,15 +110,15 @@ test('E2E cucumber: batch selection uses selectNextBatch filling only free slots
   await t.test(
     'Given the swarm processing loop, ' +
       'When we read how each batch is selected, ' +
-      'Then selectNextBatch fills only free slots (limit − active) and tops up until the board is clear',
+      'Then selectNextBatch fills only free slots (limit − (in-progress + testing + defining)) and tops up until the board is clear',
     () => {
       const md = readLower(SKILL_PATH);
       assert.match(md, /selectnextbatch/, 'SKILL.md should reference selectNextBatch');
       assert.match(md, /free slot/, 'SKILL.md should describe filling free slots');
       assert.match(
         md,
-        /limit\s*[−-]\s*active|limit\s*[−-]\s*active count/,
-        'SKILL.md should define free slots = limit − active',
+        /limit\s*[−-]\s*\(\s*in-progress\s*\+\s*testing\s*\+\s*defining\s*\)/,
+        'SKILL.md should define free slots = limit − (in-progress + testing + defining)',
       );
       assert.match(md, /top(?:ping|s|-| )?up|top up/, 'SKILL.md should describe topping up free slots');
       assert.match(md, /board is clear|until the board is clear/, 'SKILL.md should drive until the board is clear');

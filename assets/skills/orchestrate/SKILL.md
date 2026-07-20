@@ -171,7 +171,19 @@ writes implementation code or edits/creates source files.
    - An empty `## Additional Context` section (a heading with a placeholder line
      for the user to fill in). This section is user-owned — the BA leaves it empty
      and **never overwrites** it.
-3. When the subagent returns, list the tickets it created (id + title), then
+3. **Resolve every clarifying question before you finish.** The BA gathers as
+   much context as it can **and** returns any clarifying questions it raised
+   (each naming the affected ticket id(s)). You must put **every** raised
+   question to the **user**: use the **AskUserQuestion** tool when available,
+   otherwise write the question onto the affected ticket's `question`
+   frontmatter field (the TASK-005 mechanism in `lib/ticket-questions.js`,
+   which turns that ticket's board dot **yellow**) and wait for a non-empty
+   `answer`. Planning is **not** complete — do **not** issue the Phase-1 STOP
+   message below, and **no** ticket leaves `defining`, until **every** raised
+   question has a non-empty answer. Record each answer in the ticket **body**
+   (for example a `## Clarifications` section of Q/A pairs), and **never**
+   write an answer into the user-owned `## Additional Context` section.
+4. When the subagent returns, list the tickets it created (id + title), then
    **STOP** with this message:
 
    > Tickets created. Review and enrich them in the **Tasks** tab — especially
@@ -196,22 +208,87 @@ ticket, or after one batch — it keeps topping up and driving batches until not
 is left to drive:
 
 1. Re-scan `tasks/*.md` (do this fresh at the top of every iteration — the user
-   may drag new tickets into `todo` or create them from the board while you
-   work). Note the current claims (`agent` fields) and how many tickets are
-   already actively worked (`in-progress` / `testing`). When a ticket is created
-   **mid-build** (a Phase 4 follow-up fix ticket, or one the user adds), do not
-   wait for the next full iteration to consider it: call `canRunInParallel(board,
-   newTicket, { limit, agentId })` in `lib/ticket-queue.js`. If it returns
-   `ok: true` (a free slot exists **and** the new ticket is claimable, unclaimed
-   or claimed by you, and not active), claim it (`claimTicket`) and start its
-   build immediately in that free slot; otherwise (`ok: false` — no free slot, or
-   the ticket is not eligible) **leave it queued** in `todo` for a later top-up.
-   This introduces **no new status**: the created ticket stays `todo` until it is
+   may drag new tickets into `todo`, create them from the board, or have the app
+   auto-queue this run on ticket creation while you work). Note the current claims
+   (`agent` fields), how many tickets are already actively worked (`in-progress` /
+   `testing`), and how many hold a **concurrency slot** (`defining` /
+   `in-progress` / `testing` — `defining` counts against the bound too, **unless**
+   it is parked on an unanswered BA question, which frees its slot).
+
+   When a ticket is created or first seen **mid-build** (a Phase 4 follow-up fix
+   ticket, one the user adds, or one the app auto-queued a run for on creation), do
+   not wait for the next full iteration to consider it. **First decide whether it
+   is defined**: call `isTicketDefined(body)` in `lib/ticket-definition.js` — true
+   only when the body has a `## Acceptance Criteria` section with a real,
+   non-placeholder checkbox **and** a `## Cucumber Tests` section with a non-empty
+   ```gherkin block. A `kind: post-processing` ticket is **never** defined or
+   dispatched — skip it (the existing guards in `canRunInParallel`/`claimTicket`
+   report `post-processing`).
+
+   - **Undefined `todo` ticket → define it FIRST (BA before any claim/build).**
+     Set `status: defining` (whole-file write, bump `updated`) to park it for the
+     BA, then launch **one** subagent (Task tool, `orchestrate-ba`; fall back to
+     `general-purpose` and report it if that definition is missing) with a
+     business-analyst persona, dispatched on the **same planning model Phase 1
+     uses** (see the Phase 1 model directive), with the **full ticket text**. Its
+     job: produce
+     the standard defined-ticket body — a precise `## Description`, a **complete**
+     `## Acceptance Criteria`, `## Cucumber Tests` Gherkin covering every criterion
+     with **at least one failure/edge scenario**, explicitly listed edge/failure
+     cases, and the relevant files/context — **never** touching the user-owned
+     `## Additional Context`. While it is **actively** `defining` (no open BA
+     question) the ticket occupies a concurrency slot (it counts against the bound
+     in `selectNextBatch`/`canRunInParallel`) but stays **not claimable**, so the BA
+     gate holds.
+       - **BA question → park only that ticket.** If the BA raises a clarifying
+         question, write it onto **that ticket's** `question` frontmatter field
+         (the TASK-005 mechanism in `lib/ticket-questions.js`, which turns its
+         board dot **yellow**) and record answers in the ticket **body** (never in
+         `## Additional Context`). **That ticket alone** stays in `defining` until
+         its `answer` is non-empty — the rest of the swarm keeps defining and
+         building other tickets. A question-parked `defining` ticket does **not**
+         hold a concurrency slot (`selectNextBatch`/`canRunInParallel` exempt it, so
+         parked definitions never starve ready `todo`/`failed-testing` work into a
+         stall); it simply frees its slot for other ready work while remaining not
+         claimable. List every such still-parked ticket in the end-of-run report.
+         When a parked definition's question is answered and it resumes
+         actively-defining, it re-counts as a concurrency slot — so if a build
+         meanwhile filled the slot it had freed, live occupancy MAY briefly exceed
+         `limit` under a burst of simultaneously-answered definitions. This
+         transient is ACCEPTED: it is bounded (by how many answers land at once),
+         self-corrects as in-flight builds finish, and never corrupts state, so it
+         is preferred over a strict cap-on-resume that could deadlock a resuming
+         definition against an always-full bound.
+       - **Defined → back to `todo`, then dispatch without a review pause.** When
+         the BA returns a defined body (and any question is answered), whole-file
+         write the ticket back to `status: todo`, then **immediately** evaluate
+         `canRunInParallel(board, ticket, { limit, agentId })`. On `ok: true`,
+         claim it (`claimTicket`) and **build it right away WITHOUT pausing for
+         review** — adding a ticket during a run is implicit consent, so the
+         Phase-1 "STOP for review" gate does **not** apply to a mid-build ticket.
+         On `ok: false` (no free slot, etc.) **leave it queued** in `todo` for a
+         later `selectNextBatch` top-up.
+   - **Already-defined `todo` ticket → skip the BA.** When `isTicketDefined` is
+     already true (real AC + Gherkin), do **not** define it again — go straight to
+     the dispatch: call `canRunInParallel(board, newTicket, { limit, agentId })`.
+     If it returns `ok: true` (a free slot exists **and** the new ticket is
+     claimable, unclaimed or claimed by you, and not active), claim it
+     (`claimTicket`) and start its build immediately in that free slot; otherwise
+     (`ok: false` — no free slot, or the ticket is not eligible) **leave it
+     queued** in `todo` for a later top-up.
+
+   This introduces **no new status beyond the existing `defining`** lane: a
+   mid-build ticket is defined (only if needed) and then stays `todo` until it is
    claimed like any other, and `canRunInParallel`'s verdict composes with
    `selectNextBatch` (an `ok: true` ticket is exactly one `selectNextBatch` would
    pick for that board).
+
+   > **Stale `defining` on a fresh run.** A `defining` ticket left on disk with no
+   > live BA (a prior run ended mid-definition) is **stale intake**: re-dispatch
+   > the BA to finish its definition rather than skipping it.
 2. **Select the next batch** with `selectNextBatch` in `lib/ticket-queue.js`. It
-   fills only the **free slots** = `limit − active count`, where the batch size /
+   fills only the **free slots** = `limit − (in-progress + testing + defining)`
+   (the slot-occupancy count, which includes `defining`), where the batch size /
    limit is `DEFAULT_CONCURRENCY` (default **3**) and any caller-supplied override
    is clamped to `MAX_CONCURRENCY` (hard ceiling **8**). It returns the oldest
    **unclaimed** claimable tickets — from `todo` first, then `failed-testing`
@@ -333,6 +410,17 @@ user's "final events" and are themselves never built/tested/claimed.
    `TASK-020` and `TASK-021`. Creating these follow-ups **does not change the
    reviewed ticket's status or frontmatter**; the follow-up `todo` tickets are
    picked up by a later build swarm like any other ticket.
+
+   Every review follow-up fix ticket you create must additionally:
+   - **Contain a `## Impact If Not Fixed` section** in its body, carrying the
+     reviewer's short "impact if not fixed" statement (1–3 sentences) for that
+     finding — the concrete consequence of leaving the issue unfixed, so the user
+     can weigh whether to build it.
+   - **Carry a `review-of: <reviewed ticket id>` frontmatter key** naming the
+     ticket whose review produced it (e.g. `review-of: TASK-019`). This is an
+     extra frontmatter key the serializer keeps after the leading keys and
+     round-trips untouched, exactly like `bug-of` / `agent` / `kind`. It is the
+     machine-identifiable marker that a ticket is a review follow-up.
 3. **Run post-processing, then mark the reviewed ticket `done`.** After the
    review passes, run each defined post-processing ticket's instructions (every
    ticket in the `post-processing` lane, `kind: post-processing`) against the
@@ -356,14 +444,16 @@ below and are unit-tested.
 - **Bounded concurrency (batch size).** At most **N** agents build at once, so
   each set/batch is at most N tickets (default N = 3, `DEFAULT_CONCURRENCY`;
   clamped to a hard ceiling of 8, `MAX_CONCURRENCY`). `selectNextBatch` fills only
-  the free slots (`limit − active count`), so it never starts a build when N
-  tickets are already `in-progress`/`testing`. Tickets past the bound wait in the
+  the free slots (`limit − (in-progress + testing + defining)`, the slot-occupancy
+  count that includes `defining`), so it never starts a build when N tickets
+  already occupy slots (`in-progress`/`testing`/`defining`). Tickets past the bound wait in the
   queue and are picked up as slots free.
 - **Dispatch a newly-created ticket into a free slot.** When a single ticket is
   created during a build, decide whether it can run **right now** with
   `canRunInParallel(tickets, newTicket, { limit, agentId })`. It reuses the same
-  eligibility and slot math as `selectNextBatch` (`freeSlots = limit − active
-  count`) and returns `{ ok, reason, freeSlots }` — decision-only, it never claims
+  eligibility and slot math as `selectNextBatch` (`freeSlots = limit − (in-progress
+  + testing + defining)`, the slot-occupancy count that includes `defining`) and
+  returns `{ ok, reason, freeSlots }` — decision-only, it never claims
   or writes. On `ok: true`, claim (`claimTicket`) and build the ticket immediately
   in the free slot; on `ok: false` (`no-ticket` / `post-processing` / `claimed` /
   `already-active` / `not-claimable` / `no-slots`) leave it queued in `todo`. It
@@ -404,3 +494,12 @@ below and are unit-tested.
   latter is a valid, claimable status that folds into the Testing lane rather than
   having its own).
 - Timestamps: preserve `created`, always bump `updated`.
+- Per-activity cost log: after each phase's subagent completes (BA, coder,
+  tester, tech-lead) and after the post-processing step, append one entry to that
+  ticket's `activities` frontmatter field — a one-line JSON array, written with the
+  standard whole-file write and `updated` bumped — recording the `activity`
+  (`ba`/`code`/`test`/`review`/`post-processing`), the `model` dispatched, and its
+  `startedAt`/`finishedAt`; include `tokensIn`/`tokensOut`/`costUsd` only when the
+  run actually reported them (never fabricate a token or cost figure). This is
+  additive: the existing `startedAt`/`finishedAt`/`tokens`/`costUsd` accounting and
+  the `runs` log stay untouched.

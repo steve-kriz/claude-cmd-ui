@@ -51,11 +51,13 @@
           <option value="testing">Testing</option>
           <option value="post-processing">Post-processing</option>
           <option value="done">Done</option>
+          <option value="__wont-do__">Won't do</option>
         </select>
       </div>
       <div class="task-modal-path"></div>
       <div class="task-modal-accounting hidden"></div>
       <div class="task-modal-runs hidden"></div>
+      <div class="task-modal-cost hidden"></div>
       <div class="task-modal-question hidden">
         <div class="task-modal-question-label">Question from agent</div>
         <div class="task-modal-question-text"></div>
@@ -335,6 +337,7 @@
                   <option value="30000">30 seconds</option>
                 </select>
                 <label class="git-form-check"><input class="slackPostReplies" type="checkbox" checked /> Post Claude's replies back to Slack</label>
+                <label class="git-form-check"><input class="slackSummarize" type="checkbox" /> Summarize output with AI (needs ANTHROPIC_API_KEY)</label>
               </div>
               <div class="git-form-actions">
                 <button class="slackTestConnectBtn small-btn primary-btn">Connect</button>

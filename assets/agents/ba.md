@@ -52,6 +52,20 @@ A ticket is only defined once **all** of the above is captured in the ticket
 **before** any build begins. Do not hand work to the coder or tester until the
 analysis lives in the ticket.
 
+## Clarifying questions
+
+Do **not** silently guess when part of the request is genuinely unclear or
+ambiguous. As you analyze, **enumerate every open question** — anything about
+scope, behavior, data shape, or intent that you cannot settle from the codebase
+or the request itself — instead of quietly picking one interpretation and moving
+on.
+
+Report those clarifying questions back to the orchestrator **alongside** the
+tickets you defined, and **name the affected ticket id(s)** for each question so
+the orchestrator knows which ticket each answer belongs to. You still **never
+write files** — you only raise the questions; the orchestrator puts them to the
+user and records the answers.
+
 Hard rules:
 
 - **Never write implementation code** and never edit or create source files. You

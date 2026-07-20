@@ -223,8 +223,11 @@ test('browser mirror slackShouldDispatchIncoming matches lib gating order', () =
   assert.match(body, /if\s*\(thread\s*!==\s*s\.threadTs\)\s*return\s+false/);
 });
 
-test('lib/slack-proxy.js exports the three helpers and stays the source of truth', () => {
-  assert.match(libSrc, /module\.exports\s*=\s*\{\s*isProxyEnabled,\s*shouldDispatchIncoming,\s*hasSeen\s*\}/);
+test('lib/slack-proxy.js exports the helpers and stays the source of truth', () => {
+  // isProxyEnabled, shouldDispatchIncoming, hasSeen are the original three;
+  // shouldFlushCapture (TASK-061) is exported alongside them.
+  assert.match(libSrc, /module\.exports\s*=\s*\{[^}]*\bisProxyEnabled\b[^}]*\bshouldDispatchIncoming\b[^}]*\bhasSeen\b[^}]*\}/);
+  assert.match(libSrc, /module\.exports\s*=\s*\{[^}]*\bshouldFlushCapture\b[^}]*\}/);
   // The lib gating order the mirror must follow.
   const decide = libSrc.slice(libSrc.indexOf('function shouldDispatchIncoming'));
   const order = ['no-ts', 'not-connected', 'bot', 'self', 'seen', 'subtype', 'other-thread', 'ok'];
