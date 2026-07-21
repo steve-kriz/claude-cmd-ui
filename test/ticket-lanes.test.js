@@ -53,6 +53,12 @@ const rendererSrc = fs.readFileSync(RENDERER, 'utf8');
 const htmlSrc = fs.readFileSync(INDEX_HTML, 'utf8');
 const cssSrc = fs.readFileSync(STYLES, 'utf8');
 
+// TASK-101: the six lanes are no longer static index.html columns — they are
+// generated at render time by renderTasksBoard from the normalized team config.
+// The harness loads the REAL renderer lane logic headless (mock DOM) so the
+// six-lane contract can still be asserted against the shipped generation code.
+const laneHarness = require('./helpers/task-101-lane-harness');
+
 // ---------------------------------------------------------------------------
 // Unit tests: lib/ticket-lanes.js pure logic
 // ---------------------------------------------------------------------------
@@ -192,9 +198,21 @@ test('renderer.js mirrors ACTIVE_STATUSES, FAILED_STATUS and UNKNOWN_STATUS', ()
   assert.match(rendererSrc, /const\s+TASKS_UNKNOWN_STATUS\s*=\s*'unknown'/);
 });
 
-test('index.html declares every lane as a data-status column, defining after todo', () => {
-  const order = [...htmlSrc.matchAll(/class="tasks-lane[^"]*"\s+data-status="([^"]+)"/g)]
-    .map((mm) => mm[1]);
+test('renderTasksBoard generates every lane as a data-status column, defining after todo', () => {
+  // TASK-101: index.html no longer declares the lanes (the six hardcoded
+  // .tasks-lane divs were removed); the board is a single empty container the
+  // renderer fills. Assert the static columns are gone ...
+  assert.ok(!/class="tasks-lane[^"]*"\s+data-status=/.test(htmlSrc),
+    'the six static data-status lane columns were removed from index.html');
+  // ... and that the REAL renderTasksBoard generates the SAME six-lane contract
+  // (canonical order + trailing unknown lane) from a default (no-config) board.
+  const mod = laneHarness.loadLaneModule(
+    laneHarness.makeWindow().window, laneHarness.makeDocument(), console);
+  // The no-config normalized columns are exactly the six canonical lanes.
+  assert.deepEqual(mod.normalizeTasksColumns(null).map((c) => c.status), [...LANE_STATUSES]);
+  const tab = laneHarness.makeTab({ config: null });
+  mod.renderTasksBoard(tab);
+  const order = laneHarness.laneStatuses(tab);
   // The six enum lanes appear in canonical order, followed by the unknown lane.
   assert.deepEqual(order, [...LANE_STATUSES, UNKNOWN_STATUS]);
 });

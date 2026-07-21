@@ -160,9 +160,27 @@ ticket's build time (in minutes), cost, and token figures.
   a run is already active/queued or Claude is not idle — that already-active run's
   mid-build intake picks the new ticket up instead, and no overlapping run starts.
 
-**Skill install.** `tasks:installSkill` copies the bundled skill and the
-subagent definitions from `assets/` into the opened project's `.claude/skills/`
-and `.claude/agents/`, and ensures `tasks/` exists (asar-safe file copies).
+**Skill install.** Installing the orchestration skill from the UI (the Tasks
+banner, Workflow panel, or Agents panel — all three drive the same
+`tasks:installSkill` IPC) is a **two-step** process:
+
+1. **File copy** — `tasks:installSkill` copies the bundled skill and the subagent
+   definitions from `assets/` into the opened project's `.claude/skills/` and
+   `.claude/agents/`, and ensures `tasks/` exists (asar-safe file copies).
+2. **Session registration** — Claude Code discovers project skills only at
+   **session startup**, so the long-lived `claude` pane that was already running
+   when you clicked Install will not see the freshly-copied skill. After a
+   successful install the surface shows an inline **"Restart the Claude session to
+   register the skill"** notice with a **Restart** button. The app never
+   auto-relaunches (that would discard the running conversation and could kill an
+   in-flight response); the restart is always user-initiated. Clicking Restart
+   kills and respawns the session via `launchCmdAgent`, so the new session picks up
+   the skill at startup and a subsequently queued `/orchestrate build|plan` runs it.
+   The notice is a no-op when the tab's agent is `opencode` or no session is
+   running, and only the installing tab is affected (other tabs on the same folder
+   stay stale until they are restarted). If the relaunch itself fails, a manual-
+   restart notice is shown and the skill stays marked installed (the files are on
+   disk — only registration is pending).
 
 ## Usage
 

@@ -37,7 +37,10 @@ const rendererSrc = fs.readFileSync(path.join(REPO, 'renderer', 'renderer.js'), 
 // Guard 1 core: does renderTasksBoard's routing fold failed-testing into the
 // testing lane (and route unknown / canonical statuses correctly)?
 function routingFoldsFailedIntoTesting(src) {
-  const startMarker = 'const unknown = !TASKS_VALID_STATUSES.includes(tk.fm.status);';
+  // TASK-101 made the routing config-aware: a status is unknown only when it is
+  // neither a fixed valid status NOR a user-declared column status. The start
+  // marker tracks that new predicate; the fold/route sub-checks are unchanged.
+  const startMarker = 'const unknown = !TASKS_VALID_STATUSES.includes(tk.fm.status) && !userStatuses.has(tk.fm.status);';
   const endMarker = "if (!lanes[laneKey]) laneKey = 'todo';";
   const s = src.indexOf(startMarker);
   if (s === -1) return false;

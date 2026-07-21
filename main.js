@@ -5,6 +5,7 @@ const fsp = fs.promises;
 const { execFile } = require('child_process');
 const { spawnShell } = require('./lib/pty');
 const { shouldKeepAwake } = require('./lib/keep-awake');
+const fsRoots = require('./lib/fs-roots');
 const { shouldRequestAttention } = require('./lib/window-attention');
 const envStore = require('./lib/env-store');
 const aws = require('./lib/aws');
@@ -12,6 +13,7 @@ const cloudLogs = require('./lib/cloud-logs');
 const slack = require('./lib/slack');
 const slackOAuth = require('./lib/slack-oauth');
 const slackSummarize = require('./lib/slack-summarize');
+const agentRegenerate = require('./lib/agent-regenerate');
 const { redactSecrets } = require('./lib/slack-proxy');
 
 const ptys = new Map();
@@ -177,13 +179,40 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(() => {
+// A Finder-launched macOS app inherits launchd's minimal PATH (no
+// /usr/local/bin, no /opt/homebrew/bin), so PATH-based lookups of claude / git
+// / gh / aws / opencode fail even when installed. Prepend the standard GUI-
+// missing locations that are not already present. No-op on win32/linux, and
+// idempotent (repeat calls never grow PATH). Injectable for tests.
+function augmentDarwinPath(platform = process.platform, env = process.env) {
+  if (platform !== 'darwin') return;
+  const extra = ['/usr/local/bin', '/opt/homebrew/bin'];
+  const current = (env.PATH || '').split(':').filter(Boolean);
+  // Prepend only the dirs not already present so the app resolves the same
+  // Homebrew-first binary the user's terminal does (e.g. Homebrew git ahead of
+  // the Xcode CLT git in /usr/bin). Existing entries are left in place — never
+  // moved or duplicated — so repeat calls never grow PATH.
+  const missing = extra.filter((dir) => !current.includes(dir));
+  if (missing.length) env.PATH = [...missing, ...current].join(':');
+}
+
+app.whenReady().then(async () => {
+  // Ensure GUI-launched macOS apps can find CLIs installed under Homebrew etc.
+  // before anything execs a binary. No-op off darwin.
+  augmentDarwinPath();
   // Load secrets from the project .env before anything that reads them.
   envStore.setEnvPath(path.join(app.getAppPath(), '.env'));
   envStore.loadIntoProcessEnv();
   const userData = app.getPath('userData');
   aws.setUserDataDir(userData);
   sessionFilePath = path.join(userData, 'session.json');
+  // TASK-126: seed the fs-confinement root registry from the folders main
+  // persisted last session (session.json is main's own file under userData).
+  // This is the ONLY startup source of roots; dialog:pickFolder extends it live.
+  try {
+    const seed = await readSession();
+    await fsRoots.seedRoots(seed.folders);
+  } catch (_) { /* seeding is best-effort; empty registry rejects all fs ops */ }
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -318,7 +347,11 @@ ipcMain.handle('dialog:pickFolder', async () => {
     title: 'Select project folder'
   });
   if (result.canceled || !result.filePaths.length) return null;
-  return { path: result.filePaths[0] };
+  const picked = result.filePaths[0];
+  // TASK-126: the native picker is the only live path by which a new folder
+  // enters the app, so a successful pick extends the fs-confinement registry.
+  try { await fsRoots.addRoot(picked); } catch (_) { /* non-fatal */ }
+  return { path: picked };
 });
 
 ipcMain.handle('pty:spawn', (_evt, { id, shell, cwd, cols, rows, worker, cliCommand }) => {
@@ -453,6 +486,10 @@ ipcMain.handle('fs:findByExt', async (_evt, { root, ext, excludeDirs }) => {
     if (!root) throw new Error('root required');
     const lowerExt = ('' + (ext || '')).toLowerCase();
     if (!lowerExt) throw new Error('ext required');
+    // TASK-129: confine the walk base directory to an approved project root
+    // before any readdir. Out-of-root (incl. the empty-registry / no-folder-open
+    // case) returns this channel's existing {ok:false,error} shape — never a throw.
+    if (!(await fsRoots.isPathAllowed(root))) return { ok: false, error: OUTSIDE_ROOT_ERROR };
     const defaultSkip = ['node_modules', '.git'];
     const skip = new Set((Array.isArray(excludeDirs) ? excludeDirs : defaultSkip).map((d) => d.toLowerCase()));
     const files = [];
@@ -499,6 +536,10 @@ const GREP_MAX_HITS_PER_FILE = 5;
 ipcMain.handle('fs:grep', async (_evt, { root, query }) => {
   try {
     if (!root) throw new Error('root required');
+    // TASK-129: confine the grep base directory to an approved project root
+    // before any readdir/readFile. Out-of-root returns this channel's existing
+    // {ok:false,error} shape — never a throw across IPC.
+    if (!(await fsRoots.isPathAllowed(root))) return { ok: false, error: OUTSIDE_ROOT_ERROR };
     const q = ('' + (query || '')).trim();
     if (!q) return { ok: true, results: [], truncated: false };
     const qLower = q.toLowerCase();
@@ -583,6 +624,9 @@ ipcMain.handle('fs:grep', async (_evt, { root, query }) => {
 
 ipcMain.handle('fs:readDir', async (_evt, { path: dir }) => {
   try {
+    // TASK-129: confine directory listing to an approved project root before the
+    // readdir. Out-of-root returns the channel's existing {ok:false,error} shape.
+    if (!(await fsRoots.isPathAllowed(dir))) return { ok: false, error: OUTSIDE_ROOT_ERROR };
     const entries = await fsp.readdir(dir, { withFileTypes: true });
     return {
       ok: true,
@@ -606,6 +650,10 @@ const BINARY_EXT = new Set([
 
 ipcMain.handle('fs:readFile', async (_evt, { path: filePath }) => {
   try {
+    // TASK-129: confine file reads to an approved project root BEFORE the stat —
+    // otherwise this channel is an arbitrary-file-read primitive (e.g. ~/.ssh,
+    // .env). Out-of-root returns the channel's existing {ok:false,error} shape.
+    if (!(await fsRoots.isPathAllowed(filePath))) return { ok: false, error: OUTSIDE_ROOT_ERROR };
     const stat = await fsp.stat(filePath);
     if (!stat.isFile()) return { ok: false, error: 'Not a file' };
     const ext = path.extname(filePath).toLowerCase();
@@ -629,11 +677,37 @@ ipcMain.handle('fs:readFile', async (_evt, { path: filePath }) => {
   }
 });
 
-ipcMain.handle('fs:writeFile', async (_evt, { path: filePath, content }) => {
+// TASK-126: main-process project-root confinement. Every mutating/probing fs:*
+// handler runs the candidate path through fsRoots.isPathAllowed (canonicalize +
+// realpath + containment) before touching the disk, and returns the channel's
+// existing {ok:false,error} shape — never a throw across IPC — when it lands
+// outside every approved root (incl. the empty-registry / no-folder-open case).
+// TASK-129 extends the same gate to the read-side (fs:readFile/readDir) and
+// directory-walk (fs:findByExt/fs:grep) handlers plus the residual write paths
+// (tasks:installSkill projectPath, prompts:* cwd history). Those handlers are
+// registered earlier in this file but reference this constant only inside their
+// async callback bodies, which run at IPC-invoke time (well after module load),
+// so the const is fully initialized by then.
+const OUTSIDE_ROOT_ERROR = 'Path is outside the approved project root';
+
+ipcMain.handle('fs:writeFile', async (_evt, { path: filePath, content, exclusive }) => {
   try {
     if (typeof filePath !== 'string' || !filePath) throw new Error('path required');
     if (typeof content !== 'string') throw new Error('content must be a string');
-    await fsp.writeFile(filePath, content, 'utf8');
+    // TASK-126 confinement guard runs BEFORE any disk touch (unchanged).
+    if (!(await fsRoots.isPathAllowed(filePath))) return { ok: false, error: OUTSIDE_ROOT_ERROR };
+    // TASK-127: opt-in exclusive create. When `exclusive` is truthy, write with
+    // flag 'wx' so the OS atomically refuses (throws EEXIST) if the file already
+    // exists — a race-free "abort, no overwrite" for create-new paths. The
+    // EEXIST is caught below and returned as the channel's normal
+    // {ok:false,error} shape (never a throw across IPC). When `exclusive` is
+    // absent/falsy the write is byte-for-byte the original default-overwrite
+    // path, so every existing caller is unaffected.
+    if (exclusive) {
+      await fsp.writeFile(filePath, content, { encoding: 'utf8', flag: 'wx' });
+    } else {
+      await fsp.writeFile(filePath, content, 'utf8');
+    }
     const stat = await fsp.stat(filePath);
     return { ok: true, size: stat.size };
   } catch (err) {
@@ -644,6 +718,10 @@ ipcMain.handle('fs:writeFile', async (_evt, { path: filePath, content }) => {
 ipcMain.handle('fs:rename', async (_evt, { oldPath, newPath }) => {
   try {
     if (!oldPath || !newPath) throw new Error('oldPath and newPath required');
+    // Both endpoints must resolve inside an approved root.
+    if (!(await fsRoots.isPathAllowed(oldPath)) || !(await fsRoots.isPathAllowed(newPath))) {
+      return { ok: false, error: OUTSIDE_ROOT_ERROR };
+    }
     try {
       await fsp.access(newPath);
       return { ok: false, error: 'Target already exists' };
@@ -658,6 +736,7 @@ ipcMain.handle('fs:rename', async (_evt, { oldPath, newPath }) => {
 ipcMain.handle('fs:mkdir', async (_evt, { path: dir }) => {
   try {
     if (typeof dir !== 'string' || !dir) throw new Error('path required');
+    if (!(await fsRoots.isPathAllowed(dir))) return { ok: false, error: OUTSIDE_ROOT_ERROR };
     await fsp.mkdir(dir, { recursive: true });
     return { ok: true };
   } catch (err) {
@@ -667,6 +746,9 @@ ipcMain.handle('fs:mkdir', async (_evt, { path: dir }) => {
 
 ipcMain.handle('fs:exists', async (_evt, { path: p }) => {
   try {
+    // Out-of-root probes get {ok:false} so this is not an existence oracle for
+    // paths outside the project tree; in-root callers still see exists true/false.
+    if (!(await fsRoots.isPathAllowed(p))) return { ok: false, error: OUTSIDE_ROOT_ERROR };
     const st = await fsp.stat(p);
     return { ok: true, exists: true, isDir: st.isDirectory() };
   } catch (_) {
@@ -680,6 +762,10 @@ ipcMain.handle('fs:exists', async (_evt, { path: p }) => {
 ipcMain.handle('tasks:installSkill', async (_evt, { projectPath }) => {
   try {
     if (!projectPath || typeof projectPath !== 'string') throw new Error('projectPath required');
+    // TASK-129: confine the mkdir/writeFile target (projectPath) to an approved
+    // project root BEFORE any fs op. Out-of-root returns the channel's existing
+    // {ok:false,error} shape — never a throw across IPC.
+    if (!(await fsRoots.isPathAllowed(projectPath))) return { ok: false, error: OUTSIDE_ROOT_ERROR };
     const srcDir = path.join(__dirname, 'assets', 'skills', 'orchestrate');
     const destDir = path.join(projectPath, '.claude', 'skills', 'orchestrate');
     await fsp.mkdir(destDir, { recursive: true });
@@ -744,6 +830,10 @@ ipcMain.handle('prompts:append', async (_evt, { cwd, entry }) => {
   try {
     if (!cwd) throw new Error('cwd required');
     if (!entry || typeof entry.prompt !== 'string') throw new Error('entry.prompt required');
+    // TASK-129: the prompt history lives under cwd (path.join(cwd, '.claude-logs',
+    // 'logs')). Confine cwd to an approved root BEFORE any read/write so this is
+    // not a residual arbitrary-write path. Out-of-root returns {ok:false,error}.
+    if (!(await fsRoots.isPathAllowed(cwd))) return { ok: false, error: OUTSIDE_ROOT_ERROR };
     const normalized = {
       ts: entry.ts || new Date().toISOString(),
       source: entry.source || 'user',
@@ -761,6 +851,9 @@ ipcMain.handle('prompts:append', async (_evt, { cwd, entry }) => {
 ipcMain.handle('prompts:syncFromCloud', async (_evt, { cwd }) => {
   try {
     if (!cwd) throw new Error('cwd required');
+    // TASK-129: confine the history write target (under cwd) to an approved root
+    // before fetching/writing. Out-of-root returns {ok:false,error}.
+    if (!(await fsRoots.isPathAllowed(cwd))) return { ok: false, error: OUTSIDE_ROOT_ERROR };
     if (!cloudLogs.isEnabled()) return { ok: false, error: 'cloud logs disabled' };
     const res = await cloudLogs.fetchLogs(cwd);
     if (!res.ok) return res;
@@ -775,6 +868,9 @@ ipcMain.handle('prompts:write', async (_evt, { cwd, entries }) => {
   try {
     if (!cwd) throw new Error('cwd required');
     if (!Array.isArray(entries)) throw new Error('entries must be an array');
+    // TASK-129: confine the history write target (under cwd) to an approved root
+    // BEFORE the write. Out-of-root returns {ok:false,error}.
+    if (!(await fsRoots.isPathAllowed(cwd))) return { ok: false, error: OUTSIDE_ROOT_ERROR };
     await writePromptHistory(cwd, entries);
     return { ok: true, count: entries.length };
   } catch (err) {
@@ -785,6 +881,9 @@ ipcMain.handle('prompts:write', async (_evt, { cwd, entries }) => {
 ipcMain.handle('prompts:clear', async (_evt, { cwd }) => {
   try {
     if (!cwd) throw new Error('cwd required');
+    // TASK-129: confine the history write target (under cwd) to an approved root
+    // BEFORE the write. Out-of-root returns {ok:false,error}.
+    if (!(await fsRoots.isPathAllowed(cwd))) return { ok: false, error: OUTSIDE_ROOT_ERROR };
     await writePromptHistory(cwd, []);
     return { ok: true };
   } catch (err) {
@@ -1762,6 +1861,47 @@ ipcMain.handle('slack:summarize', async (_evt, { text, enabled } = {}) => {
   }
 });
 
+// Upper bounds on the text handed to the agent-file regenerator (TASK-130),
+// mirroring SLACK_SUMMARIZE_MAX_INPUT_CHARS as defense in depth so the IPC
+// channel — even if driven directly — can never forward an unbounded payload to
+// the external, billed Anthropic API. Agent files are multi-KB, so the content
+// cap is far larger than the summarizer's window; the instruction is a short
+// natural-language request. We keep the HEAD of the file (it starts with the
+// frontmatter, the part most worth preserving) and clamp BEFORE the lib call.
+const AGENT_REGEN_MAX_CONTENT_CHARS = 60000;
+const AGENT_REGEN_MAX_INSTRUCTION_CHARS = 4000;
+
+// Regenerate an agent-definition file from its current text plus a user
+// instruction (TASK-130). Reads ANTHROPIC_API_KEY from the .env store (never
+// logged, never returned), clamps both inputs, and delegates to the Electron-
+// free lib module, which never throws and returns a structured { ok, content,
+// reason }. This handler likewise never throws into the renderer and never
+// returns the key. The renderer parses + validates `content` behind the agent-
+// file safety rails and only writes it after the user reviews and Saves.
+ipcMain.handle('agents:regenerate', async (_evt, { content, instruction } = {}) => {
+  const rawContent = typeof content === 'string' ? content : '';
+  const rawInstruction = typeof instruction === 'string' ? instruction : '';
+  const clampedContent = rawContent.length > AGENT_REGEN_MAX_CONTENT_CHARS
+    ? rawContent.slice(0, AGENT_REGEN_MAX_CONTENT_CHARS)
+    : rawContent;
+  const clampedInstruction = rawInstruction.length > AGENT_REGEN_MAX_INSTRUCTION_CHARS
+    ? rawInstruction.slice(0, AGENT_REGEN_MAX_INSTRUCTION_CHARS)
+    : rawInstruction;
+  try {
+    const apiKey = (envStore.get('ANTHROPIC_API_KEY') || '').trim();
+    const res = await agentRegenerate.regenerateAgentFile({
+      apiKey,
+      content: clampedContent,
+      instruction: clampedInstruction
+    });
+    return { ok: res.ok, content: res.content, reason: res.reason };
+  } catch (err) {
+    // Belt-and-braces: the lib swallows its own errors, but a thrown error here
+    // must still degrade to a structured failure, never crash the renderer.
+    return { ok: false, content: '', reason: 'error', error: err && err.message };
+  }
+});
+
 // Open a Socket Mode WebSocket URL for the renderer to connect to. The renderer
 // owns the WebSocket itself (Chromium has a native WebSocket); the main process
 // only performs the authenticated apps.connections.open round-trip.
@@ -1824,3 +1964,7 @@ ipcMain.handle('git:abortMerge', async (_evt, { cwd }) => {
   if (await tryRun(['cherry-pick', '--abort'])) return { ok: true, kind: 'cherry-pick' };
   return { ok: false, error: 'No merge/rebase/cherry-pick in progress.' };
 });
+
+// Exported for unit testing the platform-aware startup PATH fix in isolation.
+// Electron ignores an entry script's exports, so this is inert at runtime.
+module.exports = { augmentDarwinPath };

@@ -44,15 +44,11 @@
       <div class="task-modal-head">
         <span class="task-modal-id"></span>
         <input class="task-modal-title" type="text" spellcheck="false" placeholder="Title" />
-        <select class="task-modal-status">
-          <option value="todo">To Do</option>
-          <option value="defining">Defining</option>
-          <option value="in-progress">In Progress</option>
-          <option value="testing">Testing</option>
-          <option value="post-processing">Post-processing</option>
-          <option value="done">Done</option>
-          <option value="__wont-do__">Won't do</option>
-        </select>
+        <!-- Options are built dynamically from the folder's team-config columns
+             (system + user, in board order) plus the "Won't do" pseudo-entry by
+             openTaskModal (TASK-102). With no config this reproduces the six
+             historic system options exactly. -->
+        <select class="task-modal-status"></select>
       </div>
       <div class="task-modal-path"></div>
       <div class="task-modal-accounting hidden"></div>
@@ -89,6 +85,37 @@
         <button class="newtask-bug small-btn">Bug</button>
         <button class="newtask-cancel small-btn">Cancel</button>
         <button class="newtask-create small-btn primary-btn">Create ticket</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="addAgentModal" class="task-modal hidden">
+    <div class="task-modal-card">
+      <div class="task-modal-head">
+        <span class="addagent-heading">Add agent</span>
+      </div>
+      <div class="addagent-row">
+        <label class="addagent-label">Name</label>
+        <input class="addagent-name task-modal-title" type="text" spellcheck="false" placeholder="e.g. orchestrate-docs" />
+      </div>
+      <div class="addagent-hint">Lowercase letters, digits and hyphens. Creates <code>.claude/agents/&lt;name&gt;.md</code>.</div>
+      <div class="addagent-row">
+        <label class="addagent-label">Description <span class="addagent-req">*</span></label>
+        <textarea class="addagent-description" rows="3" spellcheck="false" placeholder="What this agent does (required)"></textarea>
+      </div>
+      <div class="addagent-row">
+        <label class="addagent-label">Tools</label>
+        <input class="addagent-tools task-modal-title" type="text" spellcheck="false" placeholder="optional, e.g. Read, Grep, Glob" />
+      </div>
+      <div class="addagent-row">
+        <label class="addagent-label">Model</label>
+        <input class="addagent-model task-modal-title" type="text" spellcheck="false" placeholder="optional, e.g. claude-fable-5" />
+      </div>
+      <textarea class="task-modal-body addagent-body" spellcheck="false" placeholder="Agent prompt / instructions"></textarea>
+      <div class="task-modal-error addagent-error"></div>
+      <div class="task-modal-actions">
+        <button class="addagent-cancel small-btn">Cancel</button>
+        <button class="addagent-create small-btn primary-btn">Create agent</button>
       </div>
     </div>
   </div>
@@ -206,6 +233,7 @@
           <button class="tab-btn" data-tab="diff">Change Viewer <span class="changeCount change-count hidden">0</span></button>
           <button class="tab-btn" data-tab="tests">Tests</button>
           <button class="tab-btn" data-tab="tasks">Tasks</button>
+          <button class="tab-btn" data-tab="team">Team</button>
         </div>
 
         <div class="tab-views">
@@ -634,6 +662,10 @@
               <span class="view-title">Tasks</span>
               <span class="tasksStatus tasks-status"></span>
               <span class="toolbar-spacer"></span>
+              <span class="tasksSearchWrap tasks-search-wrap">
+                <input class="tasksSearch tasks-search-input" type="text" placeholder="Search tickets…" title="Filter cards by id, title or body (Esc to clear)" spellcheck="false" />
+                <button class="tasksSearchClear tasks-search-clear hidden" title="Clear search (Esc)" aria-label="Clear search">×</button>
+              </span>
               <label class="tasksConcurrencyLabel tasks-concurrency-label" title="How many build agents may run in parallel">
                 Parallel
                 <select class="tasksConcurrency" title="How many build agents may run in parallel"></select>
@@ -653,34 +685,52 @@
               </div>
             </div>
             <div class="tasksEmpty tasks-empty hidden">No tickets yet. Ask Claude: <code>/orchestrate plan &lt;feature&gt;</code></div>
-            <div class="tasksBoard tasks-board scroll-area">
-              <div class="tasks-lane" data-status="todo">
-                <div class="tasks-lane-header">To Do <span class="tasks-lane-count">0</span></div>
-                <div class="tasks-lane-cards"></div>
+            <!-- Transient board notice (TASK-102): a brief, auto-hidden message,
+                 e.g. when a drop onto a user lane is refused because the ticket is
+                 actively being worked. Populated via textContent only. -->
+            <div class="tasksNotice tasks-notice hidden"></div>
+            <!-- No-match state (TASK-132): shown only when the search box has a
+                 query that matches zero cards on a non-empty board. Distinct from
+                 the tasksEmpty "No tickets yet" banner above, whose condition stays
+                 total===0-based. Populated via textContent only. -->
+            <div class="tasksNoMatch tasks-empty hidden"></div>
+            <!-- Lanes are generated dynamically from tasks/team-config.json by
+                 renderTasksBoard (TASK-101): the six fixed system lanes (in
+                 canonical order) plus any user columns and a hidden `unknown`
+                 catch-all. With no config the board renders the same six default
+                 lanes it always did. The board is rebuilt wholesale each render,
+                 so the container starts empty. -->
+            <div class="tasksBoard tasks-board scroll-area"></div>
+          </div>
+
+          <div class="tab-view" data-view="team">
+            <div class="view-toolbar">
+              <span class="view-title">Team</span>
+              <span class="teamStatus team-status"></span>
+            </div>
+            <div class="teamBody team-body scroll-area">
+              <div class="teamAgentsSection team-section">
+                <div class="team-section-header">
+                  <span class="team-section-title">Agents</span>
+                  <button class="teamAgentsAddBtn small-btn primary-btn" title="Create a new agent definition">Add agent</button>
+                  <button class="teamAgentsRefresh small-btn" title="Re-read .claude/agents/">Refresh</button>
+                </div>
+                <div class="teamAgentsBody team-section-body">(open a folder)</div>
               </div>
-              <div class="tasks-lane" data-status="defining">
-                <div class="tasks-lane-header">Defining <span class="tasks-lane-count">0</span></div>
-                <div class="tasks-lane-cards"></div>
+              <div class="teamWorkflowSection team-section">
+                <div class="team-section-header">
+                  <span class="team-section-title">Workflow</span>
+                  <button class="teamWorkflowRefresh small-btn" title="Re-read .claude/skills/orchestrate/SKILL.md">Refresh</button>
+                </div>
+                <div class="teamWorkflowBody team-section-body">(open a folder)</div>
               </div>
-              <div class="tasks-lane" data-status="in-progress">
-                <div class="tasks-lane-header">In Progress <span class="tasks-lane-count">0</span></div>
-                <div class="tasks-lane-cards"></div>
-              </div>
-              <div class="tasks-lane" data-status="testing">
-                <div class="tasks-lane-header">Testing <span class="tasks-lane-count">0</span></div>
-                <div class="tasks-lane-cards"></div>
-              </div>
-              <div class="tasks-lane" data-status="post-processing">
-                <div class="tasks-lane-header">Post-processing <span class="tasks-lane-count">0</span><button class="tasks-lane-add" title="Add a post-processing ticket">+</button></div>
-                <div class="tasks-lane-cards"></div>
-              </div>
-              <div class="tasks-lane" data-status="done">
-                <div class="tasks-lane-header">Done <span class="tasks-lane-count">0</span></div>
-                <div class="tasks-lane-cards"></div>
-              </div>
-              <div class="tasks-lane hidden" data-status="unknown">
-                <div class="tasks-lane-header">Unknown <span class="tasks-lane-count">0</span></div>
-                <div class="tasks-lane-cards"></div>
+              <div class="teamBoardSection team-section">
+                <div class="team-section-header">
+                  <span class="team-section-title">Board</span>
+                  <button class="teamBoardSaveBtn small-btn primary-btn" title="Write the whole team-config.json">Save</button>
+                  <button class="teamBoardRefresh small-btn" title="Re-read tasks/team-config.json">Refresh</button>
+                </div>
+                <div class="teamBoardBody team-section-body">(open a folder)</div>
               </div>
             </div>
           </div>

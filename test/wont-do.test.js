@@ -38,6 +38,10 @@ const indexHtml = fs.readFileSync(INDEX_HTML, 'utf8');
 const stylesSrc = fs.readFileSync(STYLES, 'utf8');
 
 const ticketLanes = require('../lib/ticket-lanes');
+// TASK-102: the modal status <select> options are now built in JS by
+// populateTaskStatusOptions (renderer.js), NOT hardcoded in index.html, so the
+// "Won't do" pseudo-option is asserted via the real JS builder run headless.
+const laneHarness = require('./helpers/task-101-lane-harness');
 
 // --- Extract a top-level `function NAME(...) { ... }` by balanced braces -----
 function extractFunction(src, name) {
@@ -271,8 +275,23 @@ test('TASK-080: a ticket with NO resolution key is unaffected (no spurious key a
   assert.ok(!('resolution' in moved), 'no resolution key introduced');
 });
 
-test('index.html status select offers the fixed "Won\'t do" pseudo-option', () => {
-  assert.match(indexHtml, /<option value="__wont-do__">Won't do<\/option>/);
+test('populateTaskStatusOptions builds the fixed "Won\'t do" pseudo-option (TASK-102: JS, not index.html)', () => {
+  // TASK-102 moved the modal <select> options out of index.html and into the
+  // config-driven JS builder, so index.html ships an EMPTY select. The "Won't
+  // do" resolution pseudo-entry (value __wont-do__) is now appended by
+  // populateTaskStatusOptions — assert it there via the real builder.
+  const document = laneHarness.makeDocument();
+  const mod = laneHarness.loadLaneModule(laneHarness.makeWindow().window, document, console);
+  const sel = document.createElement('select');
+  mod.populateTaskStatusOptions(sel, mod.normalizeTasksColumns(null));
+  const opts = sel.children.map((o) => ({ value: o.value, label: o.textContent }));
+  const wontDo = opts.find((o) => o.value === '__wont-do__');
+  assert.ok(wontDo, '__wont-do__ pseudo-option present in the built select');
+  assert.equal(wontDo.label, "Won't do", 'labelled "Won\'t do"');
+  // It is always last (a resolution pseudo-entry, never a real status).
+  assert.equal(opts[opts.length - 1].value, '__wont-do__', '"Won\'t do" is the final option');
+  // And index.html no longer hardcodes the option (the builder owns it now).
+  assert.ok(!/__wont-do__/.test(indexHtml), 'index.html no longer hardcodes the __wont-do__ option');
 });
 
 test('styles.css strikes through / mutes the won\'t-do card title', () => {
