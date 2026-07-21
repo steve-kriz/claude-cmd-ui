@@ -2288,6 +2288,17 @@ body {
 }
 .install-banner-actions .small-btn { margin-left: 0; }
 
+/* Post-install "restart Claude to register the skill" notice (TASK-131). Reuses
+   the install-banner layout but tinted blue so it reads as an action prompt,
+   not an error. Placed above the board / at the end of a panel body. */
+.skill-restart-notice {
+  background: #0f2233;
+  border-bottom: 1px solid #1c4a6e;
+  color: #9cd2ff;
+}
+.skill-restart-notice .install-banner-text { color: #9cd2ff; }
+.skill-restart-notice .install-banner-text strong { color: #fff; }
+
 .worker-select {
   flex: 0 0 auto;
   min-width: 200px;
@@ -2519,6 +2530,45 @@ body {
 .toolbar-spacer { flex: 1 1 auto; }
 .tasks-status { color: #888; font-size: 11px; }
 
+/* Board search (TASK-132): a compact filter box in the Tasks toolbar, mirroring
+   the Files find-bar input so the two searches look consistent. The clear (×)
+   affordance overlays the right edge of the input and is shown only while the box
+   has text. */
+.tasks-search-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 220px;
+  min-width: 120px;
+}
+.tasks-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: #1e1e1e;
+  color: #ddd;
+  border: 1px solid #3a3a3a;
+  border-radius: 3px;
+  padding: 4px 22px 4px 8px;
+  font-family: Consolas, monospace;
+  font-size: 12px;
+}
+.tasks-search-input:focus { outline: none; border-color: #1177bb; }
+.tasks-search-clear {
+  position: absolute;
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent;
+  border: none;
+  color: #888;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+}
+.tasks-search-clear:hover { color: #ddd; }
+.tasks-search-clear.hidden { display: none; }
+
 .tasks-empty {
   flex: 0 0 auto;
   padding: 14px 12px;
@@ -2527,6 +2577,22 @@ body {
   text-align: center;
 }
 .tasks-empty.hidden { display: none; }
+
+/* Transient board notice (TASK-102): a brief, auto-hidden banner for actions the
+   board refused (e.g. dropping an actively-worked ticket onto a user lane). Uses
+   the warning-amber palette to read as a "blocked" message, distinct from the
+   grey status line. */
+.tasks-notice {
+  flex: 0 0 auto;
+  margin: 0 8px 6px;
+  padding: 7px 10px;
+  border: 1px solid #6b5a1e;
+  background: #2b2411;
+  color: #e5c100;
+  font-size: 12px;
+  border-radius: 4px;
+}
+.tasks-notice.hidden { display: none; }
 .tasks-empty code {
   background: #1e1e1e;
   color: #ddd;
@@ -2575,9 +2641,46 @@ body {
 .tasks-lane[data-status="post-processing"] .tasks-lane-header { border-top-color: #ce9178; }
 .tasks-lane[data-status="done"] .tasks-lane-header { border-top-color: #4ec9b0; }
 .tasks-lane[data-status="unknown"] .tasks-lane-header { border-top-color: #f14c4c; }
+/* User columns from tasks/team-config.json (TASK-101) have no fixed data-status
+   color rule, so they get a neutral default accent. A system lane's own
+   data-status rule above still wins (they are never .user-lane). */
+.tasks-lane.user-lane .tasks-lane-header { border-top-color: #646695; }
 /* Out-of-enum tickets get a dedicated lane rather than being dumped into `todo`.
    It stays hidden until it actually holds a card so the board isn't cluttered. */
 .tasks-lane.hidden { display: none; }
+/* Lane label (TASK-101): truncate very long configured labels rather than let
+   them stretch the lane header. */
+.tasks-lane-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Display-only agent badge on a lane header (TASK-101): shows the column's
+   configured agent. `.missing` (no matching .claude/agents/ definition) renders
+   in a warning style. It never triggers a dispatch. */
+.tasks-lane-agent {
+  flex: 0 0 auto;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 9px;
+  line-height: 15px;
+  max-width: 96px;
+  padding: 0 5px;
+  border: 1px solid #3c3c3c;
+  border-radius: 8px;
+  background: #2d2d30;
+  color: #9cdcfe;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tasks-lane-agent.missing {
+  color: #f14c4c;
+  border-color: #f14c4c;
+  background: #3a1d1d;
+}
 .tasks-lane-count {
   margin-left: auto;
   background: #333;
@@ -2988,6 +3091,52 @@ body {
   line-height: 1.35;
 }
 .newtask-bug-warn.hidden { display: none; }
+/* Add-agent modal (TASK-095). Labeled form rows for creating a new
+   `.claude/agents/<name>.md` subagent definition. Reuses the shared .task-modal
+   shell; these rules style the per-field label/input rows and the slug hint. */
+.addagent-heading {
+  flex: 1 1 auto;
+  font-size: 14px;
+  font-weight: 600;
+  color: #eee;
+}
+.addagent-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.addagent-label {
+  flex: 0 0 90px;
+  padding-top: 6px;
+  font-size: 12px;
+  color: #9a9a9a;
+}
+.addagent-req { color: #ff8a8a; }
+.addagent-name,
+.addagent-tools,
+.addagent-model { flex: 1 1 auto; }
+.addagent-description {
+  flex: 1 1 auto;
+  resize: vertical;
+  background: #1e1e1e;
+  color: #eee;
+  border: 1px solid #555;
+  border-radius: 3px;
+  padding: 6px 8px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.addagent-description:focus { outline: none; border-color: #1177bb; }
+.addagent-hint {
+  font-size: 11px;
+  color: #6e6e6e;
+  margin: -4px 0 2px 100px;
+}
+.addagent-hint code {
+  font-family: Consolas, monospace;
+  color: #9a9a9a;
+}
+.addagent-body { min-height: 160px; }
 /* Bug-report modal (TASK-020). Opened when a `done` card is dragged onto the
    `todo` lane: the user describes the bug, it is appended to the ticket's
    `## Bug Reports` section, then the ticket moves back to `todo` for a re-build. */
@@ -3005,5 +3154,420 @@ body {
 .bugreport-desc code {
   font-family: Consolas, monospace;
   color: #c7c7c7;
+}
+
+/* ───────────────────────────────────────────── Team sub-tab (TASK-091) */
+.team-status { color: #888; font-size: 11px; }
+.team-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+}
+.team-section {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px dashed #333;
+  padding-top: 6px;
+  gap: 6px;
+}
+.team-section:first-of-type { border-top: 0; padding-top: 0; }
+.team-section-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #ccc;
+  padding: 2px 0;
+}
+.team-section-title { color: inherit; }
+.team-section-body {
+  font-size: 12px;
+  color: #888;
+}
+.team-section-header .teamAgentsRefresh { margin-left: auto; }
+.team-section-header .teamWorkflowRefresh { margin-left: auto; }
+
+/* Team tab · Workflow panel (TASK-105) — read-only pipeline view */
+.team-workflow {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.team-workflow-warning {
+  font-size: 11px;
+  color: #f0b060;
+  line-height: 1.4;
+  background: #2a2010;
+  border: 1px solid #5a4520;
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+.team-workflow-empty { font-size: 12px; color: #888; }
+.team-workflow-phase {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid #262626;
+  border-radius: 5px;
+  padding: 8px;
+}
+.team-workflow-phase-title {
+  color: #ddd;
+  font-weight: 600;
+  font-size: 12px;
+  line-height: 1.3;
+}
+.team-workflow-phase-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.team-workflow-meta-label {
+  font-size: 11px;
+  color: #888;
+}
+.team-workflow-agent {
+  background: #1a222e;
+  color: #8fb8ce;
+  border: 1px solid #2f455a;
+}
+.team-workflow-model {
+  background: #1e2a1e;
+  color: #8fce8f;
+  border: 1px solid #2f5a2f;
+}
+.team-workflow-model-fallback {
+  font-size: 11px;
+  color: #888;
+  font-family: Consolas, monospace;
+}
+.team-workflow-fallback {
+  font-size: 11px;
+  color: #f3a8a8;
+  line-height: 1.4;
+  background: #2a1414;
+  border: 1px solid #5a2020;
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+.team-workflow-rule {
+  font-size: 10px;
+  color: #777;
+  line-height: 1.3;
+}
+
+/* Team tab · Workflow panel — per-phase model editor + concurrency (TASK-106) */
+.team-workflow-model-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.team-workflow-model-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.team-workflow-model-edit.hidden { display: none; }
+.team-workflow-model-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: #1a1a1a;
+  color: #ddd;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  padding: 5px 8px;
+  font-size: 12px;
+  font-family: Consolas, monospace;
+}
+.team-workflow-concurrency {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid #262626;
+  border-radius: 5px;
+  padding: 8px;
+}
+.team-workflow-concurrency-select {
+  background: #1a1a1a;
+  color: #ddd;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+/* Team tab · Agents panel (TASK-094) */
+.team-agent {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 0;
+}
+.team-agent + .team-agent { border-top: 1px solid #262626; }
+.team-agent-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.team-agent-name { color: #ddd; font-weight: 600; font-size: 12px; }
+.team-agent-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: Consolas, monospace;
+}
+.team-agent-model { background: #1e2a1e; color: #8fce8f; border: 1px solid #2f5a2f; }
+.team-agent-unparseable { background: #2a1414; color: #f3a8a8; border: 1px solid #5a2020; }
+.team-agent-tools {
+  font-size: 11px;
+  color: #888;
+  font-family: Consolas, monospace;
+}
+.team-agent-desc { display: flex; flex-direction: column; gap: 4px; }
+.team-agent-desc-view {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  color: #aaa;
+  line-height: 1.4;
+}
+.team-agent-desc-view.hidden { display: none; }
+.team-agent-desc-text { flex: 1 1 auto; white-space: pre-wrap; }
+.team-agent-edit { flex: 0 0 auto; }
+.team-agent-desc-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.team-agent-desc-editor.hidden { display: none; }
+.team-agent-desc-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  background: #1a1a1a;
+  color: #ddd;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-family: inherit;
+}
+.team-agent-desc-actions { display: flex; gap: 6px; }
+.team-agent-desc-error {
+  font-size: 11px;
+  color: #f3a8a8;
+  line-height: 1.4;
+  word-break: break-word;
+}
+.team-agent-desc-error.hidden { display: none; }
+
+/* Team tab · Agents panel — structured editor + AI regeneration (TASK-130) */
+.team-agent-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.team-agent-field-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #888;
+}
+.team-agent-field-readonly {
+  font-size: 12px;
+  color: #ccc;
+  font-family: Consolas, monospace;
+  padding: 4px 8px;
+  background: #161616;
+  border: 1px solid #2a2a2a;
+  border-radius: 4px;
+}
+.team-agent-field-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: #1a1a1a;
+  color: #ddd;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-family: inherit;
+}
+.team-agent-body-input { font-family: Consolas, monospace; }
+.team-agent-ai {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  margin-top: 2px;
+  background: #14181e;
+  border: 1px solid #26313f;
+  border-radius: 4px;
+}
+.team-agent-ai-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  background: #1a1a1a;
+  color: #ddd;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-family: inherit;
+}
+.team-agent-ai-actions { display: flex; gap: 6px; }
+.team-agent-ai-note {
+  font-size: 11px;
+  color: #8fce8f;
+  line-height: 1.4;
+}
+.team-agent-ai-note.hidden { display: none; }
+.team-agent-ai-msg {
+  font-size: 11px;
+  color: #f3a8a8;
+  line-height: 1.4;
+  word-break: break-word;
+}
+.team-agent-ai-msg.hidden { display: none; }
+
+/* Team tab · Board panel — column manager (TASK-103) */
+.team-section-header .teamBoardRefresh { margin-left: auto; }
+.team-board-notice {
+  font-size: 11px;
+  color: #f0d089;
+  background: #2a2410;
+  border: 1px solid #5a4d1e;
+  border-radius: 4px;
+  padding: 6px 8px;
+  line-height: 1.4;
+}
+.team-board-help {
+  font-size: 11px;
+  color: #888;
+  line-height: 1.4;
+}
+.team-columns {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.team-column {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid #2a2a2a;
+  border-radius: 5px;
+  padding: 8px;
+  background: #161616;
+}
+.team-column-system { background: #14181c; border-color: #26323a; }
+.team-column-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.team-column-moves { display: flex; gap: 2px; }
+.team-column-move {
+  min-width: 24px;
+  padding: 1px 6px;
+  line-height: 1.2;
+}
+.team-column-move:disabled { opacity: 0.35; cursor: default; }
+.team-column-slug {
+  font-family: Consolas, monospace;
+  font-size: 12px;
+  color: #cdd;
+  font-weight: 600;
+}
+.team-column-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: #1c2a33;
+  color: #7fb8d0;
+  border: 1px solid #2f4d5a;
+  font-family: Consolas, monospace;
+}
+.team-column-remove { margin-left: auto; }
+.team-column-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.team-column-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1 1 160px;
+  min-width: 140px;
+}
+.team-column-field-label {
+  font-size: 10px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.team-column-field input,
+.team-column-field select {
+  box-sizing: border-box;
+  width: 100%;
+  background: #1a1a1a;
+  color: #ddd;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 12px;
+  font-family: inherit;
+}
+.team-column-field input:read-only {
+  color: #999;
+  background: #141414;
+}
+.team-column-agent-warning {
+  font-size: 10px;
+  color: #f0b060;
+  line-height: 1.3;
+}
+.team-add-column {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px dashed #333;
+  border-radius: 5px;
+  padding: 8px;
+  margin-top: 4px;
+}
+.team-add-column-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #ccc;
+}
+.team-add-column-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+}
+.team-add-column-btn { flex: 0 0 auto; }
+.team-add-column-error {
+  font-size: 11px;
+  color: #f3a8a8;
+  line-height: 1.4;
+  word-break: break-word;
+}
+.team-add-column-error.hidden { display: none; }
+.team-board-footer { min-height: 4px; }
+.team-board-dirty {
+  font-size: 11px;
+  color: #f0b060;
 }
 

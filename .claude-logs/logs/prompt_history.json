@@ -128,5 +128,205 @@
     "ts": "2026-07-20T01:31:24.356Z",
     "source": "user",
     "prompt": "test/slackredaction-shapes.test.js at line 38"
+  },
+  {
+    "ts": "2026-07-20T01:59:53.358Z",
+    "source": "queue",
+    "prompt": "/orchestrate plan - start a new tab called team\nin the team tag you can manage the orchistration and agents and kanaban board flows\n- allow me to add agents and edit the description of what they do.\n- allow me to update the orchistration and edit parts of the skills as a workflow type edit\n- allow me to manage the kanban board and add columns and what happens in each column, which agents is working in which column etc"
+  },
+  {
+    "ts": "2026-07-20T03:02:36.788Z",
+    "source": "user",
+    "prompt": "/orchestrate plan - start a new tab called team\nin the team tag you can manage the orchistration and agents and kanaban board flows\n- allow me to add agents and edit the description of what they do.\n- allow me to update the orchistration and edit parts of the skills as a workflow type edit\n- allow me to manage the kanban board and add columns and what happens in each column, which agents is working in which column etc"
+  },
+  {
+    "ts": "2026-07-20T03:10:43.406Z",
+    "source": "user",
+    "prompt": "3"
+  },
+  {
+    "ts": "2026-07-20T03:43:35.127Z",
+    "source": "user",
+    "prompt": "https://medium.com/@steven.krizanovic/the-squad-ide-1b583a6320a4?sharedUserId=steven.krizanovic"
+  },
+  {
+    "ts": "2026-07-20T20:53:04.150Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-20T21:29:29.829Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-20T21:30:08.343Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-20T22:02:12.523Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-20T22:23:40.688Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-20T22:56:45.192Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T02:16:32.307Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T02:48:20.178Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T03:24:00.872Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T04:25:21.588Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T05:28:17.447Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T08:02:26.644Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T08:11:12.813Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T08:11:15.998Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T08:11:19.231Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T08:11:22.430Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T08:11:25.630Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T08:11:37.178Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T08:11:40.361Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T08:11:43.544Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T08:21:15.454Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T08:21:18.720Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T08:21:26.085Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T08:28:37.100Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T08:28:40.299Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T08:28:43.531Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T08:28:46.759Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T08:28:49.782Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T08:30:47.808Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T08:30:51.028Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T08:30:54.222Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T08:30:57.244Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T08:31:00.458Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T08:31:10.265Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T10:15:01.140Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-21T10:19:23.429Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
   }
 ]

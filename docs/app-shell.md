@@ -95,9 +95,11 @@ See [`ipc-bridge.md`](ipc-bridge.md) for the full channel catalogue.
 
 ## Edge cases, limitations & troubleshooting
 
-- **Windows-first.** The app shells out to `cmd.exe`, Git Bash and the AWS CLI
-  at Windows paths; macOS/Linux are not supported even though the Electron
-  lifecycle guards for `darwin` exist.
+- **Cross-platform.** On Windows the panes shell out to `cmd.exe` + Git Bash and
+  the AWS CLI at a fixed Windows path; on macOS/Linux both panes are the user's
+  login shell and `git`/`aws` resolve from `PATH` (Linux is best-effort). The
+  Electron lifecycle already guards for `darwin`, and a Finder-launch `PATH` fix
+  runs at startup. See [`cross-platform.md`](cross-platform.md).
 - **Corrupt `session.json`** is tolerated: `readSession()` catches parse errors
   and returns `{ folders: [] }` (empty state) rather than crashing.
 - **A single window only.** `activate` recreates the window if none exist

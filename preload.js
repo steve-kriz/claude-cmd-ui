@@ -1,6 +1,10 @@
 const { contextBridge, ipcRenderer, clipboard } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
+  // OS platform id (mirrors process.platform) so the renderer can pick
+  // platform-appropriate install commands, download links, and pane copy.
+  platform: process.platform,
+
   pickFolder: () => ipcRenderer.invoke('dialog:pickFolder'),
   setTitle: (title) => ipcRenderer.invoke('window:setTitle', { title }),
 
@@ -48,7 +52,11 @@ contextBridge.exposeInMainWorld('api', {
   fs: {
     readDir: (dirPath) => ipcRenderer.invoke('fs:readDir', { path: dirPath }),
     readFile: (filePath) => ipcRenderer.invoke('fs:readFile', { path: filePath }),
-    writeFile: (filePath, content) => ipcRenderer.invoke('fs:writeFile', { path: filePath, content }),
+    // `opts.exclusive` (TASK-127) is optional and defaults off: absent → the
+    // original default-overwrite write, so all existing callers are unchanged.
+    // When true the main handler uses flag:'wx' (atomic no-overwrite create).
+    writeFile: (filePath, content, opts) =>
+      ipcRenderer.invoke('fs:writeFile', { path: filePath, content, exclusive: !!(opts && opts.exclusive) }),
     mkdir: (dirPath) => ipcRenderer.invoke('fs:mkdir', { path: dirPath }),
     rename: (oldPath, newPath) => ipcRenderer.invoke('fs:rename', { oldPath, newPath }),
     findByExt: (root, ext, excludeDirs) => ipcRenderer.invoke('fs:findByExt', { root, ext, excludeDirs }),
@@ -135,6 +143,15 @@ contextBridge.exposeInMainWorld('api', {
   env: {
     get: (key) => ipcRenderer.invoke('env:get', { key }),
     set: (key, value) => ipcRenderer.invoke('env:set', { key, value })
+  },
+
+  agents: {
+    // TASK-130: ask the main process to regenerate an agent-definition file from
+    // its current text plus a natural-language instruction. Main reads
+    // ANTHROPIC_API_KEY (never returned) and clamps the inputs; the returned
+    // { ok, content, reason } is parsed + validated by the renderer before any
+    // write, and only persisted when the user clicks Save.
+    regenerate: (content, instruction) => ipcRenderer.invoke('agents:regenerate', { content, instruction })
   },
 
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', { url }),

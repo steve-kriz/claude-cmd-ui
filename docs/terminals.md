@@ -2,11 +2,14 @@
 
 ## What it does and why
 
-Each workspace tab embeds real terminals — a `cmd.exe` pane that auto-launches
-the AI coding CLI (`claude`), and a Git Bash pane for ad-hoc shell work. They are
-backed by genuine Windows ConPTY processes (via `@lydell/node-pty`) and rendered
-with xterm.js, so they behave like normal terminals: colours, TUIs, resize,
-copy/paste. A hidden "worker" shell can additionally run `gemini` or `codex`.
+Each workspace tab embeds real terminals — a primary pane that auto-launches the
+AI coding CLI (`claude`), and a second shell pane for ad-hoc work. On Windows the
+primary pane is `cmd.exe` and the second is Git Bash; on macOS/Linux both panes are
+the user's login shell (see [`cross-platform.md`](cross-platform.md)). They are
+backed by genuine PTY processes (via `@lydell/node-pty` — ConPTY on Windows) and
+rendered with xterm.js, so they behave like normal terminals: colours, TUIs,
+resize, copy/paste. A hidden "worker" shell can additionally run `gemini` or
+`codex`.
 
 The point is to drive an interactive agent CLI from inside the app while keeping
 a full shell one tab away.
@@ -16,23 +19,35 @@ a full shell one tab away.
 Spawning lives in [`lib/pty.js`](../lib/pty.js); the process registry and IPC
 wiring live in [`main.js`](../main.js).
 
-- **`spawnShell({ shell, cwd, cols, rows, worker, cliCommand })`** dispatches on
-  `shell`:
-  - `'cmd'` → `spawnCmd` spawns `cmd.exe` (`name: 'xterm-256color'`, default
-    `120x30`).
-  - `'bash'` → `spawnBash` resolves Git Bash from
+- **`spawnShell({ shell, cwd, cols, rows, worker, cliCommand }, deps)`** dispatches
+  on `shell`, and each spawner branches on platform (`deps.platform` defaults to
+  `process.platform`, `deps.pty` defaults to `@lydell/node-pty` — both injectable
+  so tests exercise either platform under `node --test` with no real PTY):
+  - `'cmd'` → `spawnCmd`. **win32:** spawns `cmd.exe` (`name: 'xterm-256color'`,
+    default `120x30`). **macOS/Linux:** routes to `spawnPosix`.
+  - `'bash'` → `spawnBash`. **win32:** resolves Git Bash from
     `C:\Program Files\Git\bin\bash.exe` (or the `(x86)` path) and spawns it
     `--login -i` with `TERM=xterm-256color` and `CHERE_INVOKING=1`.
-  - `'worker'` → `spawnWorker` spawns `cmd.exe` and launches `gemini` or `codex`
-    (from `WORKER_COMMANDS`).
+    **macOS/Linux:** routes to `spawnPosix` — it never probes the Git-for-Windows
+    paths and never sets `CHERE_INVOKING`.
+  - `'worker'` → `spawnWorker`. **win32:** spawns `cmd.exe`; **macOS/Linux:** the
+    POSIX login shell. Either way it launches `gemini` or `codex` (from
+    `WORKER_COMMANDS`).
   - Any other value throws `Unknown shell: <shell>`.
+- **`spawnPosix` / `resolvePosixShell`** (macOS/Linux). `resolvePosixShell(platform,
+  env)` picks the login shell — the trimmed `$SHELL` when set, else `/bin/zsh` on
+  `darwin` and `/bin/bash` elsewhere (never `cmd.exe`) — and `spawnPosix` spawns it
+  `['-l', '-i']` (login, interactive) with `TERM=xterm-256color`. See
+  [`cross-platform.md`](cross-platform.md).
 - **CLI auto-launch.** When `cliCommand` is supplied, the spawner watches the
   PTY output, strips ANSI with `ANSI_REGEX`, and once it detects the shell prompt
-  (`CMD_PROMPT_REGEX` = `C:\…>` for cmd, `BASH_PROMPT_REGEX` = `…$`/`…#` for
-  bash) it writes the command 50 ms later. A fixed fallback fires the command
-  after `CMD_AUTOLAUNCH_FALLBACK_MS` (1500 ms) even if the prompt is masked,
-  because the shell buffers stdin. The launch runs at most once (`launched`
-  guard).
+  it writes the command 50 ms later. Prompt detection uses `CMD_PROMPT_REGEX`
+  (`C:\…>`) for `cmd.exe`, `BASH_PROMPT_REGEX` (`…$`/`…#`) for Git Bash, and
+  `POSIX_PROMPT_REGEX` (`…%` for zsh, `…$`/`…#` for other/root shells) for the
+  POSIX login shell. The line terminator is `'\r'` for `cmd.exe` and `'\n'` for
+  POSIX/bash. A fixed fallback fires the command after
+  `CMD_AUTOLAUNCH_FALLBACK_MS` (1500 ms) even if the prompt is masked, because the
+  shell buffers stdin. The launch runs at most once (`launched` guard).
 - **Process registry.** `main.js` keeps `ptys`, a `Map` of `id → pty`. `pty:spawn`
   kills any existing PTY with the same id, spawns a fresh one, and forwards
   `onData` → `pty:data` and `onExit` → `pty:exit` to the renderer. `pty:write`,
@@ -76,7 +91,9 @@ right-click copies-or-pastes.
 
 - No env vars. Behaviour constants are in `lib/pty.js`:
   `CMD_AUTOLAUNCH_FALLBACK_MS = 1500`, default size `120x30`.
-- Git Bash path candidates are hardcoded (`GIT_BASH_CANDIDATES`).
+- On Windows, the Git Bash path candidates are hardcoded (`GIT_BASH_CANDIDATES`);
+  on macOS/Linux the login shell comes from `$SHELL` (see
+  [`cross-platform.md`](cross-platform.md)).
 - `IDLE_MS = 2500` (renderer) governs the idle/finished transition.
 - The `claude` / `opencode` choice is per-folder (`agent` field in
   `session.json`, see [`app-shell.md`](app-shell.md)).
@@ -96,8 +113,12 @@ right-click copies-or-pastes.
 
 ## Edge cases, limitations & troubleshooting
 
-- **Git Bash missing** → `resolveGitBash()` throws
+- **Git Bash missing (Windows)** → on Windows `resolveGitBash()` throws
   "Git Bash not found. Install Git for Windows." Install Git for Windows to fix.
+  On macOS/Linux this path is never taken — the pane is your login shell.
+- **`$SHELL` points at a missing binary (macOS/Linux)** → the pty backend's spawn
+  error propagates through the existing `pty:spawn` IPC error path; the app adds no
+  special handling for it.
 - **Prompt masked by a TUI** — the fixed 1500 ms fallback still fires the CLI
   command because the shell buffers stdin.
 - **Re-spawning an id** kills the old PTY first, so a tab can safely re-create

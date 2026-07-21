@@ -212,9 +212,12 @@ test('renderer.js mirrors folderMatchesStatus (null target never matches)', () =
 });
 
 test('renderer.js mirrors dedupeByFolder (prefer the folder-matching copy)', () => {
-  assert.match(rendererSrc, /function\s+dedupeTicketsByFolder\(entries\)/);
-  assert.match(rendererSrc, /ticketFolderMatchesStatus\(e\.folder,\s*e\.fm\.status\)/);
-  assert.match(rendererSrc, /!ticketFolderMatchesStatus\(cur\.folder,\s*cur\.fm\.status\)/);
+  // TASK-102: dedupeTicketsByFolder became config-aware — it now takes the
+  // folder's validated user-status set and compares via ticketFolderMatchesStatusWith
+  // so a user-column ticket prefers its tasks/<slug>/ copy just like a system one.
+  assert.match(rendererSrc, /function\s+dedupeTicketsByFolder\(entries,\s*userStatuses\)/);
+  assert.match(rendererSrc, /ticketFolderMatchesStatusWith\(e\.folder,\s*e\.fm\.status,\s*userStatuses\)/);
+  assert.match(rendererSrc, /!ticketFolderMatchesStatusWith\(cur\.folder,\s*cur\.fm\.status,\s*userStatuses\)/);
 });
 
 test('the scanner discovers tickets recursively via fs.findByExt (not readDir)', () => {
@@ -228,7 +231,10 @@ test('the scanner discovers tickets recursively via fs.findByExt (not readDir)',
 
 test('the scanner records each file\'s subfolder and dedupes by folder', () => {
   assert.match(rendererSrc, /const\s+folder\s*=\s*tasksSubfolder\(tasksDir,\s*filePath\)/);
-  assert.match(rendererSrc, /dedupeTicketsByFolder\(candidates\)/);
+  // TASK-102: the poll now passes the folder's validated user-status set so the
+  // dedupe prefers a user-column ticket's tasks/<slug>/ copy.
+  assert.match(rendererSrc,
+    /dedupeTicketsByFolder\(\s*candidates,\s*tasksUserStatusSet\(normalizeTasksColumns\(t\.config\)\)\)/);
 });
 
 test('moveTicketToStatus does a whole-file write THEN an atomic relocate (rename)', () => {
@@ -267,7 +273,11 @@ test('unknown-status tickets are not filed into a status subfolder', () => {
 test('reconciliation only moves files whose folder disagrees with frontmatter status', () => {
   const rc = rendererSrc.slice(rendererSrc.indexOf('async function reconcileTicketFolders'));
   const body = rc.slice(0, rc.indexOf('\n}\n'));
-  assert.match(body, /const\s+target\s*=\s*ticketFolderForStatus\(e\.fm\.status\)/);
+  // TASK-102: reconciliation is config-aware — it derives the folder's validated
+  // user-status set and targets tasks/<slug>/ for user columns; a status whose
+  // column was REMOVED resolves to null and is never moved (left in place).
+  assert.match(body, /const\s+userStatuses\s*=\s*tasksUserStatusSet\(normalizeTasksColumns\(t\.config\)\)/);
+  assert.match(body, /const\s+target\s*=\s*ticketFolderForStatusWith\(e\.fm\.status,\s*userStatuses\)/);
   assert.match(body, /target\s*!=\s*null\s*&&\s*\(e\.folder\s*\|\|\s*''\)\s*!==\s*target/);
   assert.match(body, /relocateTicketFile\(tab,\s*e\.path,\s*e\.file,\s*e\.fm\.status\)/);
 });

@@ -55,7 +55,9 @@ test('renderer SLACK_DEFAULT_COMMANDS carries the tasks command with all TASK-05
 });
 
 test('renderer mirrors formatTasksSummary with a sync note reusing the existing lane mirrors', () => {
-  const body = fnBody(rendererSrc, 'function formatTasksSummary(tickets)');
+  // TASK-104: formatTasksSummary gained an optional `columns` param (config-aware
+  // summaries), so the mirror's signature is now `(tickets, columns)`.
+  const body = fnBody(rendererSrc, 'function formatTasksSummary(tickets, columns)');
   // Empty/null guard + placeholders + sentinel lines are byte-for-byte with lib.
   assert.match(body, /return 'The tasks board is empty\.'/);
   assert.match(body, /\(no id\)/);
@@ -64,13 +66,29 @@ test('renderer mirrors formatTasksSummary with a sync note reusing the existing 
   assert.match(body, /Nothing is being worked on right now\./);
   assert.match(body, /\*Failed testing:\*/);
   // Reuses the EXISTING renderer lane mirrors — not a third copy of the constants.
-  assert.match(body, /TASKS_LANE_STATUSES/);
+  // TASK-122: lane-order derivation moved OUT of the formatTasksSummary body into
+  // the tasksLaneStatusesFor helper (the renderer mirror of laneStatusesFor that
+  // re-injects the six system lanes), so the formatter now REFERENCES that helper
+  // rather than TASKS_LANE_STATUSES directly. Keep the "no third copy of the lane
+  // constants" intent by asserting (a) the formatter routes through the helper and
+  // (b) the helper — not a fresh inline copy — is what carries TASKS_LANE_STATUSES.
+  assert.match(body, /tasksLaneStatusesFor\(/);
   assert.match(body, /TASKS_ACTIVE_STATUSES/);
   assert.match(body, /TASKS_FAILED_STATUS/);
-  assert.match(body, /TASKS_UNKNOWN_STATUS/);
-  // Sync note + adaptation note in the preamble.
-  const idx = rendererSrc.indexOf('function formatTasksSummary(tickets)');
-  const preamble = rendererSrc.slice(idx - 800, idx);
+  const laneHelperBody = fnBody(rendererSrc, 'function tasksLaneStatusesFor(columns)');
+  assert.match(laneHelperBody, /TASKS_LANE_STATUSES/);
+  // TASK-104: the fixed TASKS_UNKNOWN_STATUS sentinel is no longer referenced by
+  // the formatter — unknown routing is now a counts-map fallback (`unknown N`
+  // appended only when > 0). The config-aware `columns` param drives the lane
+  // order/labels (raw slug for system lanes, configured label for user columns).
+  assert.match(body, /unknown \$\{unknown\}/);
+  assert.match(body, /col\.system === true/);
+  // Sync note + adaptation note in the preamble. TASK-122 expanded this preamble
+  // (documenting the tasksLaneStatusesFor re-injection), pushing the sync note
+  // further above the declaration, so widen the lookback window to keep the guard
+  // meaningful rather than accidentally scoped past the note.
+  const idx = rendererSrc.indexOf('function formatTasksSummary(tickets, columns)');
+  const preamble = rendererSrc.slice(idx - 1400, idx);
   assert.match(preamble, /Mirrors formatTasksSummary in lib\/slack-commands\.js; keep in sync/);
   assert.match(preamble, /ADAPTATION/);
 });
@@ -78,7 +96,9 @@ test('renderer mirrors formatTasksSummary with a sync note reusing the existing 
 test('renderer SLACK_COMMAND_HANDLERS.tasks: folder guard, exists guard, force poll, read-after-poll formatter', () => {
   const idx = rendererSrc.indexOf('tasks: async (tab) =>');
   assert.ok(idx !== -1, 'the tasks handler is wired');
-  const block = rendererSrc.slice(idx, idx + 700);
+  // TASK-104: the caller now spans multiple lines (it passes a second `columns`
+  // arg), and the handler carries extra explanatory comments, so widen the slice.
+  const block = rendererSrc.slice(idx, idx + 1100);
   // No-folder guard.
   assert.match(block, /if\s*\(!tab\.folder\)\s*return 'No project folder is open\.'/);
   // Exists guard reads the { ok, exists } shape of window.api.fs.exists.
@@ -87,11 +107,17 @@ test('renderer SLACK_COMMAND_HANDLERS.tasks: folder guard, exists guard, force p
   assert.match(block, /return 'No tasks board found in this project\.'/);
   // Force poll (bypasses the tasks-tab-visible gate) is AWAITED.
   assert.match(block, /await pollTasksOnce\(tab,\s*true\)/);
-  // Reads the Map AFTER the awaited poll, feeding the formatter.
-  assert.match(block, /return formatTasksSummary\(Array\.from\(tab\.tasks\.tickets\.values\(\)\)\)/);
+  // Reads the Map AFTER the awaited poll, feeding the config-aware formatter.
+  // TASK-104: the caller passes a SECOND arg — the normalized columns derived
+  // from the already-loaded board config (tab.tasks.config), NOT re-read from
+  // disk — so user columns appear in the summary in board order.
+  assert.match(
+    block,
+    /return formatTasksSummary\(\s*Array\.from\(tab\.tasks\.tickets\.values\(\)\),\s*normalizeTasksColumns\(tab\.tasks && tab\.tasks\.config\)\)/,
+  );
   // The poll must precede the formatter call in source order (read-after-poll).
   const pollIdx = block.indexOf('await pollTasksOnce(tab, true)');
-  const fmtIdx = block.indexOf('formatTasksSummary(Array.from(tab.tasks.tickets.values())');
+  const fmtIdx = block.indexOf('formatTasksSummary(');
   assert.ok(pollIdx !== -1 && fmtIdx !== -1 && pollIdx < fmtIdx, 'poll before format');
 });
 

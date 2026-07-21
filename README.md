@@ -1,7 +1,7 @@
 # Claude CMD UI
 
-A Windows-first Electron desktop app that wraps an AI coding CLI (`claude`) and a
-Git Bash terminal side-by-side, then layers a full project cockpit around them: a
+A cross-platform Electron desktop app that wraps an AI coding CLI (`claude`) and a
+shell terminal side-by-side, then layers a full project cockpit around them: a
 file explorer with search and inline editing, a Git/GitHub panel, a diff &
 merge-conflict viewer, a test runner, a Slack bridge, a ticket-driven **Tasks
 kanban board** with a multi-agent "orchestrate" build workflow, and a
@@ -12,9 +12,12 @@ watch it work, review the diffs it produces, commit & push, open a PR, run a
 GitHub Action, and (optionally) relay the whole conversation to and from a Slack
 channel — without leaving the app.
 
-> **Platform:** Windows only. It shells out to `cmd.exe`, Git Bash
-> (`C:\Program Files\Git\bin\bash.exe`), and the AWS CLI v2 at a hardcoded path.
-> macOS/Linux are not supported.
+> **Platform:** Runs on Windows and macOS, with Linux as best-effort (expected to
+> work, less tested). On Windows the two panes are `cmd.exe` and Git Bash
+> (`C:\Program Files\Git\bin\bash.exe`) and CLIs live at fixed install paths; on
+> macOS/Linux both panes are your login shell (`$SHELL`, defaulting to zsh on macOS
+> and bash on Linux) and the CLIs (`git`, `aws`) resolve from `PATH`. See
+> [docs/cross-platform.md](docs/cross-platform.md).
 
 **Who it's for:** developers using an agent CLI (primarily Anthropic's `claude`)
 who want a single cockpit for prompting, reviewing, versioning, and shipping.
@@ -33,6 +36,7 @@ who want a single cockpit for prompting, reviewing, versioning, and shipping.
 - [Configuration](#configuration)
 - [Development and testing](#development-and-testing)
 - [Tasks board & the Orchestrate workflow](#tasks-board--the-orchestrate-workflow)
+- [Team tab & dynamic workflow](#team-tab--dynamic-workflow)
 - [Data and files written](#data-and-files-written)
 - [Documentation](#documentation)
 - [Security notes](#security-notes)
@@ -44,8 +48,9 @@ who want a single cockpit for prompting, reviewing, versioning, and shipping.
 
 The app follows the standard Electron split with context isolation enabled: a
 privileged main process, a locked-down preload bridge, and a sandboxed renderer.
-Terminals are real Windows ConPTY processes rendered with
-[xterm.js](https://xtermjs.org/), so the embedded `cmd` and `bash` shells behave
+Terminals are real PTY processes (via
+[`@lydell/node-pty`](https://github.com/lydell/node-pty) — ConPTY on Windows)
+rendered with [xterm.js](https://xtermjs.org/), so the embedded shells behave
 like normal terminals (colours, TUIs, resize, copy/paste). Every feature is one
 tab of a single window; open multiple project folders and each gets its own tab
 with its own pair of terminals and its own state.
@@ -133,10 +138,10 @@ usage, and API/IPC references.
 | Tool | Why | Notes |
 |------|-----|-------|
 | **Node.js + npm** | Build/run the app | Ships Electron `^34.5.8` |
-| **Git for Windows** | Git Bash terminal + all Git operations | Expected at `C:\Program Files\Git\bin\bash.exe` |
+| **Git** | Git Bash pane (Windows) + all Git operations | **Windows:** Git for Windows, Git Bash expected at `C:\Program Files\Git\bin\bash.exe`. **macOS/Linux:** `git` on `PATH` (the panes use your login shell, not Git Bash) |
 | **`claude` CLI** | The AI agent that runs in the cmd pane | Optional — the app offers to install it if missing |
 | **GitHub CLI (`gh`)** | Publish, PRs, Actions | Optional — only the Git tab needs it |
-| **AWS CLI v2** | SSO account/role switching | Expected at `C:\Program Files\Amazon\AWSCLIV2\aws.exe` |
+| **AWS CLI v2** | SSO account/role switching | **Windows:** fixed path `C:\Program Files\Amazon\AWSCLIV2\aws.exe`. **macOS/Linux:** `aws` resolved from `PATH` |
 | **`gemini` / `codex`** | Optional worker CLIs | Only if you use the worker shell |
 
 Runtime dependencies (from [`package.json`](package.json)): `@lydell/node-pty`
@@ -156,8 +161,14 @@ npm install
 ## Quick start
 
 ```bash
-npm run start      # launches via electron-forge (run.bat does the same)
+npm run start      # cross-platform entry point (electron-forge start)
 ```
+
+`npm run start` is the supported entry point on every platform. On Windows,
+`run.bat` is a convenience wrapper that runs the same command. On macOS, launching
+from Finder inherits a minimal `PATH`, so the app augments `PATH` at startup to
+find Homebrew/local CLIs (`git`, `claude`, `gh`, `aws`, `opencode`) — see
+[docs/cross-platform.md](docs/cross-platform.md).
 
 On first launch you'll see an empty state — open a project folder from the UI.
 Open folders are remembered and reopened on the next launch. DevTools open
@@ -261,6 +272,51 @@ one ticket in its own isolated branch/worktree, the **tester** writes e2e cucumb
 board shows per-ticket **build time**, **cost**, and estimated **token** usage,
 and every re-run appends to a durable run log.
 
+## Team tab & dynamic workflow
+
+The **Team** tab is a per-project control surface for the orchestrate workflow:
+where the Tasks board shows work *moving*, the Team tab lets you shape the machine
+that moves it. It has three panels, plus a set of engine changes that make the
+board's statuses configurable and the shell/CLI layer cross-platform. Full details
+are in the linked pages below.
+
+- **Agents panel + Add agent** — list the project's `.claude/agents/*.md`
+  subagents (name / model / tools / description), edit a description in place, and
+  create a new agent from a form. Backed by the byte-identical round-trip parser
+  in [`lib/agent-files.js`](lib/agent-files.js). Adding an agent does not change
+  orchestrate dispatch (the phase→agent mapping is fixed). See
+  [docs/agent-management.md](docs/agent-management.md).
+- **Workflow panel** — a **read-only** view of the four ordered phases
+  (plan → build → test → review) parsed from `SKILL.md`
+  ([`lib/skill-workflow.js`](lib/skill-workflow.js)), with per-phase dispatched
+  agent, missing-agent fallback warnings, the planning-model directive, a guided
+  per-phase **agent model** editor, and the **build concurrency default**
+  (`skill.concurrencyDefault`). It never writes `SKILL.md`. See
+  [docs/workflow-settings.md](docs/workflow-settings.md).
+- **Board panel + dynamic statuses** — a column manager over
+  `tasks/team-config.json` ([`lib/team-config.js`](lib/team-config.js)): add,
+  reorder, relabel, and remove **user columns** while the six **system** lanes stay
+  fixed and immutable. The Tasks board, the folder-per-status layout, the ticket
+  status dropdown, and the Slack `tasks` summary all become config-aware
+  (`laneStatusesFor`/`laneForStatusFor` in
+  [`lib/ticket-lanes.js`](lib/ticket-lanes.js), `*With` helpers in
+  [`lib/ticket-folders.js`](lib/ticket-folders.js)), and the build swarm provably
+  never touches user statuses (`SWARM_STATUSES`/`isUserStatus` in
+  [`lib/ticket-queue.js`](lib/ticket-queue.js)). With no config file the board is
+  byte-identical to the historic six lanes. See
+  [docs/dynamic-statuses.md](docs/dynamic-statuses.md).
+- **Assets mirror auto-sync** — writes to `.claude/agents/` and
+  `.claude/skills/orchestrate/` are mirrored to the byte-identical `assets/` copy
+  the installer ships, keeping the drift-guard tests green
+  ([`lib/assets-mirror.js`](lib/assets-mirror.js)). Only pre-existing mirror files
+  are synced (new files are never mirrored). See
+  [docs/assets-mirror.md](docs/assets-mirror.md).
+- **Cross-platform (macOS / Linux) shell support** — the PTY/CLI layer is now
+  platform-aware: POSIX login-shell panes ([`lib/pty.js`](lib/pty.js)), an
+  `aws`-from-`PATH` lookup off Windows ([`lib/aws.js`](lib/aws.js)), and a macOS
+  GUI-launch `PATH` fix (`augmentDarwinPath` in [`main.js`](main.js)). Windows
+  behaviour is unchanged. See [docs/cross-platform.md](docs/cross-platform.md).
+
 ## Data and files written
 
 | Location | What | Written by |
@@ -269,6 +325,8 @@ and every re-run appends to a durable run log.
 | `<userData>/status.json` | Active AWS env/role/expiration | `lib/aws.js` |
 | `<project>/.claude-logs/logs/prompt_history.json` | Per-project prompt history | app |
 | `<project>/tasks/<status>/TASK-*.md` | Ticket files (one subfolder per status) | orchestrate workflow |
+| `<project>/tasks/team-config.json` | Board columns/statuses + `skill.concurrencyDefault` | Team tab (Board / Workflow panels) |
+| `<project>/.claude/agents/<name>.md` | Subagent definitions (mirrored to `assets/agents/` when a copy exists) | Team tab (Agents panel) |
 | `~/.aws/config` | `[sso-session claude-cmd-ui]` + a `[profile sso-<account>]` per account | `lib/aws.js` |
 | `~/.aws/credentials` | Rewrites the chosen profile and `[default]` (backed up once first) | `lib/aws.js` |
 | `<project>/.gitignore` | Appended when you use the ignore menu | app |
@@ -294,6 +352,12 @@ The full per-feature documentation set lives in [`docs/`](docs):
 | [docs/slack-bridge.md](docs/slack-bridge.md) | Slack Web API client, OAuth, two-way thread proxy |
 | [docs/slack-integration.md](docs/slack-integration.md) | Slack thread commands, continuous output flushing, redaction & defang |
 | [docs/orchestrate-workflow.md](docs/orchestrate-workflow.md) | Tasks board, ticket contract, build swarm |
+| [docs/team-tab.md](docs/team-tab.md) | The Team tab overview and its three panels |
+| [docs/agent-management.md](docs/agent-management.md) | Agents panel (list/edit descriptions) and Add agent |
+| [docs/workflow-settings.md](docs/workflow-settings.md) | Read-only workflow pipeline, per-phase model editor, build-concurrency default |
+| [docs/dynamic-statuses.md](docs/dynamic-statuses.md) | `team-config.json` engine, custom board columns, config-aware lanes/folders/summaries |
+| [docs/assets-mirror.md](docs/assets-mirror.md) | `.claude/` ↔ `assets/` mirror auto-sync on write |
+| [docs/cross-platform.md](docs/cross-platform.md) | macOS/Linux shell + CLI support (`pty.js`, `aws.js`, macOS PATH fix) |
 | [docs/ticket-archiving.md](docs/ticket-archiving.md) | Stale-done card archiving into the Done-lane "Archived (N)" expander |
 | [docs/ba-planner-clarifying-questions.md](docs/ba-planner-clarifying-questions.md) | Phase-1 BA clarifying questions and answer-before-planning-completes flow |
 | [docs/ticket-cost.md](docs/ticket-cost.md) | Per-activity ticket cost log (`activities`) and the modal cost view |
@@ -305,8 +369,9 @@ The full per-feature documentation set lives in [`docs/`](docs):
 
 This is an internal tool with several sharp edges worth calling out:
 
-- **Hardcoded paths:** the AWS CLI, Git Bash, SSO region, and session name are
-  baked into `lib/aws.js` / `lib/pty.js`.
+- **Hardcoded paths (Windows):** on Windows the AWS CLI and Git Bash install paths,
+  plus the SSO region and session name, are baked into `lib/aws.js` / `lib/pty.js`;
+  on macOS/Linux the AWS CLI and the shell are resolved from `PATH` / `$SHELL`.
 - **Credential rewriting:** the AWS switcher overwrites your `~/.aws/credentials`
   `[default]` (and chosen) profile. A one-time backup
   (`credentials.bak.<timestamp>`) is created before the first rewrite.
@@ -355,7 +420,7 @@ claude-cmd-ui/
 ├── lambda/
 │   └── prompt-logs/         # Optional CloudWatch-backed prompt log store
 ├── test/                    # node --test suites
-├── run.bat                  # Convenience launcher (npm run start)
+├── run.bat                  # Windows convenience launcher (npm run start)
 └── package.json
 ```
 
