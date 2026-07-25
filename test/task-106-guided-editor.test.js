@@ -26,9 +26,25 @@ const REPO = path.join(__dirname, '..');
 const rendererSrc = fs.readFileSync(path.join(REPO, 'renderer', 'renderer.js'), 'utf8');
 const ASSETS_AGENTS = path.join(REPO, 'assets', 'agents');
 
-const FABLE = 'claude-fable-5';
-const OPUS = 'claude-opus-4-8';
+const OPUS = 'claude-opus-4-8';    // ba.md + tech-lead.md pin the premium tier
+const SONNET = 'claude-sonnet-5';  // coder.md + tester.md pin the swarm default
+const FABLE = 'claude-fable-5';    // still a valid model id; used as a generic sample
 const AGENT_FILES = ['ba.md', 'coder.md', 'tester.md', 'tech-lead.md'];
+
+// A synthetic read-only agent def that declares NO `model:` key — used to
+// exercise the serializer's "insert a model key in canonical position" path now
+// that every bundled orchestrate agent pins a model in its frontmatter.
+const NO_MODEL_AGENT = [
+  '---',
+  'name: orchestrate-sample',
+  'description: >-',
+  '  A sample read-only agent used as a fixture; it declares no model key.',
+  'tools: Read, Grep, Glob',
+  '---',
+  '',
+  'Sample agent body.',
+  '',
+].join('\n');
 
 function extractFn(src, name) {
   let start = src.indexOf('function ' + name + '(');
@@ -105,11 +121,11 @@ function stripModelLine(content, model) {
 // ---------------------------------------------------------------------------
 
 test('unit: serializeAgentModel re-emits ba.md byte-identically when the model is unchanged', () => {
-  // ba.md is the one bundled agent that declares a model (claude-fable-5).
+  // ba.md pins the premium planning tier (claude-opus-4-8).
   const orig = readAgent('ba.md');
   const parsed = mod.parseAgentFileRenderer(orig);
-  assert.equal(parsed.fm.model, FABLE, 'fixture precondition: ba.md declares claude-fable-5');
-  assert.equal(mod.serializeAgentModel(parsed, FABLE), orig,
+  assert.equal(parsed.fm.model, OPUS, 'fixture precondition: ba.md declares claude-opus-4-8');
+  assert.equal(mod.serializeAgentModel(parsed, OPUS), orig,
     'passing the unchanged model re-emits the file byte-for-byte');
 });
 
@@ -133,30 +149,32 @@ test('unit: serializeAgentModel changes ONLY the model line on all four bundled 
 });
 
 test('unit: serializeAgentModel rewrites only the model VALUE for an agent that already has the key', () => {
-  const orig = readAgent('ba.md');
+  const orig = readAgent('ba.md'); // declares claude-opus-4-8
   const parsed = mod.parseAgentFileRenderer(orig);
   const eol = eolOf(orig);
-  const out = mod.serializeAgentModel(parsed, OPUS);
-  const expected = orig.replace('model: ' + FABLE + eol, 'model: ' + OPUS + eol);
+  const out = mod.serializeAgentModel(parsed, SONNET);
+  const expected = orig.replace('model: ' + OPUS + eol, 'model: ' + SONNET + eol);
   assert.equal(out, expected, 'the model line is rewritten in place; nothing else moves');
 });
 
 test('unit: serializeAgentModel INSERTS a model key in canonical position (after tools) for agents lacking one', () => {
-  // coder / tester / tech-lead ship with name→description→tools and NO model.
-  for (const name of ['coder.md', 'tester.md', 'tech-lead.md']) {
-    const orig = readAgent(name);
+  // Every bundled orchestrate agent now pins a model, so the "insert where none
+  // exists" path is exercised with a synthetic no-model fixture (name → description
+  // → tools, no model key). Both LF and CRLF are covered.
+  for (const eolLabel of ['LF', 'CRLF']) {
+    const orig = eolLabel === 'CRLF' ? NO_MODEL_AGENT.replace(/\n/g, '\r\n') : NO_MODEL_AGENT;
     const parsed = mod.parseAgentFileRenderer(orig);
-    assert.equal(parsed.fm.model, undefined, `${name} precondition: no model key`);
+    assert.equal(parsed.fm.model, undefined, `${eolLabel} precondition: no model key`);
     const out = mod.serializeAgentModel(parsed, OPUS);
     const lines = out.split(eolOf(out));
     const modelIdx = lines.indexOf('model: ' + OPUS);
-    assert.ok(modelIdx !== -1, `${name}: a model line was inserted`);
+    assert.ok(modelIdx !== -1, `${eolLabel}: a model line was inserted`);
     // Canonical position: immediately after the `tools:` line, before the closing
     // frontmatter fence (name → description → tools → model order).
-    assert.match(lines[modelIdx - 1], /^tools:/, `${name}: model inserted right after tools`);
-    assert.equal(lines[modelIdx + 1], '---', `${name}: model is the last frontmatter key`);
+    assert.match(lines[modelIdx - 1], /^tools:/, `${eolLabel}: model inserted right after tools`);
+    assert.equal(lines[modelIdx + 1], '---', `${eolLabel}: model is the last frontmatter key`);
     // And stripping the inserted line restores the original file exactly.
-    assert.equal(stripModelLine(out, OPUS), orig, `${name}: insertion is the only change`);
+    assert.equal(stripModelLine(out, OPUS), orig, `${eolLabel}: insertion is the only change`);
   }
 });
 

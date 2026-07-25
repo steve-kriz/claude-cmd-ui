@@ -56,16 +56,20 @@ reconciled (moved). Unknown statuses own no folder and are left in place.
 
 - **business-analyst** (`orchestrate-ba`, read/search only) — turns a feature
   request into small, independently testable tickets with acceptance criteria and
-  Gherkin. The planning phase is dispatched on **Fable 5** (`claude-fable-5`) when
-  available, otherwise **Opus 4.8** (`claude-opus-4-8`); the preferred model is
-  declared on the `orchestrate-ba` agent frontmatter (`model:`) and the fallback
-  is described in the skill's Phase 1 dispatch text.
+  Gherkin. Runs on the premium **Opus 4.8** (`claude-opus-4-8`) tier, falling back
+  to the default **Sonnet 5** (`claude-sonnet-5`) if it is unavailable; the model
+  is pinned on the `orchestrate-ba` agent frontmatter (`model:`) and the routing
+  is described in the skill's "Model routing" section.
 - **coder** (`orchestrate-coder`) — implements one ticket to its acceptance
   criteria inside that ticket's isolated branch/worktree; does not write tests.
+  Runs on the default **Sonnet 5** (`claude-sonnet-5`).
 - **tester** (`orchestrate-tester`) — writes e2e cucumber + unit tests, mocks all
-  DB calls, runs the suite, reports pass/fail.
+  DB calls, runs the suite, reports pass/fail. Runs on the default **Sonnet 5**
+  (`claude-sonnet-5`).
 - **tech-lead** (`orchestrate-tech-lead`, read/search only) — reviews a passed
-  ticket before done; turns issues into new follow-up fix tickets. For every
+  ticket before done; turns issues into new follow-up fix tickets. Runs on the
+  premium **Opus 4.8** (`claude-opus-4-8`) tier (the thorough final review, like
+  planning, justifies the premium tier). For every
   finding the reviewer also reports a short **"impact if not fixed"** statement
   (the concrete consequence of leaving it unbuilt). Each follow-up fix ticket the
   orchestrator creates carries a `review-of: <reviewed ticket id>` frontmatter key
@@ -76,6 +80,22 @@ reconciled (moved). Unknown statuses own no folder and are left in place.
 
 If a named agent definition is missing at dispatch, `resolveAgentType` falls back
 to `general-purpose` and reports it rather than aborting.
+
+**Cost routing, distilled returns & prompt caching.** The swarm is tuned for cost.
+Token spend in a swarm is dominated by *context, not output*, so the three levers
+are: (1) **model tiering** — the default is `claude-sonnet-5` and only the
+hard-reasoning phases (BA planning, tech-lead review) use the premium
+`claude-opus-4-8`; (2) **distilled returns** — every sub-agent returns a compact
+summary (changed files + one-paragraph summary, pass/fail + failing output, or
+findings), and the orchestrator works only from that summary and never inherits a
+sub-agent's raw context; and (3) **prompt caching** — cached input tokens cost
+~1/10 of fresh ones, so stable content goes first and volatile content last: the
+byte-stable agent system prompts stay cache-warm across every dispatch, each
+dispatch prompt is a fixed preamble with the volatile ticket text appended last,
+and agents read only the specific files the ticket names rather than re-exploring.
+The detailed state lives in the ticket files and the code, which the next agent
+reads directly. See the skill's "Model routing", "Distilled returns", and "Prompt
+caching" subsections.
 
 **Concurrency, claims & isolation** ([`lib/ticket-queue.js`](../lib/ticket-queue.js)).
 The build loop runs several tickets at once up to a bounded limit

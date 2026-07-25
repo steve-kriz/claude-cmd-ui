@@ -1,14 +1,17 @@
 'use strict';
 
 // ===========================================================================
-// TASK-051 — unit tests: planning phase runs on Fable 5 with an Opus 4.8 fallback
+// TASK-051 — unit tests: cost-optimised model routing for the orchestrate swarm.
 //
-// Fine-grained assertions over the real instruction files (SKILL.md + ba.md, in
+// The swarm defaults every agent to `claude-sonnet-5` and routes only the two
+// hard-reasoning phases — the business analyst (Phase 1) and the tech lead /
+// reviewer (Phase 4) — to the premium `claude-opus-4-8` tier. Fine-grained
+// assertions over the real instruction files (SKILL.md + the four agent defs, in
 // both the assets/ canonical and .claude/ project copies): directive presence,
-// exact model ids, byte-identity via Buffer.equals, ba.md frontmatter model key
-// with unchanged name/tools, Phase-1-only scope, and no model key on the other
-// agent defs. No DB / network / Electron — pure file reads. The two edge cases
-// are simulated with IN-MEMORY mutation only.
+// exact model ids, byte-identity via Buffer.equals, per-agent frontmatter model
+// keys with unchanged name/tools, the "all ids live before Phase 2" scope, and
+// the per-agent pins. No DB / network / Electron — pure file reads. The edge
+// cases are simulated with IN-MEMORY mutation only.
 // ===========================================================================
 
 const { test } = require('node:test');
@@ -22,8 +25,8 @@ const PROJECT_SKILL = path.join(ROOT, '.claude', 'skills', 'orchestrate', 'SKILL
 const ASSETS_AGENTS = path.join(ROOT, 'assets', 'agents');
 const PROJECT_AGENTS = path.join(ROOT, '.claude', 'agents');
 
-const FABLE = 'claude-fable-5';
-const OPUS = 'claude-opus-4-8';
+const SONNET = 'claude-sonnet-5'; // the swarm default
+const OPUS = 'claude-opus-4-8';   // the premium tier (BA + tech-lead)
 
 function readFileLF(p) {
   return fs.readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
@@ -72,48 +75,56 @@ const skillProjectSrc = readFileLF(PROJECT_SKILL);
 
 // --- SKILL.md: exact model ids present in both copies ----------------------
 
-test('unit: both SKILL.md copies contain the exact id claude-fable-5', () => {
-  assert.ok(skillAssetsSrc.includes(FABLE), 'assets copy names claude-fable-5');
-  assert.ok(skillProjectSrc.includes(FABLE), '.claude copy names claude-fable-5');
+test('unit: both SKILL.md copies contain the exact id claude-sonnet-5 (the swarm default)', () => {
+  assert.ok(skillAssetsSrc.includes(SONNET), 'assets copy names claude-sonnet-5');
+  assert.ok(skillProjectSrc.includes(SONNET), '.claude copy names claude-sonnet-5');
 });
 
-test('unit: both SKILL.md copies contain the exact id claude-opus-4-8', () => {
+test('unit: both SKILL.md copies contain the exact id claude-opus-4-8 (the premium tier)', () => {
   assert.ok(skillAssetsSrc.includes(OPUS), 'assets copy names claude-opus-4-8');
   assert.ok(skillProjectSrc.includes(OPUS), '.claude copy names claude-opus-4-8');
 });
 
-test('unit: neither copy contains a common typo of the model ids', () => {
+test('unit: neither copy contains a common typo of the model ids, nor the retired claude-fable-5 pin', () => {
   for (const src of [skillAssetsSrc, skillProjectSrc]) {
-    assert.ok(!src.includes('claude-fabel-5'), 'no claude-fabel-5 typo');
+    assert.ok(!src.includes('claude-sonet-5'), 'no claude-sonet-5 typo');
     assert.ok(!src.includes('claude-opus-4.8'), 'no dotted claude-opus-4.8 variant');
+    // The BA/planning model was retired from Fable 5 to Opus 4.8; no stale pin.
+    assert.ok(!src.includes('claude-fable-5'), 'no retired claude-fable-5 planning pin');
   }
 });
 
-// --- SKILL.md: explicit preferred + fallback wording -----------------------
+// --- SKILL.md: explicit default + premium-tier routing wording -------------
 
-test('unit: SKILL Phase-1 dispatch bullet has explicit "when available ... otherwise fall back" wording', () => {
+test('unit: SKILL Model-routing names claude-sonnet-5 as the default model', () => {
   for (const src of [skillAssetsSrc, skillProjectSrc]) {
     assert.match(
       src,
-      /Dispatch this planning subagent on `claude-fable-5` when\s+available, otherwise fall back to `claude-opus-4-8`/,
-      'preferred-then-fallback sentence with both exact ids',
+      /Default model: `claude-sonnet-5`/,
+      'states the swarm default is claude-sonnet-5',
     );
   }
 });
 
-test('unit: SKILL Phase-1 launch step repeats "dispatched on ... when available, otherwise ..."', () => {
+test('unit: SKILL Model-routing reserves claude-opus-4-8 for planning + review only', () => {
   for (const src of [skillAssetsSrc, skillProjectSrc]) {
     assert.match(
       src,
-      /dispatched on `claude-fable-5` when available,\s+otherwise `claude-opus-4-8`/,
-      'launch-step sentence with both exact ids and otherwise wording',
+      /Premium tier `claude-opus-4-8` for planning and review only/,
+      'premium tier is claude-opus-4-8 for BA + tech-lead only',
+    );
+    // The BA degrades to the default when the premium tier is unavailable.
+    assert.match(
+      src,
+      /BA falls back to\s+the default `claude-sonnet-5` only if `claude-opus-4-8` is unavailable/,
+      'BA falls back to the default claude-sonnet-5',
     );
   }
 });
 
-test('unit: the directive is explicitly scoped to Phase 1 planning only', () => {
+test('unit: SKILL Model-routing lives in the Agent-dispatch section (a "### Model routing" heading)', () => {
   for (const src of [skillAssetsSrc, skillProjectSrc]) {
-    assert.match(src, /applies to Phase 1 planning only/);
+    assert.match(src, /### Model routing/, 'has a Model routing subsection');
   }
 });
 
@@ -125,15 +136,15 @@ test('unit: the two SKILL.md copies are byte-identical (Buffer.equals)', () => {
   assert.ok(a.equals(b), 'SKILL.md copies byte-for-byte identical');
 });
 
-// --- SKILL.md: Phase-1-only scope ------------------------------------------
+// --- SKILL.md: all model ids live before the Phase 2 heading ----------------
 
 test('unit: model ids appear only before the "## Phase 2 — Build" heading', () => {
   for (const src of [skillAssetsSrc, skillProjectSrc]) {
     const phase2Idx = src.indexOf('## Phase 2 — Build');
     assert.ok(phase2Idx !== -1, 'Phase 2 heading present');
-    // First and last occurrences both precede Phase 2.
-    assert.ok(src.indexOf(FABLE) !== -1 && src.lastIndexOf(FABLE) < phase2Idx,
-      'all claude-fable-5 mentions precede Phase 2');
+    // Every id mention precedes Phase 2 (the routing directive is stated once).
+    assert.ok(src.indexOf(SONNET) !== -1 && src.lastIndexOf(SONNET) < phase2Idx,
+      'all claude-sonnet-5 mentions precede Phase 2');
     assert.ok(src.indexOf(OPUS) !== -1 && src.lastIndexOf(OPUS) < phase2Idx,
       'all claude-opus-4-8 mentions precede Phase 2');
   }
@@ -151,56 +162,83 @@ test('unit: Phase 2, 3 and 4 sections each contain neither model id', () => {
       'Phase 4': src.slice(p4),
     };
     for (const [label, text] of Object.entries(sections)) {
-      assert.ok(!text.includes(FABLE), `${label} does not name ${FABLE}`);
+      assert.ok(!text.includes(SONNET), `${label} does not name ${SONNET}`);
       assert.ok(!text.includes(OPUS), `${label} does not name ${OPUS}`);
     }
   }
 });
 
-// --- ba.md frontmatter ------------------------------------------------------
+// --- SKILL.md: distilled-returns cost lever --------------------------------
 
-for (const [label, dir] of [['assets', ASSETS_AGENTS], ['.claude', PROJECT_AGENTS]]) {
-  test(`unit: ${label}/agents/ba.md declares model: claude-fable-5`, () => {
-    const { fm } = parseAgentFrontmatter(readFileLF(path.join(dir, 'ba.md')));
-    assert.equal(fm.model, FABLE);
-  });
-
-  test(`unit: ${label}/agents/ba.md keeps name orchestrate-ba and tools Read, Grep, Glob unchanged`, () => {
-    const { fm } = parseAgentFrontmatter(readFileLF(path.join(dir, 'ba.md')));
-    assert.equal(fm.name, 'orchestrate-ba');
-    assert.deepEqual(parseTools(fm.tools), ['Read', 'Grep', 'Glob']);
-    assert.ok(typeof fm.description === 'string' && fm.description.length > 0, 'description still present');
-    for (const forbidden of ['Edit', 'Write', 'Bash']) {
-      assert.ok(!parseTools(fm.tools).includes(forbidden), `ba.md has no ${forbidden}`);
-    }
-  });
-}
-
-test('unit: ba.md frontmatter still parses cleanly (valid frontmatter block)', () => {
-  for (const dir of [ASSETS_AGENTS, PROJECT_AGENTS]) {
-    const parsed = parseAgentFrontmatter(readFileLF(path.join(dir, 'ba.md')));
-    assert.ok(parsed && parsed.fm, 'ba.md parses to a frontmatter object');
+test('unit: SKILL states the distilled-returns rule (orchestrator never inherits raw sub-agent context)', () => {
+  for (const src of [skillAssetsSrc, skillProjectSrc]) {
+    assert.match(src, /Distilled returns/, 'has a Distilled returns subsection');
+    assert.match(src, /never inherit(s|ing)? a sub-agent's raw context/i,
+      'states the orchestrator never inherits raw sub-agent context');
   }
 });
 
-// --- ba.md byte-identity ----------------------------------------------------
+// --- agent frontmatter: per-role model pins --------------------------------
 
-test('unit: the two ba.md copies are byte-identical (Buffer.equals)', () => {
-  const a = fs.readFileSync(path.join(ASSETS_AGENTS, 'ba.md'));
-  const b = fs.readFileSync(path.join(PROJECT_AGENTS, 'ba.md'));
-  assert.ok(a.equals(b), 'ba.md copies byte-for-byte identical');
+const AGENT_MODEL = {
+  'ba.md': { name: 'orchestrate-ba', model: OPUS, tools: ['Read', 'Grep', 'Glob'] },
+  'tech-lead.md': { name: 'orchestrate-tech-lead', model: OPUS, tools: ['Read', 'Grep', 'Glob'] },
+  'coder.md': { name: 'orchestrate-coder', model: SONNET, tools: ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash'] },
+  'tester.md': { name: 'orchestrate-tester', model: SONNET, tools: ['Read', 'Grep', 'Glob', 'Write', 'Edit', 'Bash'] },
+};
+
+for (const [label, dir] of [['assets', ASSETS_AGENTS], ['.claude', PROJECT_AGENTS]]) {
+  for (const [file, exp] of Object.entries(AGENT_MODEL)) {
+    test(`unit: ${label}/agents/${file} declares model: ${exp.model}`, () => {
+      const { fm } = parseAgentFrontmatter(readFileLF(path.join(dir, file)));
+      assert.equal(fm.model, exp.model);
+    });
+
+    test(`unit: ${label}/agents/${file} keeps name ${exp.name} and its tools unchanged`, () => {
+      const { fm } = parseAgentFrontmatter(readFileLF(path.join(dir, file)));
+      assert.equal(fm.name, exp.name);
+      assert.deepEqual(parseTools(fm.tools), exp.tools);
+      assert.ok(typeof fm.description === 'string' && fm.description.length > 0, 'description still present');
+    });
+  }
+}
+
+test('unit: the BA and tech-lead are pinned to the premium tier; the coder and tester to the default', () => {
+  for (const dir of [ASSETS_AGENTS, PROJECT_AGENTS]) {
+    assert.equal(parseAgentFrontmatter(readFileLF(path.join(dir, 'ba.md'))).fm.model, OPUS);
+    assert.equal(parseAgentFrontmatter(readFileLF(path.join(dir, 'tech-lead.md'))).fm.model, OPUS);
+    assert.equal(parseAgentFrontmatter(readFileLF(path.join(dir, 'coder.md'))).fm.model, SONNET);
+    assert.equal(parseAgentFrontmatter(readFileLF(path.join(dir, 'tester.md'))).fm.model, SONNET);
+  }
 });
 
-// --- other agent defs carry NO model key -----------------------------------
-
-for (const f of ['coder.md', 'tester.md', 'tech-lead.md']) {
-  test(`unit: ${f} declares no model key (in both copies)`, () => {
-    for (const dir of [ASSETS_AGENTS, PROJECT_AGENTS]) {
+test('unit: every agent def now carries a model key (no agent is left on the ambient default)', () => {
+  for (const dir of [ASSETS_AGENTS, PROJECT_AGENTS]) {
+    for (const f of Object.keys(AGENT_MODEL)) {
       const { fm } = parseAgentFrontmatter(readFileLF(path.join(dir, f)));
-      assert.equal(fm.model, undefined, `${f} has no model key`);
+      assert.ok(fm.model === OPUS || fm.model === SONNET, `${f} pins a known tier`);
     }
-  });
-}
+  }
+});
+
+// --- agent frontmatter: still parses + byte-identical -----------------------
+
+test('unit: each agent def frontmatter still parses cleanly (valid frontmatter block)', () => {
+  for (const dir of [ASSETS_AGENTS, PROJECT_AGENTS]) {
+    for (const f of Object.keys(AGENT_MODEL)) {
+      const parsed = parseAgentFrontmatter(readFileLF(path.join(dir, f)));
+      assert.ok(parsed && parsed.fm, `${f} parses to a frontmatter object`);
+    }
+  }
+});
+
+test('unit: each agent def copy is byte-identical (Buffer.equals)', () => {
+  for (const f of Object.keys(AGENT_MODEL)) {
+    const a = fs.readFileSync(path.join(ASSETS_AGENTS, f));
+    const b = fs.readFileSync(path.join(PROJECT_AGENTS, f));
+    assert.ok(a.equals(b), `${f} copies byte-for-byte identical`);
+  }
+});
 
 // --- FAILURE/edge (in-memory only) -----------------------------------------
 
@@ -209,22 +247,21 @@ test('unit (edge): Buffer.equals detects a single-byte SKILL.md drift (in-memory
   const mutated = Buffer.from(original);
   mutated[0] = mutated[0] ^ 0xff;
   assert.ok(!mutated.equals(fs.readFileSync(PROJECT_SKILL)), 'drift detected');
-  // Real files remain identical.
   assert.ok(fs.readFileSync(ASSETS_SKILL).equals(fs.readFileSync(PROJECT_SKILL)),
     'real copies untouched and still identical');
 });
 
 test('unit (edge): the presence guard rejects a missing/misspelled model id (in-memory)', () => {
-  // Misspelled.
-  const typo = skillAssetsSrc.replace(new RegExp(FABLE, 'g'), 'claude-fabel-5');
-  assert.ok(!typo.includes(FABLE), 'misspelled id fails presence check');
-  // Missing entirely.
+  // Misspelled default.
+  const typo = skillAssetsSrc.replace(new RegExp(SONNET, 'g'), 'claude-sonet-5');
+  assert.ok(!typo.includes(SONNET), 'misspelled default fails presence check');
+  // Premium tier removed entirely.
   const removed = skillAssetsSrc.split('\n').filter((l) => !l.includes(OPUS)).join('\n');
-  assert.ok(!removed.includes(OPUS), 'removed fallback id fails presence check');
+  assert.ok(!removed.includes(OPUS), 'removed premium id fails presence check');
   // ba.md model key misspelled in memory -> frontmatter model !== expected.
-  const baTypo = readFileLF(path.join(ASSETS_AGENTS, 'ba.md')).replace(FABLE, 'claude-fabel-5');
+  const baTypo = readFileLF(path.join(ASSETS_AGENTS, 'ba.md')).replace(OPUS, 'claude-opus-4.8');
   const { fm } = parseAgentFrontmatter(baTypo);
-  assert.notEqual(fm.model, FABLE, 'a misspelled ba.md model key is caught');
+  assert.notEqual(fm.model, OPUS, 'a misspelled ba.md model key is caught');
   // Real file untouched.
-  assert.equal(parseAgentFrontmatter(readFileLF(path.join(ASSETS_AGENTS, 'ba.md'))).fm.model, FABLE);
+  assert.equal(parseAgentFrontmatter(readFileLF(path.join(ASSETS_AGENTS, 'ba.md'))).fm.model, OPUS);
 });

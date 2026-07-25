@@ -48,9 +48,10 @@ From `SKILL.md` Phase 1:
 
 1. The orchestrator creates the `tasks/` folder if needed and finds the highest
    `TASK-<nnn>` so new ids continue the sequence.
-2. It launches **one** `orchestrate-ba` subagent (dispatched on `claude-fable-5`
-   when available, else `claude-opus-4-8`; falling back to `general-purpose` if the
-   `orchestrate-ba` definition is missing). The BA thoroughly analyzes the codebase
+2. It launches **one** `orchestrate-ba` subagent (dispatched on the premium
+   `claude-opus-4-8` tier, falling back to the default `claude-sonnet-5` if it is
+   unavailable, and to `general-purpose` if the `orchestrate-ba` definition is
+   missing). The BA thoroughly analyzes the codebase
    and writes one `tasks/TASK-<nnn>-<slug>.md` per ticket, **and** returns any
    clarifying questions it raised, each naming the affected ticket id(s).
 3. **Resolve every clarifying question.** The orchestrator must put **every**

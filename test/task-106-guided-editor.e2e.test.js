@@ -262,7 +262,9 @@ function seedProject(agentNames, opts) {
   fs.mkdirSync(assetsAgents, { recursive: true });
   const paths = {};
   for (const name of (agentNames || [])) {
-    const bytes = fs.readFileSync(path.join(REPO, 'assets', 'agents', name));
+    const bytes = (o.contentByName && o.contentByName[name] != null)
+      ? Buffer.from(o.contentByName[name], 'utf8')
+      : fs.readFileSync(path.join(REPO, 'assets', 'agents', name));
     const claudePath = path.join(claudeAgents, name);
     const assetsPath = path.join(assetsAgents, name);
     fs.writeFileSync(claudePath, bytes);
@@ -305,7 +307,23 @@ async function enterEdit(wrap) {
   };
 }
 
-const OPUS = 'claude-opus-4-8';
+const OPUS = 'claude-opus-4-8';    // ba.md + tech-lead.md pin the premium tier
+const SONNET = 'claude-sonnet-5';  // coder.md + tester.md pin the swarm default
+
+// A synthetic read-only agent def with NO `model:` key, used to drive the
+// serializer's "insert a model key in canonical position" path now that every
+// bundled orchestrate agent pins a model in its frontmatter.
+const NO_MODEL_AGENT = [
+  '---',
+  'name: orchestrate-sample',
+  'description: >-',
+  '  A sample read-only agent used as a fixture; it declares no model key.',
+  'tools: Read, Grep, Glob',
+  '---',
+  '',
+  'Sample agent body.',
+  '',
+].join('\n');
 
 // ===========================================================================
 // Scenario: Editing the coder phase model
@@ -315,7 +333,7 @@ const OPUS = 'claude-opus-4-8';
 // ===========================================================================
 test('Scenario: editing the build/coder phase model to claude-opus-4-8 rewrites ONLY the model line and byte-syncs the mirror', async () => {
   // Given a project with the bundled coder.md installed in .claude/agents/ AND
-  // mirrored under assets/agents/ (coder.md ships with NO model key).
+  // mirrored under assets/agents/ (coder.md ships with model: claude-sonnet-5).
   const { root, paths } = seedProject(['coder.md']);
   try {
     const { window, calls } = makeWindow();
@@ -336,14 +354,13 @@ test('Scenario: editing the build/coder phase model to claude-opus-4-8 rewrites 
     // Then no inline error surfaced.
     assert.ok(errEl.classList.contains('hidden'), 'no error on a clean save');
 
-    // And .claude/agents/coder.md now declares model: claude-opus-4-8, inserted in
-    // canonical position (immediately after the `tools:` line) with EVERY OTHER
+    // And .claude/agents/coder.md now declares model: claude-opus-4-8 — the
+    // existing model line (claude-sonnet-5) is rewritten in place with EVERY OTHER
     // byte preserved — verified by reconstructing the exact expected file.
     const after = fs.readFileSync(coder.claudePath, 'utf8');
-    const toolsLine = 'tools: Read, Grep, Glob, Edit, Write, Bash';
-    const expected = orig.replace(toolsLine + eol, toolsLine + eol + 'model: ' + OPUS + eol);
+    const expected = orig.replace('model: ' + SONNET + eol, 'model: ' + OPUS + eol);
     assert.notEqual(after, orig, 'the file actually changed');
-    assert.equal(after, expected, 'ONLY a canonical model line was inserted; all other bytes preserved');
+    assert.equal(after, expected, 'ONLY the model VALUE was rewritten; all other bytes preserved');
 
     // And assets/agents/coder.md is byte-identical to the .claude copy (mirror sync).
     const claudeBytes = fs.readFileSync(coder.claudePath);
@@ -363,28 +380,30 @@ test('Scenario: editing the build/coder phase model to claude-opus-4-8 rewrites 
 //   (round-trip guarantee from TASK-092) — other bytes preserved.
 // ===========================================================================
 test('Scenario: a phase agent file with no model key gains one in canonical position, all other bytes preserved', async () => {
-  // Given tester.md (ships with name/description/tools and NO model key).
-  const { root, paths } = seedProject(['tester.md']);
+  // Given a synthetic agent file with name/description/tools and NO model key
+  // (every bundled orchestrate agent now pins a model, so this path is exercised
+  // with a fixture that still lacks one).
+  const { root, paths } = seedProject(['sample.md'], { contentByName: { 'sample.md': NO_MODEL_AGENT } });
   try {
     const { window, calls } = makeWindow();
     const mod = loadEditor(window, makeDocument(), console, makeLocalStorage());
     const tab = { folder: root, els: {} };
-    const tester = paths['tester.md'];
-    const orig = tester.original.toString('utf8');
+    const sample = paths['sample.md'];
+    const orig = sample.original.toString('utf8');
     const eol = /\r\n/.test(orig) ? '\r\n' : '\n';
-    assert.ok(!/\nmodel:/.test(orig), 'fixture precondition: tester.md has no model key');
+    assert.ok(!/\nmodel:/.test(orig), 'fixture precondition: the sample agent has no model key');
 
-    // When the tester phase model is set to claude-opus-4-8 and saved.
-    const { wrap } = mountModelEditor(mod, tab, tester.claudePath,
-      { key: 'test', title: 'Phase 3', agent: 'orchestrate-tester' });
+    // When the phase model is set to claude-opus-4-8 and saved.
+    const { wrap } = mountModelEditor(mod, tab, sample.claudePath,
+      { key: 'test', title: 'Phase 3', agent: 'orchestrate-sample' });
     const { input, saveBtn } = await enterEdit(wrap);
     input.value = OPUS;
     await click(saveBtn);
 
     // Then the model line is inserted right after the `tools:` line (canonical
     // name→description→tools→model order) and nothing else changes.
-    const after = fs.readFileSync(tester.claudePath, 'utf8');
-    const toolsLine = 'tools: Read, Grep, Glob, Write, Edit, Bash';
+    const after = fs.readFileSync(sample.claudePath, 'utf8');
+    const toolsLine = 'tools: Read, Grep, Glob';
     const expected = orig.replace(toolsLine + eol, toolsLine + eol + 'model: ' + OPUS + eol);
     assert.equal(after, expected, 'model inserted after tools; every other byte preserved');
 
@@ -393,7 +412,7 @@ test('Scenario: a phase agent file with no model key gains one in canonical posi
     assert.equal(restored, orig, 'the change is exactly one added model line');
 
     // And the assets mirror matches.
-    assert.ok(fs.readFileSync(tester.claudePath).equals(fs.readFileSync(tester.assetsPath)),
+    assert.ok(fs.readFileSync(sample.claudePath).equals(fs.readFileSync(sample.assetsPath)),
       'assets mirror byte-identical');
     assert.equal(calls.writeFile.length, 2, 'primary + mirror only');
   } finally { cleanup(root); }

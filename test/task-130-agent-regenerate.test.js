@@ -466,10 +466,14 @@ test('serializeAgentEdits: empty (trimmed) Tools/Model OMITS the key (empty-mean
 });
 
 test('serializeAgentEdits: a newly-added model is inserted in canonical position (after tools)', () => {
-  // coder.md has name/description/tools but NO model.
-  const original = fs.readFileSync(path.join(AGENTS_DIR, 'coder.md'), 'utf8');
+  // A synthetic agent with name/description/tools but NO model (every bundled
+  // orchestrate agent now pins a model, so this path uses an in-memory fixture).
+  const original = [
+    '---', 'name: orchestrate-sample', 'description: >-', '  A sample agent.',
+    'tools: Read, Grep, Glob', '---', '', 'Sample body.', '',
+  ].join('\n');
   const parsed = parseAgentFileRenderer(original);
-  assert.ok(!parsed.meta.keyOrder.includes('model'), 'coder.md has no model to start');
+  assert.ok(!parsed.meta.keyOrder.includes('model'), 'the sample agent has no model to start');
   const out = serializeAgentEdits(parsed, { model: 'claude-opus-4' });
   const reparsed = parseAgentFileRenderer(out);
   assert.equal(reparsed.fm.model, 'claude-opus-4', 'model added');

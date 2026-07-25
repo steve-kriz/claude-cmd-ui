@@ -33,8 +33,8 @@ const { parseWorkflow } = require('../lib/skill-workflow');
 const ROOT = path.join(__dirname, '..');
 const PROJECT_SKILL = path.join(ROOT, '.claude', 'skills', 'orchestrate', 'SKILL.md');
 
-const FABLE = 'claude-fable-5';
-const OPUS = 'claude-opus-4-8';
+const PRIMARY = 'claude-opus-4-8';   // the premium planning tier (BA primary)
+const FALLBACK = 'claude-sonnet-5';  // the swarm default the BA degrades to
 
 // --- tiny Given/When/Then harness (labels for readable scenario output) ----
 function Given(_desc, fn) { return fn ? fn() : undefined; }
@@ -83,10 +83,10 @@ test('Scenario: Model directive captured', () => {
 
   const result = When('parseWorkflow parses it', () => parseWorkflow(skillMd));
 
-  Then('the plan phase records claude-fable-5 with fallback claude-opus-4-8', () => {
+  Then('the plan phase records claude-opus-4-8 with fallback claude-sonnet-5', () => {
     const plan = result.phases.find((p) => p.key === 'plan');
     assert.ok(plan, 'plan phase present');
-    assert.deepEqual(plan.model, { primary: FABLE, fallback: OPUS });
+    assert.deepEqual(plan.model, { primary: PRIMARY, fallback: FALLBACK });
   });
 
   Then('no other phase carries a model directive', () => {
@@ -179,7 +179,7 @@ test('Scenario: reordered phase headings still return canonical order', () => {
     '## Phase 3 — Test',
     'orchestrate-tester',
     '## Phase 1 — Plan / Define',
-    'orchestrate-ba on `claude-fable-5` otherwise `claude-opus-4-8`',
+    'orchestrate-ba on `claude-opus-4-8` else the default `claude-sonnet-5`',
     '## Phase 4 — Review',
     'orchestrate-tech-lead',
     '## Phase 2 — Build (coder)',
@@ -195,6 +195,6 @@ test('Scenario: reordered phase headings still return canonical order', () => {
 
   Then('the plan phase still captures the model directive from its own body', () => {
     const plan = result.phases.find((p) => p.key === 'plan');
-    assert.deepEqual(plan.model, { primary: FABLE, fallback: OPUS });
+    assert.deepEqual(plan.model, { primary: PRIMARY, fallback: FALLBACK });
   });
 });

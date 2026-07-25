@@ -43,8 +43,8 @@ Key points:
 - **Agent resolution** per phase: prefer the "Agent dispatch and fallback"
   section's `Phase <n> … → orchestrate-x` line, then the phase body, then the
   canonical default.
-- **Model directive** (plan phase only): if `claude-fable-5` appears, returns
-  `{ primary: 'claude-fable-5', fallback: <stated or 'claude-opus-4-8'> }`
+- **Model directive** (plan phase only): if `claude-opus-4-8` appears, returns
+  `{ primary: 'claude-opus-4-8', fallback: <stated or 'claude-sonnet-5'> }`
   (`PLAN_MODEL_PRIMARY` / `PLAN_MODEL_FALLBACK`).
 - A phase whose heading is absent is **omitted** and named in `warnings`. Any
   non-string/garbage input yields `{ phases: [], warnings: [...] }` and never
@@ -80,7 +80,8 @@ All dynamic text uses `textContent` (SKILL.md is untrusted → no XSS).
 
 Each phase whose agent file exists gets an **Agent model** row: the current model
 (or `(default)`) and an **Edit** button that reveals a free-text input with a
-curated datalist (`claude-fable-5`, `claude-opus-4-8`, plus the current value).
+curated datalist (`claude-sonnet-5`, `claude-opus-4-8`, `claude-fable-5`, plus the
+current value).
 On **Save**:
 
 - `sanitizeAgentModelField(value)` enforces a single bare token (letters, digits,

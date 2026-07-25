@@ -117,9 +117,7 @@ Each phase dispatches to its own dedicated subagent type (defined in the
 project's `.claude/agents/`), not the generic `general-purpose` agent:
 
 - **Phase 1 (Plan / Define)** → `orchestrate-ba` — read/search only; never writes
-  implementation code. Dispatch this planning subagent on `claude-fable-5` when
-  available, otherwise fall back to `claude-opus-4-8`. (This model directive
-  applies to Phase 1 planning only.)
+  implementation code. Dispatched on the premium tier (see **Model routing**).
 - **Phase 2 (Build)** → `orchestrate-coder` — edit/write/bash.
 - **Phase 3 (Test)** → `orchestrate-tester` — scoped to writing/running tests.
 - **Phase 4 (Review)** → `orchestrate-tech-lead` — read/search only; reviews a
@@ -130,6 +128,77 @@ If a named agent definition is missing at dispatch time, **fall back to
 was missing (the orchestrate install step, `tasks:installSkill`, copies these
 definitions into `.claude/agents/`, so a missing one usually means the skill
 needs reinstalling).
+
+### Model routing (optimise for cost)
+
+The swarm is tuned for cost. In a swarm the token bill is dominated by **context,
+not output**: every sub-agent re-reads files, re-loads instructions, and
+re-explains state, so most savings come from tiering models by task difficulty and
+keeping each sub-agent narrow — not from any single model choice. Route by
+difficulty:
+
+- **Default model: `claude-sonnet-5`.** Every agent runs on `claude-sonnet-5`
+  unless routed to the premium tier below. Dispatch the **coder** (Phase 2) and the
+  **tester** (Phase 3) on this default — most implementation and the mechanical
+  test-writing/running work does not need the premium tier.
+- **Premium tier `claude-opus-4-8` for planning and review only.** Dispatch the
+  **business analyst** (Phase 1) and the **tech lead / reviewer** (Phase 4) on
+  `claude-opus-4-8` — the hard reasoning steps (decomposing a feature into tickets,
+  and a thorough final review) that justify the premium tier. The BA falls back to
+  the default `claude-sonnet-5` only if `claude-opus-4-8` is unavailable.
+
+Each agent's model is pinned in its own `.claude/agents/*.md` frontmatter (`model:`
+key: `claude-opus-4-8` for `orchestrate-ba` and `orchestrate-tech-lead`,
+`claude-sonnet-5` for `orchestrate-coder` and `orchestrate-tester`), so this
+routing travels with the agent definitions; the ids above are the authoritative
+policy. This model-routing directive is stated **here, once, before Phase 2** — the
+per-phase sections below never restate a model id.
+
+### Distilled returns (never inherit a sub-agent's raw context)
+
+Every sub-agent returns a **compact, distilled summary** of its work — never its
+full working transcript — and the orchestrator works **only** from that summary,
+never inheriting a sub-agent's raw context. Concretely: the BA returns the ticket
+ids/titles it defined plus any clarifying questions; the coder returns the changed
+files, a one-paragraph summary, and (where useful) the diff; the tester returns
+pass/fail plus the failing output and the test file names; the reviewer returns its
+findings. The detailed state lives in the **ticket files and the code**, which the
+next agent reads directly, so nothing is lost by keeping each hand-off small. This
+is the single biggest cost lever in the swarm: small hand-offs keep every
+downstream agent's context — and therefore the token bill — small.
+
+### Prompt caching (stable prefix, volatile suffix)
+
+Cached input tokens cost roughly a **tenth** of fresh ones, so the swarm is
+structured to maximise cache hits. The rule is **stable content first, volatile
+content last**, so the unchanging prefix stays cache-warm across every dispatch and
+every agent:
+
+- **The agent definition files are the stable, always-cached prefix.** Each
+  `orchestrate-*` agent's system prompt (`.claude/agents/*.md`) is identical on
+  every dispatch of that role, so it is reused from cache across the whole swarm.
+  **Never regenerate an agent definition or splice per-ticket data into it** — keep
+  it byte-stable so its cache is reused (this is also why the `assets/` mirror is
+  kept byte-identical). Where the queue allows, group repeated work of the **same
+  role** together so its cached system prompt stays warm rather than alternating
+  roles and cold-starting each one.
+- **Build every dispatch prompt as a fixed preamble + the ticket text LAST.** When
+  you launch a sub-agent, lead with the **same, unchanging framing every time** (the
+  role reminder and the ticket-file contract), and put the **volatile per-ticket
+  content — the full ticket text, and for a fix-loop dispatch the failing output —
+  at the very end**. Use the **same wording and order** for the preamble on every
+  dispatch so its prefix matches the cache; do **not** interleave ids, timestamps,
+  paths, or per-ticket details into the preamble (that busts the shared prefix).
+- **Front-loaded ticket context is shared, cache-friendly state.** Because the BA
+  captures all the context a coder/tester needs **inside the ticket body** up front
+  (Phase 1), downstream agents read that one stable artifact instead of
+  re-exploring the repo. Re-reading the same ticket text is cache-warm; re-deriving
+  state by re-scanning whole directories is not. Agents read **only the specific
+  files the ticket names**, not whole trees.
+- **Keep the volatile tail small.** Combined with **Distilled returns** above, only
+  the small, changing part of each prompt is fresh (uncached) input, while the
+  large, stable part (system prompt + preamble + ticket contract) is served from
+  cache. Small volatile tails plus stable prefixes are what make the swarm cheap.
 
 ## Phase 1 — Plan / Define (business analyst)
 
@@ -151,8 +220,8 @@ writes implementation code or edits/creates source files.
    find the highest `TASK-<nnn>` so new ids continue the sequence.
 2. Launch **one** subagent (Task tool, `orchestrate-ba`; fall back to
    `general-purpose` and report it if that definition is missing) with a
-   business-analyst persona, dispatched on `claude-fable-5` when available,
-   otherwise `claude-opus-4-8`. Its job: thoroughly analyze the relevant codebase
+   business-analyst persona, dispatched on the premium tier (see **Model
+   routing** above). Its job: thoroughly analyze the relevant codebase
    (reading/searching **all** relevant files) and break the feature request into
    small, independently testable tickets. Each ticket must capture, in its body,
    **all** the information a coder needs to build it before any build begins. For
@@ -229,8 +298,8 @@ is left to drive:
      Set `status: defining` (whole-file write, bump `updated`) to park it for the
      BA, then launch **one** subagent (Task tool, `orchestrate-ba`; fall back to
      `general-purpose` and report it if that definition is missing) with a
-     business-analyst persona, dispatched on the **same planning model Phase 1
-     uses** (see the Phase 1 model directive), with the **full ticket text**. Its
+     business-analyst persona, dispatched on the BA's premium tier (see **Model
+     routing**), with the **full ticket text**. Its
      job: produce
      the standard defined-ticket body — a precise `## Description`, a **complete**
      `## Acceptance Criteria`, `## Cucumber Tests` Gherkin covering every criterion
@@ -484,8 +553,9 @@ below and are unit-tested.
 ## State-consistency rules (all phases)
 
 - Only **you** (the orchestrator) edit ticket status/frontmatter. Subagents
-  receive ticket content in their prompt and report results back — they do not
-  touch status or claims.
+  receive ticket content in their prompt and report results back **as a compact,
+  distilled summary** — they do not touch status or claims, and you never inherit
+  their raw working context (see **Model routing → Distilled returns**).
 - Claim before you build: write the `status: in-progress` + `agent` transition
   before starting the work it names, and never touch a ticket claimed by another
   agent.

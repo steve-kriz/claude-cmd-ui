@@ -25,7 +25,7 @@ const PROJECT_SKILL = path.join(ROOT, '.claude', 'skills', 'orchestrate', 'SKILL
 const ASSETS_BA = path.join(ROOT, 'assets', 'agents', 'ba.md');
 const PROJECT_BA = path.join(ROOT, '.claude', 'agents', 'ba.md');
 
-const FABLE = 'claude-fable-5';
+const SONNET = 'claude-sonnet-5';
 const OPUS = 'claude-opus-4-8';
 
 // --- helpers ---------------------------------------------------------------
@@ -100,10 +100,11 @@ test('E2E Scenario: ba.md instructs the BA to raise questions instead of guessin
       assert.ok(text.includes(normStr(sub)), `${label} ba.md missing clarifying-questions wording: ${sub}`);
     }
 
-    // And each keeps name orchestrate-ba, tools Read, Grep, Glob and model claude-fable-5
+    // And each keeps name orchestrate-ba, tools Read, Grep, Glob and the premium
+    // planning model claude-opus-4-8
     assert.equal(fm.name, 'orchestrate-ba', `${label} ba.md name unchanged`);
     assert.deepEqual(parseTools(fm.tools), ['Read', 'Grep', 'Glob'], `${label} ba.md tools unchanged`);
-    assert.equal(fm.model, FABLE, `${label} ba.md model unchanged`);
+    assert.equal(fm.model, OPUS, `${label} ba.md pins the premium planning tier`);
   }
 });
 
@@ -218,30 +219,26 @@ test('E2E Scenario (edge): removing the clarifying-questions sentence fails the 
 });
 
 // ===========================================================================
-// Scenario: Existing Phase-1 model directives survive the edit
+// Scenario: The Model-routing directive survives the edit
 // ===========================================================================
-test('E2E Scenario: existing Phase-1 model directives survive the edit', () => {
+test('E2E Scenario: the Model-routing directive survives the edit', () => {
   // Given both copies of SKILL.md after the change
   for (const file of [ASSETS_SKILL, PROJECT_SKILL]) {
     const src = readLF(file);
 
-    // Then the exact sentence dispatching planning on claude-fable-5 with the
-    // claude-opus-4-8 fallback is unchanged
-    assert.match(
-      src,
-      /Dispatch this planning subagent on `claude-fable-5` when\s+available, otherwise fall back to `claude-opus-4-8`/,
-      'preferred-then-fallback dispatch sentence unchanged',
-    );
-    assert.match(
-      src,
-      /dispatched on `claude-fable-5` when available,\s+otherwise `claude-opus-4-8`/,
-      'launch-step dispatch sentence unchanged',
-    );
+    // Then the routing directive names the default and premium tiers
+    assert.match(src, /Default model: `claude-sonnet-5`/,
+      'swarm default is claude-sonnet-5');
+    assert.match(src, /Premium tier `claude-opus-4-8` for planning and review only/,
+      'premium tier reserved for planning + review');
+    // And the planning-phase launch step dispatches the BA on the premium tier.
+    assert.match(src, /dispatched on the premium tier \(see \*\*Model\s+routing\*\* above\)/,
+      'Phase-1 launch step dispatches on the premium tier');
 
     // And neither model id appears after the "## Phase 2 — Build" heading
     const phase2Idx = src.indexOf('## Phase 2 — Build');
     assert.ok(phase2Idx !== -1, 'Phase 2 heading present');
-    assert.ok(src.lastIndexOf(FABLE) < phase2Idx, 'no claude-fable-5 after Phase 2 heading');
+    assert.ok(src.lastIndexOf(SONNET) < phase2Idx, 'no claude-sonnet-5 after Phase 2 heading');
     assert.ok(src.lastIndexOf(OPUS) < phase2Idx, 'no claude-opus-4-8 after Phase 2 heading');
   }
 });

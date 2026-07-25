@@ -31,8 +31,8 @@ const rendererSrc = fs.readFileSync(path.join(REPO, 'renderer', 'renderer.js'), 
 const SKILL_SRC = fs.readFileSync(
   path.join(REPO, '.claude', 'skills', 'orchestrate', 'SKILL.md'), 'utf8');
 
-const FABLE = 'claude-fable-5';
-const OPUS = 'claude-opus-4-8';
+const PRIMARY = 'claude-opus-4-8';   // the premium planning tier (BA primary)
+const FALLBACK = 'claude-sonnet-5';  // the swarm default the BA degrades to
 
 // --- Extract a named function declaration by brace-matching (task-094 style). --
 function extractFn(src, name) {
@@ -86,8 +86,8 @@ const wf = loadWf();
 
 test('unit: renderer mirror constants match the lib source of truth', () => {
   assert.equal(wf.WF_FALLBACK_AGENT, 'general-purpose');
-  assert.equal(wf.WF_PLAN_MODEL_PRIMARY, FABLE);
-  assert.equal(wf.WF_PLAN_MODEL_FALLBACK, OPUS);
+  assert.equal(wf.WF_PLAN_MODEL_PRIMARY, PRIMARY);
+  assert.equal(wf.WF_PLAN_MODEL_FALLBACK, FALLBACK);
   assert.deepEqual(wf.WF_AGENT_NAMES,
     ['orchestrate-ba', 'orchestrate-coder', 'orchestrate-tester', 'orchestrate-tech-lead']);
   assert.deepEqual(wf.WF_PHASE_SPECS.map((s) => s.key), ['plan', 'build', 'test', 'review']);
@@ -125,10 +125,10 @@ test('unit: real SKILL.md -> each phase carries a 1-based headingLine at its `##
   assert.deepEqual(seq, [...seq].sort((a, b) => a - b));
 });
 
-test('unit: real SKILL.md -> ONLY the plan phase carries the model directive fable-5 -> opus', () => {
+test('unit: real SKILL.md -> ONLY the plan phase carries the model directive opus-4-8 -> sonnet-5', () => {
   const { phases } = wf.wfParseWorkflow(SKILL_SRC);
   const plan = phases.find((p) => p.key === 'plan');
-  assert.deepEqual(plan.model, { primary: FABLE, fallback: OPUS });
+  assert.deepEqual(plan.model, { primary: PRIMARY, fallback: FALLBACK });
   for (const p of phases.filter((x) => x.key !== 'plan')) {
     assert.equal(p.model, undefined, `${p.key} phase has no model key`);
   }
@@ -210,14 +210,14 @@ test('unit: reordered headings still return canonical plan/build/test/review ord
     '## Phase 4 — Review',
     'orchestrate-tech-lead reviews',
     '## Phase 1 — Plan / Define',
-    'orchestrate-ba on `claude-fable-5` otherwise `claude-opus-4-8`',
+    'orchestrate-ba on `claude-opus-4-8` else the default `claude-sonnet-5`',
     '## Phase 3 — Test',
     'orchestrate-tester runs tests',
   ].join('\n');
   const { phases, warnings } = wf.wfParseWorkflow(md);
   assert.deepEqual(phases.map((p) => p.key), ['plan', 'build', 'test', 'review']);
   assert.deepEqual(warnings, []);
-  assert.deepEqual(phases.find((p) => p.key === 'plan').model, { primary: FABLE, fallback: OPUS });
+  assert.deepEqual(phases.find((p) => p.key === 'plan').model, { primary: PRIMARY, fallback: FALLBACK });
 });
 
 // ---------------------------------------------------------------------------

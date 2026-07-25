@@ -298,21 +298,21 @@ test('Scenario: both SKILL copies route undefined new tickets to defining + orch
     assert.match(src, /lib\/ticket-definition\.js/, `${label}: names lib/ticket-definition.js`);
     // And define happens BEFORE any claim/build of it.
     assert.match(src, /define it FIRST \(BA before any claim\/build\)/i, `${label}: BA before claim/build`);
-    // And the mid-build BA dispatch references the Phase-1 planning model
-    // INDIRECTLY — it must NOT name a literal model id in Phase 2 (TASK-051
-    // invariant: the fable-5/opus-4-8 directive lives ONLY in Phase 1).
-    assert.match(src, /same planning model Phase 1\s+uses/i,
-      `${label}: Phase 2 BA dispatch references the Phase-1 planning model indirectly`);
-    assert.match(src, /see the Phase 1 model directive/i,
-      `${label}: Phase 2 points back to the Phase 1 model directive`);
+    // And the mid-build BA dispatch references the routing directive INDIRECTLY —
+    // it must NOT name a literal model id in Phase 2 (TASK-051 invariant: the
+    // sonnet-5/opus-4-8 routing directive lives ONLY before Phase 2).
+    assert.match(src, /dispatched on the BA's premium tier/i,
+      `${label}: Phase 2 BA dispatch references the routed premium tier indirectly`);
+    assert.match(src, /see \*\*Model\s+routing\*\*/i,
+      `${label}: Phase 2 points back to the Model routing directive`);
     // And NO literal model id appears at/after the `## Phase 2 — Build` heading.
     const phase2Idx = src.indexOf('## Phase 2 — Build');
     assert.ok(phase2Idx !== -1, `${label}: the "## Phase 2 — Build" heading is present`);
-    assert.doesNotMatch(src.slice(phase2Idx), /claude-fable-5|claude-opus-4-8/,
-      `${label}: no literal model id (claude-fable-5/claude-opus-4-8) at/after the Phase 2 heading`);
-    // And the literal fable-5/opus-4-8 directive still lives in Phase 1 (TASK-051/066).
-    assert.match(src.slice(0, phase2Idx), /claude-fable-5[\s\S]*?claude-opus-4-8/,
-      `${label}: the literal fable-5/opus-4-8 model directive remains in Phase 1`);
+    assert.doesNotMatch(src.slice(phase2Idx), /claude-sonnet-5|claude-opus-4-8/,
+      `${label}: no literal model id (claude-sonnet-5/claude-opus-4-8) at/after the Phase 2 heading`);
+    // And the literal sonnet-5/opus-4-8 routing directive still lives before Phase 2.
+    assert.match(src.slice(0, phase2Idx), /claude-sonnet-5[\s\S]*?claude-opus-4-8/,
+      `${label}: the literal sonnet-5/opus-4-8 model routing directive remains before Phase 2`);
     // And already-defined tickets skip the BA; post-processing is excluded.
     assert.match(src, /Already-defined `todo` ticket → skip the BA/, `${label}: already-defined skips BA`);
     assert.match(src, /kind: post-processing` ticket is \*\*never\*\* defined or\s*dispatched/, `${label}: post-processing excluded`);
