@@ -190,7 +190,7 @@ description: >-
   What this agent does, folded across
   wrapped lines at ~74 columns.
 tools: Read, Grep, Glob
-model: claude-fable-5
+model: claude-sonnet-5
 ---
 You are a specialized subagent.
 ...body...

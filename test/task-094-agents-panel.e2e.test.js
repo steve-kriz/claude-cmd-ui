@@ -252,7 +252,7 @@ test('Scenario: listing then saving a new description rewrites ONLY the descript
     const card = findByClass(body, 'team-agent');
     assert.ok(card, 'an agent card was rendered');
     assert.equal(findByClass(card, 'team-agent-name').textContent, 'orchestrate-ba', 'name shown');
-    assert.equal(findByClass(card, 'team-agent-model').textContent, 'claude-fable-5', 'model shown');
+    assert.equal(findByClass(card, 'team-agent-model').textContent, 'claude-opus-4-8', 'model shown');
     assert.equal(findByClass(card, 'team-agent-tools').textContent, 'Read, Grep, Glob', 'tools shown');
     assert.match(findByClass(card, 'team-agent-desc-text').textContent, /Business analyst/, 'description shown');
 

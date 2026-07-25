@@ -332,18 +332,25 @@ test('Scenario: with the skill installed, plan/build/test/review render in order
   assert.match(phases[2].title, /Phase 3/, 'third card is Phase 3 (test)');
   assert.match(phases[3].title, /Phase 4/, 'fourth card is Phase 4 (review)');
 
-  // And the plan phase — and only it — shows the model directive fable-5 -> opus.
-  assert.equal(phases[0].model, 'claude-fable-5', 'plan phase shows the planning model');
-  assert.match(phases[0].modelFallback, /claude-opus-4-8/, 'plan phase shows the model fallback');
+  // And the plan phase — and only it — shows the model directive opus-4-8 -> sonnet-5.
+  assert.equal(phases[0].model, 'claude-opus-4-8', 'plan phase shows the planning model');
+  assert.match(phases[0].modelFallback, /claude-sonnet-5/, 'plan phase shows the model fallback');
   for (const p of phases.slice(1)) assert.equal(p.model, null, `${p.title} shows no SKILL.md model directive`);
 
   // And (TASK-106) every phase now mounts an editable agent-file model editor
-  // seeded from that agent's frontmatter: ba.md declares claude-fable-5; the other
-  // three ship with no model key and read as "(default)".
+  // seeded from that agent's frontmatter. The cost-routing pins every agent:
+  // ba.md + tech-lead.md declare claude-opus-4-8; coder.md + tester.md declare the
+  // default claude-sonnet-5. None reads as "(default)" anymore.
   assert.ok(phases.every((p) => p.hasModelEditor), 'every phase mounts an agent-model editor');
-  assert.equal(phases[0].agentModel, 'claude-fable-5', 'ba.md agent-model editor shows its declared model');
-  for (const p of phases.slice(1)) {
-    assert.equal(p.agentModel, '(default)', `${p.agent} agent-model editor shows (default) with no model key`);
+  const expectedAgentModel = {
+    'orchestrate-ba': 'claude-opus-4-8',
+    'orchestrate-coder': 'claude-sonnet-5',
+    'orchestrate-tester': 'claude-sonnet-5',
+    'orchestrate-tech-lead': 'claude-opus-4-8',
+  };
+  for (const p of phases) {
+    assert.equal(p.agentModel, expectedAgentModel[p.agent],
+      `${p.agent} agent-model editor shows its pinned model`);
   }
 
   // And every phase shows the always-on fallback RULE.

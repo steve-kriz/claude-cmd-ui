@@ -6931,8 +6931,8 @@ const WF_PHASE_SPECS = [
   { key: 'test', number: 3, label: 'test', agent: WF_AGENT_TYPES.tester },
   { key: 'review', number: 4, label: 'review', agent: WF_AGENT_TYPES.techLead }
 ];
-const WF_PLAN_MODEL_PRIMARY = 'claude-fable-5';
-const WF_PLAN_MODEL_FALLBACK = 'claude-opus-4-8';
+const WF_PLAN_MODEL_PRIMARY = 'claude-opus-4-8';
+const WF_PLAN_MODEL_FALLBACK = 'claude-sonnet-5';
 
 // Mirror of isFallback (lib/orchestrate-agents.js): true when dispatch would fall
 // back to general-purpose for `name`. Faithful to the lib's resolveAgentType +
@@ -6977,7 +6977,7 @@ function wfAgentIn(text) {
 
 // Mirror of modelDirectiveIn: { primary, fallback } for the Phase-1 model, else null.
 function wfModelDirectiveIn(text) {
-  if (!/claude-fable-5/i.test(text)) return null;
+  if (!/claude-opus-4-8/i.test(text)) return null;
   let fallback = null;
   const re = /claude-[a-z0-9.-]+/gi;
   let m;
@@ -7510,7 +7510,7 @@ function buildWorkflowPhase(tab, phase, agentNames, agentFiles) {
 // Curated model suggestions seeding the per-phase editor's datalist. Free text is
 // still accepted (and sanitized on Save); the current value is injected too so it
 // is never lost from the list.
-const WF_MODEL_SUGGESTIONS = ['claude-fable-5', 'claude-opus-4-8'];
+const WF_MODEL_SUGGESTIONS = ['claude-sonnet-5', 'claude-opus-4-8', 'claude-fable-5'];
 let wfModelDatalistSeq = 0;
 
 // The per-phase model editor: a read view (current model + Edit) and an edit view

@@ -46,9 +46,9 @@ test('Scenario: Parsing ba.md', () => {
 
   // Then it parses to a non-null result with the expected frontmatter
   assert.ok(result, 'parseAgentFile should return a result for ba.md');
-  // And fm.name is "orchestrate-ba" and fm.model is "claude-fable-5"
+  // And fm.name is "orchestrate-ba" and fm.model is "claude-opus-4-8"
   assert.equal(result.fm.name, 'orchestrate-ba');
-  assert.equal(result.fm.model, 'claude-fable-5');
+  assert.equal(result.fm.model, 'claude-opus-4-8');
 });
 
 test('Scenario: Byte-identical round-trip (LF and CRLF) for every bundled agent file', () => {

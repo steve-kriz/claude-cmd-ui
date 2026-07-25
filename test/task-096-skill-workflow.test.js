@@ -32,16 +32,16 @@ const ROOT = path.join(__dirname, '..');
 const PROJECT_SKILL = path.join(ROOT, '.claude', 'skills', 'orchestrate', 'SKILL.md');
 const SKILL_SRC = fs.readFileSync(PROJECT_SKILL, 'utf8');
 
-const FABLE = 'claude-fable-5';
-const OPUS = 'claude-opus-4-8';
+const PRIMARY = 'claude-opus-4-8';   // the premium planning tier (BA primary)
+const FALLBACK = 'claude-sonnet-5';  // the swarm default the BA degrades to
 
 // ---------------------------------------------------------------------------
 // Exported constants
 // ---------------------------------------------------------------------------
 
 test('unit: PLAN_MODEL_PRIMARY / PLAN_MODEL_FALLBACK are the exact model ids', () => {
-  assert.equal(PLAN_MODEL_PRIMARY, FABLE);
-  assert.equal(PLAN_MODEL_FALLBACK, OPUS);
+  assert.equal(PLAN_MODEL_PRIMARY, PRIMARY);
+  assert.equal(PLAN_MODEL_FALLBACK, FALLBACK);
 });
 
 test('unit: PHASE_SPECS is a frozen array of four canonical phases in order', () => {
@@ -119,7 +119,7 @@ test('unit: a benign line inserted above Phase 1 shifts headingLines but still p
 test('unit: real SKILL.md -> only the plan phase carries a model directive', () => {
   const { phases } = parseWorkflow(SKILL_SRC);
   const plan = phases.find((p) => p.key === 'plan');
-  assert.deepEqual(plan.model, { primary: FABLE, fallback: OPUS });
+  assert.deepEqual(plan.model, { primary: PRIMARY, fallback: FALLBACK });
   for (const p of phases.filter((x) => x.key !== 'plan')) {
     assert.equal(p.model, undefined, `${p.key} phase has no model key`);
   }
@@ -283,7 +283,7 @@ test('unit: reordered headings still return phases in canonical plan/build/test/
     '## Phase 4 — Review',                    // line 3
     'orchestrate-tech-lead reviews',
     '## Phase 1 — Plan / Define',             // line 5
-    'orchestrate-ba on `claude-fable-5` otherwise `claude-opus-4-8`',
+    'orchestrate-ba on `claude-opus-4-8` else the default `claude-sonnet-5`',
     '## Phase 3 — Test',                       // line 7
     'orchestrate-tester runs tests',
   ].join('\n');
@@ -297,7 +297,7 @@ test('unit: reordered headings still return phases in canonical plan/build/test/
   assert.equal(byKey.plan, 5);
   assert.equal(byKey.test, 7);
   assert.deepEqual(byKey.plan && phases.find((p) => p.key === 'plan').model,
-    { primary: FABLE, fallback: OPUS });
+    { primary: PRIMARY, fallback: FALLBACK });
 });
 
 test('unit: CRLF line endings parse identically to LF', () => {
@@ -317,7 +317,7 @@ test('unit: CRLF line endings parse identically to LF', () => {
 test('unit: plan phase with directive present but no explicit fallback token -> canonical fallback', () => {
   const md = [
     '## Phase 1 — Plan',
-    'dispatch orchestrate-ba on `claude-fable-5` when available.',
+    'dispatch orchestrate-ba on `claude-opus-4-8` when available.',
     '## Phase 2 — Build',
     'orchestrate-coder',
     '## Phase 3 — Test',
@@ -327,7 +327,7 @@ test('unit: plan phase with directive present but no explicit fallback token -> 
   ].join('\n');
   const { phases } = parseWorkflow(md);
   const plan = phases.find((p) => p.key === 'plan');
-  assert.deepEqual(plan.model, { primary: FABLE, fallback: OPUS });
+  assert.deepEqual(plan.model, { primary: PRIMARY, fallback: FALLBACK });
 });
 
 test('unit: plan phase with no model directive at all -> no model key', () => {
