@@ -154,6 +154,17 @@ contextBridge.exposeInMainWorld('api', {
     regenerate: (content, instruction) => ipcRenderer.invoke('agents:regenerate', { content, instruction })
   },
 
+  skill: {
+    // TASK-184: ask the main process to regenerate ONE phase-section's prose
+    // body of the orchestrate SKILL.md from its current text plus a
+    // natural-language instruction. Main reads ANTHROPIC_API_KEY (never
+    // returned) and clamps the inputs; the returned { ok, content, reason } is
+    // validated by the renderer (TASK-185) and only spliced back into
+    // SKILL.md + written (scoped to that one phase's section, via
+    // writeWithMirror) when the user clicks Save.
+    regeneratePhase: (content, instruction) => ipcRenderer.invoke('skill:regeneratePhase', { content, instruction })
+  },
+
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', { url }),
 
   gitops: {
@@ -167,5 +178,37 @@ contextBridge.exposeInMainWorld('api', {
   session: {
     load: () => ipcRenderer.invoke('session:load'),
     save: (folders) => ipcRenderer.invoke('session:save', { folders })
+  },
+
+  telemetry: {
+    // Read the receiver's current state ({ enabled, running, endpoint, forwardUrl,
+    // forwardEnabled, hasToken, warnings }) and the accumulated usage snapshot.
+    getState: () => ipcRenderer.invoke('telemetry:getState'),
+    // Omit `project` for the existing app-wide/active-project default; pass a
+    // project name to read that project's own bucket (TASK-156).
+    getUsage: (project) => ipcRenderer.invoke('telemetry:getUsage', project),
+    // Overlay a partial config ({ enabled?, forwardUrl?, forwardEnabled?,
+    // forwardToken? }); omit forwardToken to leave it unchanged. Returns new state.
+    setConfig: (partial) => ipcRenderer.invoke('telemetry:setConfig', partial),
+    // Push one project's persisted "store online" toggle (cfg = { storeOnline })
+    // to the receiver's per-project forward gate (TASK-156).
+    setProjectConfig: (project, cfg) => ipcRenderer.invoke('telemetry:setProjectConfig', {
+      project,
+      storeOnline: cfg && cfg.storeOnline
+    }),
+    clear: () => ipcRenderer.invoke('telemetry:clear'),
+    // Per-ticket cost correlation (TASK-142): { startedAt, finishedAt, model? } ->
+    // { ok: true, usage: <totals>|null }. usage is null when telemetry is off/no
+    // receiver; never throws.
+    usageForWindow: (w) => ipcRenderer.invoke('telemetry:usageForWindow', w),
+    // Tag forwarded summaries with the folder the user is currently focused on;
+    // the renderer calls this as tabs are switched. Fire-and-forget.
+    setActiveProject: (name) => ipcRenderer.invoke('telemetry:setActiveProject', name),
+    // Live push after every ingest: cb({ usage, metricTotals, running }).
+    onUpdate: (cb) => {
+      const listener = (_e, payload) => cb(payload);
+      ipcRenderer.on('telemetry:update', listener);
+      return () => ipcRenderer.removeListener('telemetry:update', listener);
+    }
   }
 });

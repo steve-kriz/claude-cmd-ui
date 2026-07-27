@@ -68,6 +68,15 @@ function loadWorkflow(window, document, console) {
     extractConst(rendererSrc, 'WF_PHASE_SPECS'),
     extractConst(rendererSrc, 'WF_PLAN_MODEL_PRIMARY'),
     extractConst(rendererSrc, 'WF_PLAN_MODEL_FALLBACK'),
+    // TASK-182 — the render path now also normalises skill.phases (enabled/order)
+    // and computes the non-blocking dependency-order warning INLINE (called
+    // synchronously from buildWorkflowView, not deferred to a click handler like
+    // the Save-only collaborators noted below), so these must be extracted.
+    extractConst(rendererSrc, 'WF_PHASE_DEFAULTS'),
+    extractConst(rendererSrc, 'WF_ORDER_DEPENDENCIES'),
+    extractFn(rendererSrc, 'wfNormalizePhaseConfig'),
+    extractFn(rendererSrc, 'wfSortedPhaseKeys'),
+    extractFn(rendererSrc, 'wfPhaseOrderWarnings'),
     // TASK-106 — the render path now also parses each agent file (name/model) and
     // mounts a per-phase model editor + a concurrency-default control. Extract the
     // agent-file parser, its constants, the model-editor + concurrency-control
@@ -99,10 +108,24 @@ function loadWorkflow(window, document, console) {
     extractFn(rendererSrc, 'wfParseWorkflow'),
     extractFn(rendererSrc, 'buildWorkflowModelEditor'),
     extractFn(rendererSrc, 'buildWorkflowConcurrencyControl'),
+    // TASK-185 — buildWorkflowPhase now calls buildWorkflowPhaseRegenerator,
+    // which uses wfExtractPhaseBody, wfReplacePhaseBody, validateRegeneratedPhaseSection
+    // and their helpers. These must be extracted or buildWorkflowPhase() will fail.
+    extractConst(rendererSrc, 'WF_PHASE_KEYS'),
+    extractFn(rendererSrc, 'wfSpecForKey'),
+    extractFn(rendererSrc, 'wfDetectEol'),
+    extractFn(rendererSrc, 'wfFindPhaseSection'),
+    extractFn(rendererSrc, 'wfExtractPhaseBody'),
+    extractFn(rendererSrc, 'stripOneCodeFence'),
+    extractFn(rendererSrc, 'wfReplacePhaseBody'),
+    extractFn(rendererSrc, 'validateRegeneratedPhaseSection'),
+    extractFn(rendererSrc, 'buildWorkflowPhaseRegenerator'),
     extractFn(rendererSrc, 'buildWorkflowPhase'),
     extractFn(rendererSrc, 'buildWorkflowView'),
     extractFn(rendererSrc, 'buildWorkflowInstallHint'),
     extractFn(rendererSrc, 'refreshTeamWorkflow'),
+    // TASK-185 — stub the IPC call so phase regenerator buttons work
+    'window.api = window.api || {}; window.api.skill = { async regeneratePhase() { return { ok: false, reason: "stub" }; } };',
     'return { refreshTeamWorkflow, tasksJoin };',
   ].join('\n');
   // eslint-disable-next-line no-new-func
@@ -339,13 +362,14 @@ test('Scenario: with the skill installed, plan/build/test/review render in order
 
   // And (TASK-106) every phase now mounts an editable agent-file model editor
   // seeded from that agent's frontmatter. The cost-routing pins every agent:
-  // ba.md + tech-lead.md declare claude-opus-4-8; coder.md + tester.md declare the
-  // default claude-sonnet-5. None reads as "(default)" anymore.
+  // ba.md + tech-lead.md declare claude-opus-4-8; coder.md declares the default
+  // claude-sonnet-5; tester.md declares the cheap claude-haiku-4-5 tier. None
+  // reads as "(default)" anymore.
   assert.ok(phases.every((p) => p.hasModelEditor), 'every phase mounts an agent-model editor');
   const expectedAgentModel = {
     'orchestrate-ba': 'claude-opus-4-8',
     'orchestrate-coder': 'claude-sonnet-5',
-    'orchestrate-tester': 'claude-sonnet-5',
+    'orchestrate-tester': 'claude-haiku-4-5',
     'orchestrate-tech-lead': 'claude-opus-4-8',
   };
   for (const p of phases) {

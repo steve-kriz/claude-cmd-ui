@@ -27,7 +27,7 @@ const rendererSrc = fs.readFileSync(path.join(REPO, 'renderer', 'renderer.js'), 
 const ASSETS_AGENTS = path.join(REPO, 'assets', 'agents');
 
 const OPUS = 'claude-opus-4-8';    // ba.md + tech-lead.md pin the premium tier
-const SONNET = 'claude-sonnet-5';  // coder.md + tester.md pin the swarm default
+const SONNET = 'claude-sonnet-5';  // coder.md pins the swarm default
 const FABLE = 'claude-fable-5';    // still a valid model id; used as a generic sample
 const AGENT_FILES = ['ba.md', 'coder.md', 'tester.md', 'tech-lead.md'];
 

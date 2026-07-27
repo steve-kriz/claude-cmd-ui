@@ -2,6 +2,7 @@ const { app, BrowserWindow, dialog, ipcMain, globalShortcut, shell, powerSaveBlo
 const path = require('path');
 const fs = require('fs');
 const fsp = fs.promises;
+const os = require('os');
 const { execFile } = require('child_process');
 const { spawnShell } = require('./lib/pty');
 const { shouldKeepAwake } = require('./lib/keep-awake');
@@ -14,10 +15,15 @@ const slack = require('./lib/slack');
 const slackOAuth = require('./lib/slack-oauth');
 const slackSummarize = require('./lib/slack-summarize');
 const agentRegenerate = require('./lib/agent-regenerate');
+const skillRegenerate = require('./lib/skill-regenerate');
 const { redactSecrets } = require('./lib/slack-proxy');
+const { createTelemetryReceiver } = require('./lib/telemetry-receiver');
 
 const ptys = new Map();
 let mainWindow = null;
+// Local Claude Code telemetry receiver (token/cost visibility). Created at boot
+// from the persisted .env config; null until then. See the "Telemetry" section.
+let telemetryReceiver = null;
 let sessionFilePath = null;
 
 // A folder entry may be a legacy bare string (path only) or an object with the
@@ -213,6 +219,9 @@ app.whenReady().then(async () => {
     const seed = await readSession();
     await fsRoots.seedRoots(seed.folders);
   } catch (_) { /* seeding is best-effort; empty registry rejects all fs ops */ }
+  // Boot the loopback telemetry receiver BEFORE the window so the OTEL_* env is
+  // injected before any terminal (and thus any `claude`) is spawned.
+  await initTelemetry();
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -290,6 +299,11 @@ ipcMain.on('tasks:activity', (_evt, payload) => {
 
 // Belt-and-braces: never leak the wake-lock past shutdown.
 app.on('will-quit', () => { stopKeepAwake(); });
+// Separately close the telemetry receiver on shutdown (its own handler so the
+// wake-lock line above stays a single, drift-guarded statement).
+app.on('will-quit', () => {
+  if (telemetryReceiver) { try { telemetryReceiver.stop(); } catch (_) {} }
+});
 
 // ── Window attention flash (TASK-078) ────────────────────────────────────────
 // When a tab is waiting/finished or a board ticket awaits an answer, and the
@@ -354,12 +368,25 @@ ipcMain.handle('dialog:pickFolder', async () => {
   return { path: picked };
 });
 
-ipcMain.handle('pty:spawn', (_evt, { id, shell, cwd, cols, rows, worker, cliCommand }) => {
+// TASK-153/TASK-160: tag this pane's telemetry exports with the project folder
+// that launched it. Per-spawn only — never merged into the global managed
+// TELEMETRY_OTEL_KEYS env, and it overrides any global OTEL_RESOURCE_ATTRIBUTES
+// for this one spawn. Extracted to a requireable function (following the
+// augmentDarwinPath / createUsageForWindowHandler precedent) so tests exercise
+// this EXACT logic instead of a source-text regex match or a hand-rolled mirror.
+function buildOtelProjectEnv(project) {
+  return project
+    ? { OTEL_RESOURCE_ATTRIBUTES: 'project=' + encodeURIComponent(project) }
+    : undefined;
+}
+
+ipcMain.handle('pty:spawn', (_evt, { id, shell, cwd, cols, rows, worker, cliCommand, project }) => {
   if (ptys.has(id)) {
     try { ptys.get(id).kill(); } catch (_) {}
     ptys.delete(id);
   }
-  const proc = spawnShell({ shell, cwd, cols, rows, worker, cliCommand });
+  const env = buildOtelProjectEnv(project);
+  const proc = spawnShell({ shell, cwd, cols, rows, worker, cliCommand, env });
   ptys.set(id, proc);
   proc.onData((data) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -452,6 +479,203 @@ ipcMain.handle('env:get', async (_evt, { key }) => {
 ipcMain.handle('env:set', async (_evt, { key, value }) => {
   try { await envStore.set(key, value); return { ok: true }; }
   catch (err) { return { ok: false, error: err.message }; }
+});
+
+// ── Telemetry (Claude Code token/cost visibility) ────────────────────────────
+// The app runs a loopback OTLP receiver (lib/telemetry-receiver.js) that spawned
+// `claude` processes export to, so the user can SEE tokens + cost in-app and
+// optionally forward a compact JSON summary to a URL of their choice. The receiver
+// is configured entirely from persisted .env keys; the OTEL_* env vars that point
+// `claude` at it are injected into process.env (never persisted — the port is
+// dynamic) so every subsequently-spawned terminal inherits them.
+
+// The OTEL_* keys this app manages on process.env. Cleared then re-set on apply.
+const TELEMETRY_OTEL_KEYS = [
+  'CLAUDE_CODE_ENABLE_TELEMETRY', 'OTEL_METRICS_EXPORTER', 'OTEL_LOGS_EXPORTER',
+  'OTEL_EXPORTER_OTLP_PROTOCOL', 'OTEL_EXPORTER_OTLP_ENDPOINT',
+  'OTEL_METRIC_EXPORT_INTERVAL', 'OTEL_LOGS_EXPORT_INTERVAL', 'OTEL_SERVICE_NAME',
+];
+
+// Read the persisted telemetry config out of process.env (seeded from .env).
+function readTelemetryConfigFromEnv() {
+  return {
+    enabled: envStore.get('TELEMETRY_ENABLED') === '1',
+    forwardUrl: envStore.get('TELEMETRY_FORWARD_URL'),
+    forwardEnabled: envStore.get('TELEMETRY_FORWARD_ENABLED') === '1',
+    forwardToken: envStore.get('TELEMETRY_FORWARD_TOKEN'),
+    port: Number(envStore.get('TELEMETRY_PORT')) || 0,
+  };
+}
+
+// Persist a telemetry config back to .env. The token is a secret and lives only in
+// .env (gitignored), exactly like the Slack token.
+async function persistTelemetryConfig(cfg) {
+  await envStore.set('TELEMETRY_ENABLED', cfg.enabled ? '1' : '0');
+  await envStore.set('TELEMETRY_FORWARD_URL', cfg.forwardUrl || '');
+  await envStore.set('TELEMETRY_FORWARD_ENABLED', cfg.forwardEnabled ? '1' : '0');
+  await envStore.set('TELEMETRY_FORWARD_TOKEN', cfg.forwardToken || '');
+}
+
+// Inject (or clear) the OTEL_* env vars so newly-spawned `claude` exports to the
+// live receiver endpoint. Idempotent; always clears the managed keys first.
+function applyTelemetryOtelEnv() {
+  for (const k of TELEMETRY_OTEL_KEYS) delete process.env[k];
+  const env = telemetryReceiver ? telemetryReceiver.otelEnv() : {};
+  for (const [k, v] of Object.entries(env)) process.env[k] = v;
+}
+
+// Boot the receiver from persisted config. Best-effort: any failure leaves the
+// app fully usable with telemetry simply off.
+async function initTelemetry() {
+  try {
+    telemetryReceiver = createTelemetryReceiver({
+      config: readTelemetryConfigFromEnv(),
+      onUpdate: (state) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          try { mainWindow.webContents.send('telemetry:update', state); } catch (_) {}
+        }
+      },
+      host: () => { try { return os.hostname(); } catch (_) { return ''; } },
+      username: () => { try { return os.userInfo().username || ''; } catch (_) { return ''; } },
+      now: () => new Date().toISOString(),
+      log: (m, e) => console.error('[telemetry]', m, e || ''),
+    });
+    if (telemetryReceiver.config.enabled) {
+      await telemetryReceiver.start();
+    }
+    applyTelemetryOtelEnv();
+  } catch (e) {
+    console.error('[telemetry] init failed', e);
+  }
+}
+
+ipcMain.handle('telemetry:getState', async () => {
+  if (!telemetryReceiver) return { ok: true, state: { enabled: false, running: false } };
+  return { ok: true, state: telemetryReceiver.getState() };
+});
+
+// `arg` is either omitted (preserve today's app-wide/active-project default) or
+// a project name — a bare string, or { project } — routed to that project's own
+// bucket via getUsageForProject (TASK-156).
+//
+// Extracted to a requireable factory (TASK-164, following the
+// createUsageForWindowHandler / buildOtelProjectEnv precedent) so tests
+// exercise this EXACT arg-routing logic instead of a hand-rolled mirror.
+//
+// NOTE (TASK-166): the resolved `usage` payload's SHAPE differs by branch —
+// this is intentional, not a bug, and callers must not assume one shape fits
+// both:
+//   - no-arg / falsy project → receiver.getUsage() → app-wide roll-up:
+//     { usage, metricTotals, running, recent }
+//   - non-empty project      → receiver.getUsageForProject(project) →
+//     project-scoped: { usage, recent } ONLY — no `metricTotals`/`running`.
+// `metricTotals` (cross-check totals) and `running` (receiver server state)
+// are both app-wide concepts that don't make sense scoped to a single
+// project, so getUsageForProject() simply omits them rather than fabricating
+// project-scoped versions. Any consumer of a project-scoped call must read
+// only `usage`/`recent` off the result (see renderer.js's buildTelemetryControl
+// `refresh()`, which documents and follows this at the one call site that
+// passes a project).
+function createGetUsageHandler(telemetryReceiverArg) {
+  return async (_evt, arg) => {
+    if (!telemetryReceiverArg) return { ok: true, usage: null };
+    const project = typeof arg === 'string'
+      ? arg
+      : (arg && typeof arg === 'object' && typeof arg.project === 'string' ? arg.project : '');
+    if (project) {
+      try { return { ok: true, usage: telemetryReceiverArg.getUsageForProject(project) }; }
+      catch (_) { return { ok: true, usage: null }; }
+    }
+    return { ok: true, usage: telemetryReceiverArg.getUsage() };
+  };
+}
+
+ipcMain.handle('telemetry:getUsage', (_evt, arg) =>
+  createGetUsageHandler(telemetryReceiver)(_evt, arg));
+
+// Per-ticket cost correlation (TASK-142): sum captured api_request rows that
+// fall inside one activity's { startedAt, finishedAt, model } window. Best-
+// effort — no receiver (telemetry off/never started) yields `usage: null`,
+// never a thrown error or a fabricated figure.
+//
+// Extracted to a requireable factory (TASK-158) so unit/e2e tests exercise
+// this EXACT logic instead of a hand-rolled mirror. Takes the receiver as an
+// argument (rather than closing over the module-level `telemetryReceiver`
+// directly) so it stays a pure, injectable function for tests; the wiring
+// below re-invokes the factory on every call so it always sees the CURRENT
+// `telemetryReceiver` (which is reassigned by initTelemetry() after this
+// module-level ipcMain.handle registration runs).
+function createUsageForWindowHandler(telemetryReceiverArg) {
+  return async (_evt, windowArg) => {
+    if (!telemetryReceiverArg) return { ok: true, usage: null };
+    try {
+      return { ok: true, usage: telemetryReceiverArg.usageForWindow(windowArg) };
+    } catch (_) {
+      return { ok: true, usage: null };
+    }
+  };
+}
+
+ipcMain.handle('telemetry:usageForWindow', (_evt, windowArg) =>
+  createUsageForWindowHandler(telemetryReceiver)(_evt, windowArg));
+
+ipcMain.handle('telemetry:clear', async () => {
+  if (telemetryReceiver) telemetryReceiver.clear();
+  return { ok: true };
+});
+
+// Record the folder the user is currently focused on (the renderer reports it as
+// tabs are switched) so the forwarded telemetry summary is tagged with the active
+// project. Best-effort: no receiver / junk input simply does nothing.
+ipcMain.handle('telemetry:setActiveProject', async (_evt, name) => {
+  if (telemetryReceiver) {
+    try { telemetryReceiver.setActiveProject(typeof name === 'string' ? name : ''); } catch (_) {}
+  }
+  return { ok: true };
+});
+
+// Wire a project's persisted "store online" toggle (lib/telemetry-project-config.js)
+// to the receiver's per-project forward gate (TASK-156). `arg` is
+// { project, storeOnline }. Best-effort/no-op when there's no receiver yet;
+// never throws.
+//
+// Extracted to a requireable factory (TASK-164, following the
+// createUsageForWindowHandler / buildOtelProjectEnv precedent) so tests
+// exercise this EXACT logic instead of a hand-rolled mirror.
+function createSetProjectConfigHandler(telemetryReceiverArg) {
+  return async (_evt, arg) => {
+    if (telemetryReceiverArg) {
+      try {
+        const a = arg && typeof arg === 'object' ? arg : {};
+        telemetryReceiverArg.setProjectForwarding(a.project, a.storeOnline);
+      } catch (_) {}
+    }
+    return { ok: true };
+  };
+}
+
+ipcMain.handle('telemetry:setProjectConfig', (_evt, arg) =>
+  createSetProjectConfigHandler(telemetryReceiver)(_evt, arg));
+
+// Update telemetry config from the UI. `partial` overlays the persisted config, so
+// the renderer can omit the token to leave it unchanged. Restarts the receiver as
+// needed, re-injects the OTEL env, and persists to .env.
+ipcMain.handle('telemetry:setConfig', async (_evt, partial) => {
+  try {
+    const current = readTelemetryConfigFromEnv();
+    const p = partial && typeof partial === 'object' ? partial : {};
+    const merged = { ...current };
+    for (const k of ['enabled', 'forwardUrl', 'forwardEnabled', 'forwardToken', 'port']) {
+      if (p[k] !== undefined) merged[k] = p[k];
+    }
+    if (!telemetryReceiver) await initTelemetry();
+    const state = await telemetryReceiver.setConfig(merged);
+    applyTelemetryOtelEnv();
+    await persistTelemetryConfig(merged);
+    return { ok: true, state };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
 });
 
 ipcMain.handle('aws:listProfiles', async () => {
@@ -1902,6 +2126,46 @@ ipcMain.handle('agents:regenerate', async (_evt, { content, instruction } = {}) 
   }
 });
 
+// Upper bounds on the text handed to the SKILL.md phase-section regenerator
+// (TASK-184), mirroring AGENT_REGEN_MAX_*. A single `## Phase <n>` section
+// body is far smaller than a whole agent file, so this content cap is tighter;
+// the instruction cap matches the agent regenerator's.
+const SKILL_REGEN_MAX_CONTENT_CHARS = 20000;
+const SKILL_REGEN_MAX_INSTRUCTION_CHARS = 4000;
+
+// Regenerate ONE phase-section's prose body of the orchestrate SKILL.md from
+// its current text plus a user instruction (TASK-184). Reads
+// ANTHROPIC_API_KEY from the .env store (never logged, never returned),
+// clamps both inputs, and delegates to the Electron-free lib module, which
+// never throws and returns a structured { ok, content, reason }. This handler
+// likewise never throws into the renderer and never returns the key. The
+// renderer (TASK-185) validates the returned section body and only splices +
+// writes it (via lib/skill-section.js + writeWithMirror) after the user
+// reviews and clicks Save. This handler performs no splice and no write.
+ipcMain.handle('skill:regeneratePhase', async (_evt, { content, instruction } = {}) => {
+  const rawContent = typeof content === 'string' ? content : '';
+  const rawInstruction = typeof instruction === 'string' ? instruction : '';
+  const clampedContent = rawContent.length > SKILL_REGEN_MAX_CONTENT_CHARS
+    ? rawContent.slice(0, SKILL_REGEN_MAX_CONTENT_CHARS)
+    : rawContent;
+  const clampedInstruction = rawInstruction.length > SKILL_REGEN_MAX_INSTRUCTION_CHARS
+    ? rawInstruction.slice(0, SKILL_REGEN_MAX_INSTRUCTION_CHARS)
+    : rawInstruction;
+  try {
+    const apiKey = (envStore.get('ANTHROPIC_API_KEY') || '').trim();
+    const res = await skillRegenerate.regeneratePhaseSection({
+      apiKey,
+      content: clampedContent,
+      instruction: clampedInstruction
+    });
+    return { ok: res.ok, content: res.content, reason: res.reason };
+  } catch (err) {
+    // Belt-and-braces: the lib swallows its own errors, but a thrown error here
+    // must still degrade to a structured failure, never crash the renderer.
+    return { ok: false, content: '', reason: 'error', error: err && err.message };
+  }
+});
+
 // Open a Socket Mode WebSocket URL for the renderer to connect to. The renderer
 // owns the WebSocket itself (Chromium has a native WebSocket); the main process
 // only performs the authenticated apps.connections.open round-trip.
@@ -1965,6 +2229,11 @@ ipcMain.handle('git:abortMerge', async (_evt, { cwd }) => {
   return { ok: false, error: 'No merge/rebase/cherry-pick in progress.' };
 });
 
-// Exported for unit testing the platform-aware startup PATH fix in isolation.
+// Exported for unit testing the platform-aware startup PATH fix in isolation,
+// (TASK-158) the telemetry:usageForWindow handler factory, and (TASK-164) the
+// telemetry:getUsage / telemetry:setProjectConfig handler factories.
 // Electron ignores an entry script's exports, so this is inert at runtime.
-module.exports = { augmentDarwinPath };
+module.exports = {
+  augmentDarwinPath, createUsageForWindowHandler, buildOtelProjectEnv,
+  createGetUsageHandler, createSetProjectConfigHandler,
+};

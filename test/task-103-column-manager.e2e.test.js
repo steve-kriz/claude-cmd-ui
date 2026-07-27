@@ -75,6 +75,15 @@ function loadBoard(window, document, console) {
     extractConst(rendererSrc, 'TASKS_RESERVED_SLUGS'),
     extractConst(rendererSrc, 'TASKS_MAX_SLUG_LENGTH'),
     extractConst(rendererSrc, 'TASKS_SLUG_RE'),
+    // TASK-180 - tasksBuildColumn normalises a column's optional `phase` link
+    // via tasksNormalizeColumnPhase, which reads TASKS_PHASE_KEYS.
+    extractConst(rendererSrc, 'TASKS_PHASE_KEYS'),
+    // TASK-183 - tasksApplyPhaseAutoEnable's fallback when a phase's
+    // skill.phases entry is missing/malformed, plus the column->phase link
+    // counter it and refreshTeamBoard's baseline snapshot both use.
+    extractConst(rendererSrc, 'TASKS_PHASE_ENABLED_DEFAULTS'),
+    extractFn(rendererSrc, 'tasksPhaseLinkCounts'),
+    extractFn(rendererSrc, 'tasksApplyPhaseAutoEnable'),
     // TASK-121 (F2): tasksSerializeTeamConfig now clamps skill.concurrencyDefault
     // through resolveTasksConcurrency, so the serializer needs these three symbols
     // in scope or saveTeamBoardConfig throws ReferenceError. Function declarations
@@ -83,6 +92,7 @@ function loadBoard(window, document, console) {
     extractConst(rendererSrc, 'TASKS_DEFAULT_CONCURRENCY'),
     extractFn(rendererSrc, 'resolveTasksConcurrency'),
     extractFn(rendererSrc, 'tasksPrettifyLabel'),
+    extractFn(rendererSrc, 'tasksNormalizeColumnPhase'),
     extractFn(rendererSrc, 'tasksBuildColumn'),
     extractFn(rendererSrc, 'normalizeTasksColumns'),
     extractFn(rendererSrc, 'tasksSlugForLabel'),

@@ -179,6 +179,13 @@ ticket's build time (in minutes), cost, and token figures.
   It reuses the same single-run guard as the continuous loop, so it is a no-op when
   a run is already active/queued or Claude is not idle — that already-active run's
   mid-build intake picks the new ticket up instead, and no overlapping run starts.
+- **Build button direct-send** (TASK-143) — clicking **Build** when nothing is
+  running (a live, idle session with an empty [prompt queue](prompt-queue.md) and
+  no TUI menu open) types `/orchestrate build --concurrency <N>` straight into the
+  terminal instead of routing it through the queue; if a run is in flight,
+  mid-dispatch, already queued, or Claude is paused on a menu it falls back to the
+  queue exactly as before (`startBuildOrQueue` in
+  [`renderer/renderer.js`](../renderer/renderer.js)).
 
 **Skill install.** Installing the orchestration skill from the UI (the Tasks
 banner, Workflow panel, or Agents panel — all three drive the same
@@ -233,6 +240,16 @@ node --test test/ticket-queue.test.js test/ticket-lanes.test.js
 - **Concurrency** — default 3, max 8 (`lib/ticket-queue.js`); persisted
   per-folder in renderer localStorage and passed as `--concurrency <N>`
   (`lib/tasks-settings.js`).
+- **Phase enabled/order** (TASK-181) — before dispatching each phase, the
+  orchestrator reads `skill.phases.<phase>.enabled` / `.order` (`plan` / `build` /
+  `test` / `review`) from `tasks/team-config.json`. A phase is skipped only when
+  `enabled` is the literal boolean `false`; `plan`/`build`/`test` default enabled,
+  but **`review` defaults disabled**, so with no config the flow collapses to
+  `testing → post-processing → done` (no tech-lead review). Phases dispatch in
+  ascending configured `order`, followed literally even if it puts a phase ahead
+  of what it depends on — the orchestrator notes any such out-of-order run in its
+  end-of-run report rather than refusing. See the skill's "Phase-enabled config
+  and dispatch order" section for the full rules.
 - No env vars. Ticket status enum, active statuses, and post-processing kind are
   code (`lib/ticket-lanes.js`).
 

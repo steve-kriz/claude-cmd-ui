@@ -354,11 +354,117 @@ test('totalActivities: counts only the entries that actually carried the field',
 test('totalActivities: non-array / junk input yields all-null totals (no throw)', () => {
   for (const bad of [null, undefined, 'x', 42, {}]) {
     const t = totalActivities(bad);
-    assert.deepEqual(t, { durationMs: null, tokensIn: null, tokensOut: null, costUsd: null });
+    assert.deepEqual(t, {
+      durationMs: null, tokensIn: null, tokensOut: null,
+      cacheReadTokens: null, cacheCreationTokens: null, costUsd: null,
+    });
   }
 });
 
 test('totalActivities: a recorded 0 counts (distinct from absent)', () => {
   const t = totalActivities([{ activity: 'ba', costUsd: 0 }, { activity: 'code', costUsd: 0 }]);
   assert.strictEqual(t.costUsd, 0, 'summing recorded zeros yields 0, not null');
+});
+
+// ---------------------------------------------------------------------------
+// TASK-142: cache hits (cacheReadTokens / cacheCreationTokens) persistence
+// ---------------------------------------------------------------------------
+
+test('appendActivity persists cacheReadTokens/cacheCreationTokens when isValidAmount', () => {
+  const out = appendActivity({ id: 'T' }, {
+    activity: 'code',
+    cacheReadTokens: 28905,
+    cacheCreationTokens: 0,
+  });
+  const e = parseActivities(out)[0];
+  assert.strictEqual(e.cacheReadTokens, 28905, 'cache read tokens persisted');
+  assert.strictEqual(e.cacheCreationTokens, 0, 'cache creation tokens (0) persisted as distinct from absent');
+  assert.ok('cacheReadTokens' in e && 'cacheCreationTokens' in e);
+});
+
+test('appendActivity: cacheReadTokens/cacheCreationTokens follow the same validity gate as tokensIn/tokensOut', () => {
+  const junk = [NaN, Infinity, -Infinity, -1, -0.01, null, undefined, '', 'abc', '1x', {}];
+  for (const v of junk) {
+    const e = parseActivities(appendActivity({ id: 'T' }, {
+      activity: 'code', cacheReadTokens: v, cacheCreationTokens: v,
+    }))[0];
+    assert.ok(!('cacheReadTokens' in e), `cacheReadTokens absent for ${JSON.stringify(v)}`);
+    assert.ok(!('cacheCreationTokens' in e), `cacheCreationTokens absent for ${JSON.stringify(v)}`);
+  }
+});
+
+test('appendActivity: numeric strings for cache hits are coerced to numbers', () => {
+  const out = appendActivity({ id: 'T' }, {
+    activity: 'code',
+    cacheReadTokens: '28905',
+    cacheCreationTokens: '100',
+  });
+  const e = parseActivities(out)[0];
+  assert.strictEqual(e.cacheReadTokens, 28905);
+  assert.strictEqual(e.cacheCreationTokens, 100);
+  assert.equal(typeof e.cacheReadTokens, 'number');
+  assert.equal(typeof e.cacheCreationTokens, 'number');
+});
+
+test('totalActivities sums cacheReadTokens/cacheCreationTokens across entries', () => {
+  const activities = [
+    { activity: 'ba', cacheReadTokens: 100, cacheCreationTokens: 10 },
+    { activity: 'code', cacheReadTokens: 250, cacheCreationTokens: 20 },
+  ];
+  const t = totalActivities(activities);
+  assert.equal(t.cacheReadTokens, 350, '100 + 250');
+  assert.equal(t.cacheCreationTokens, 30, '10 + 20');
+});
+
+test('totalActivities: cacheReadTokens/cacheCreationTokens are null when NO entry carried them', () => {
+  const activities = [
+    { activity: 'ba', tokensIn: 100, tokensOut: 50 },
+    { activity: 'code', tokensIn: 200, tokensOut: 75 },
+  ];
+  const t = totalActivities(activities);
+  assert.equal(t.cacheReadTokens, null, 'no entry had cacheReadTokens → null, not 0');
+  assert.equal(t.cacheCreationTokens, null, 'no entry had cacheCreationTokens → null, not 0');
+  assert.equal(t.tokensIn, 300);
+  assert.equal(t.tokensOut, 125);
+});
+
+test('totalActivities: only counts entries that actually carried the cache fields', () => {
+  const activities = [
+    { activity: 'ba', cacheReadTokens: 100, cacheCreationTokens: 10, tokensIn: 1000 },
+    { activity: 'code', tokensIn: 2000 }, // no cache fields
+    { activity: 'test', cacheReadTokens: 50 }, // only read, no creation
+  ];
+  const t = totalActivities(activities);
+  assert.equal(t.cacheReadTokens, 150, '100 + 50');
+  assert.equal(t.cacheCreationTokens, 10, 'only ba carried it');
+  assert.equal(t.tokensIn, 3000, 'all three carried tokens');
+});
+
+test('appendActivity: activites field round-trips as single-line JSON with no newlines', () => {
+  let fm = { id: 'T' };
+  fm = appendActivity(fm, { activity: 'ba', startedAt: '2026-07-19T10:00:00Z', finishedAt: '2026-07-19T10:05:00Z', cacheReadTokens: 28905, cacheCreationTokens: 0 });
+  fm = appendActivity(fm, { activity: 'code', startedAt: '2026-07-19T11:00:00Z', finishedAt: '2026-07-19T11:20:00Z', cacheReadTokens: 100, cacheCreationTokens: 5 });
+  const raw = fm[ACTIVITIES_KEY];
+  assert.equal(typeof raw, 'string');
+  assert.ok(!raw.includes('\n') && !raw.includes('\r'), 'single-line JSON, no newlines');
+  const parsed = JSON.parse(raw);
+  assert.equal(parsed.length, 2);
+  assert.equal(parsed[0].cacheReadTokens, 28905);
+  assert.equal(parsed[0].cacheCreationTokens, 0);
+  assert.equal(parsed[1].cacheReadTokens, 100);
+  assert.equal(parsed[1].cacheCreationTokens, 5);
+});
+
+test('appendActivity: single-field accounting (tokensIn/tokensOut/costUsd) and runs log untouched by cache-hits additions', () => {
+  const fm = {
+    id: 'T', title: 't', status: 'done',
+    tokens: 12345, costUsd: 0.42, runs: '[{"minutes":3}]',
+  };
+  const out = appendActivity(fm, { activity: 'code', cacheReadTokens: 100, cacheCreationTokens: 10 });
+  assert.equal(out.tokens, 12345, 'flat tokens untouched');
+  assert.equal(out.costUsd, 0.42, 'flat costUsd untouched');
+  assert.equal(out.runs, '[{"minutes":3}]', 'runs log untouched');
+  const entries = parseActivities(out);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].cacheReadTokens, 100, 'cache hits in activities log');
 });

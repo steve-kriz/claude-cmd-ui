@@ -25,8 +25,9 @@ const PROJECT_SKILL = path.join(ROOT, '.claude', 'skills', 'orchestrate', 'SKILL
 const ASSETS_AGENTS = path.join(ROOT, 'assets', 'agents');
 const PROJECT_AGENTS = path.join(ROOT, '.claude', 'agents');
 
-const SONNET = 'claude-sonnet-5'; // the swarm default
+const SONNET = 'claude-sonnet-5'; // the swarm default (coder)
 const OPUS = 'claude-opus-4-8';   // the premium tier (BA + tech-lead)
+const HAIKU = 'claude-haiku-4-5'; // the cheap tier (tester)
 
 function readFileLF(p) {
   return fs.readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
@@ -83,6 +84,26 @@ test('unit: both SKILL.md copies contain the exact id claude-sonnet-5 (the swarm
 test('unit: both SKILL.md copies contain the exact id claude-opus-4-8 (the premium tier)', () => {
   assert.ok(skillAssetsSrc.includes(OPUS), 'assets copy names claude-opus-4-8');
   assert.ok(skillProjectSrc.includes(OPUS), '.claude copy names claude-opus-4-8');
+});
+
+test('unit: both SKILL.md copies contain the exact id claude-haiku-4-5 (the cheap tester tier)', () => {
+  assert.ok(skillAssetsSrc.includes(HAIKU), 'assets copy names claude-haiku-4-5');
+  assert.ok(skillProjectSrc.includes(HAIKU), '.claude copy names claude-haiku-4-5');
+});
+
+test('unit: SKILL Model-routing routes the tester to the cheap claude-haiku-4-5 tier', () => {
+  for (const src of [skillAssetsSrc, skillProjectSrc]) {
+    assert.match(
+      src,
+      /Cheap tier `claude-haiku-4-5` for the tester \(Phase 3\)/,
+      'cheap tier is claude-haiku-4-5 for the tester only',
+    );
+    assert.match(
+      src,
+      /falls back to `claude-sonnet-5` only if `claude-haiku-4-5` is unavailable/,
+      'tester falls back to the default claude-sonnet-5',
+    );
+  }
 });
 
 test('unit: neither copy contains a common typo of the model ids, nor the retired claude-fable-5 pin', () => {
@@ -147,6 +168,8 @@ test('unit: model ids appear only before the "## Phase 2 — Build" heading', ()
       'all claude-sonnet-5 mentions precede Phase 2');
     assert.ok(src.indexOf(OPUS) !== -1 && src.lastIndexOf(OPUS) < phase2Idx,
       'all claude-opus-4-8 mentions precede Phase 2');
+    assert.ok(src.indexOf(HAIKU) !== -1 && src.lastIndexOf(HAIKU) < phase2Idx,
+      'all claude-haiku-4-5 mentions precede Phase 2');
   }
 });
 
@@ -164,6 +187,7 @@ test('unit: Phase 2, 3 and 4 sections each contain neither model id', () => {
     for (const [label, text] of Object.entries(sections)) {
       assert.ok(!text.includes(SONNET), `${label} does not name ${SONNET}`);
       assert.ok(!text.includes(OPUS), `${label} does not name ${OPUS}`);
+      assert.ok(!text.includes(HAIKU), `${label} does not name ${HAIKU}`);
     }
   }
 });
@@ -184,7 +208,7 @@ const AGENT_MODEL = {
   'ba.md': { name: 'orchestrate-ba', model: OPUS, tools: ['Read', 'Grep', 'Glob'] },
   'tech-lead.md': { name: 'orchestrate-tech-lead', model: OPUS, tools: ['Read', 'Grep', 'Glob'] },
   'coder.md': { name: 'orchestrate-coder', model: SONNET, tools: ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash'] },
-  'tester.md': { name: 'orchestrate-tester', model: SONNET, tools: ['Read', 'Grep', 'Glob', 'Write', 'Edit', 'Bash'] },
+  'tester.md': { name: 'orchestrate-tester', model: HAIKU, tools: ['Read', 'Grep', 'Glob', 'Write', 'Edit', 'Bash'] },
 };
 
 for (const [label, dir] of [['assets', ASSETS_AGENTS], ['.claude', PROJECT_AGENTS]]) {
@@ -203,12 +227,12 @@ for (const [label, dir] of [['assets', ASSETS_AGENTS], ['.claude', PROJECT_AGENT
   }
 }
 
-test('unit: the BA and tech-lead are pinned to the premium tier; the coder and tester to the default', () => {
+test('unit: the BA and tech-lead are pinned to the premium tier; the coder to the default; the tester to the cheap tier', () => {
   for (const dir of [ASSETS_AGENTS, PROJECT_AGENTS]) {
     assert.equal(parseAgentFrontmatter(readFileLF(path.join(dir, 'ba.md'))).fm.model, OPUS);
     assert.equal(parseAgentFrontmatter(readFileLF(path.join(dir, 'tech-lead.md'))).fm.model, OPUS);
     assert.equal(parseAgentFrontmatter(readFileLF(path.join(dir, 'coder.md'))).fm.model, SONNET);
-    assert.equal(parseAgentFrontmatter(readFileLF(path.join(dir, 'tester.md'))).fm.model, SONNET);
+    assert.equal(parseAgentFrontmatter(readFileLF(path.join(dir, 'tester.md'))).fm.model, HAIKU);
   }
 });
 
@@ -216,7 +240,7 @@ test('unit: every agent def now carries a model key (no agent is left on the amb
   for (const dir of [ASSETS_AGENTS, PROJECT_AGENTS]) {
     for (const f of Object.keys(AGENT_MODEL)) {
       const { fm } = parseAgentFrontmatter(readFileLF(path.join(dir, f)));
-      assert.ok(fm.model === OPUS || fm.model === SONNET, `${f} pins a known tier`);
+      assert.ok(fm.model === OPUS || fm.model === SONNET || fm.model === HAIKU, `${f} pins a known tier`);
     }
   }
 });

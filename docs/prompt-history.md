@@ -71,9 +71,16 @@ Lambda side ([`lambda/prompt-logs/index.mjs`](../lambda/prompt-logs/index.mjs)):
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `LOG_GROUP` | `/claude-cmd-ui/prompts` | CloudWatch log group |
+| `LOG_GROUP` | `/claude-cmd-ui/prompts` | Prompt-log CloudWatch log group |
+| `TELEMETRY_LOG_GROUP` | `/claude-cmd-ui/telemetry` | OTEL usage/cost CloudWatch log group |
 | `AWS_REGION` | (set by Lambda) | Region |
-| `API_KEY` | (none) | Optional shared secret; clients must send `X-Api-Key` |
+| `API_KEY` | (none) | Optional shared secret; prompt-log clients send `X-Api-Key`, the telemetry forwarder sends `Authorization: Bearer` |
+
+The same endpoint also accepts the app's **OTEL usage/cost telemetry** — see
+[`telemetry.md`](telemetry.md#storing-it-online-optional). The POST route
+auto-detects a `telemetry.usage.v1` payload (by its `schema` tag) and stores it
+in `TELEMETRY_LOG_GROUP`, one stream per host; a prompt-log POST (`{ username,
+project, entry }`) is unchanged.
 
 ## Inputs / outputs
 

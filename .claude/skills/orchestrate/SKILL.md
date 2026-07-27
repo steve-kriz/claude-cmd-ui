@@ -137,22 +137,29 @@ re-explains state, so most savings come from tiering models by task difficulty a
 keeping each sub-agent narrow — not from any single model choice. Route by
 difficulty:
 
-- **Default model: `claude-sonnet-5`.** Every agent runs on `claude-sonnet-5`
-  unless routed to the premium tier below. Dispatch the **coder** (Phase 2) and the
-  **tester** (Phase 3) on this default — most implementation and the mechanical
-  test-writing/running work does not need the premium tier.
+- **Default model: `claude-sonnet-5`.** The **coder** (Phase 2) runs on this
+  default tier — implementation needs real capability but not the premium tier.
+  `claude-sonnet-5` is also the fallback every other role degrades to when its own
+  tier is unavailable.
 - **Premium tier `claude-opus-4-8` for planning and review only.** Dispatch the
   **business analyst** (Phase 1) and the **tech lead / reviewer** (Phase 4) on
   `claude-opus-4-8` — the hard reasoning steps (decomposing a feature into tickets,
   and a thorough final review) that justify the premium tier. The BA falls back to
   the default `claude-sonnet-5` only if `claude-opus-4-8` is unavailable.
+- **Cheap tier `claude-haiku-4-5` for the tester (Phase 3).** Writing and running
+  the e2e/unit tests from a fully-specified ticket is mechanical, high-volume work,
+  so the **tester** runs on the cheapest tier — the biggest per-ticket saving in the
+  swarm. It falls back to `claude-sonnet-5` only if `claude-haiku-4-5` is unavailable.
 
 Each agent's model is pinned in its own `.claude/agents/*.md` frontmatter (`model:`
 key: `claude-opus-4-8` for `orchestrate-ba` and `orchestrate-tech-lead`,
-`claude-sonnet-5` for `orchestrate-coder` and `orchestrate-tester`), so this
-routing travels with the agent definitions; the ids above are the authoritative
-policy. This model-routing directive is stated **here, once, before Phase 2** — the
-per-phase sections below never restate a model id.
+`claude-sonnet-5` for `orchestrate-coder`, and `claude-haiku-4-5` for
+`orchestrate-tester`), so this routing travels with the agent definitions; the ids
+above are the authoritative policy. **These tiers are settings, not constants:**
+change a role's tier by editing that agent's `model:` line — the Team tab's
+**Workflow** panel edits it for you and keeps the `assets/` mirror byte-synced. This
+model-routing directive is stated **here, once, before Phase 2** — the per-phase
+sections below never restate a model id.
 
 ### Distilled returns (never inherit a sub-agent's raw context)
 
@@ -199,6 +206,52 @@ every agent:
   the small, changing part of each prompt is fresh (uncached) input, while the
   large, stable part (system prompt + preamble + ticket contract) is served from
   cache. Small volatile tails plus stable prefixes are what make the swarm cheap.
+
+### Phase-enabled config and dispatch order (`tasks/team-config.json`)
+
+Before dispatching any phase's subagent, for every ticket that phase would otherwise process,
+consult `tasks/team-config.json`'s `skill.phases.<phase>` entry (normalised by
+`lib/team-config.js`; the four canonical keys are `plan`/`build`/`test`/`review`) for two
+things: whether that phase's dispatch runs at all, and where it sits in the run order. This
+does not change the Build loop's claim/isolation/concurrency mechanics (Phase 2's `todo` →
+`in-progress` claim, or the batch/slot math in "Concurrency, claims, and isolation") or the
+tester's fix loop — it only gates whether a phase's subagent is launched, and in what order the
+four phases run for a given ticket.
+
+- **Enabled check (skip a disabled phase).** Before running a phase's dispatch step, read
+  `skill.phases.<phase>.enabled`. A phase is treated as disabled **only** when that value is the
+  literal boolean `false`; anything else — missing, or a non-boolean value the config layer
+  normalises to `true` — counts as enabled, so treat it as "disabled only when explicitly
+  `false`". When the config file is missing, unparseable, or `skill.phases` is absent entirely,
+  `plan`/`build`/`test` default **enabled** (no behaviour change for existing projects), but
+  `review` defaults **disabled**. Call out this asymmetry explicitly so it is never mistaken for
+  a bug: with no board setup, a ticket's flow is `testing → post-processing → done`, and the
+  tech-lead dispatch (Phase 4) never runs, unless the user has explicitly enabled review (the
+  Workflow panel toggle) or linked a board column to it. **This is an intentional, accepted
+  default-behavior change** for every project adopting this schema — do not treat a run that
+  never reaches tech-lead review as broken; it is the documented new default.
+  - Today, **`review` is the only phase this feature makes meaningfully skippable.** Disabling
+    `build` or `test` is **out of scope for this behaviour** — even if a project's config sets
+    `skill.phases.build.enabled` or `skill.phases.test.enabled` to `false`, the orchestrator
+    still runs the build and test dispatch steps exactly as described in Phases 2 and 3; do not
+    invent a build-skip or test-skip flow from this config.
+  - Skipping the Phase 4 dispatch is purely an omission of that one dispatch step. It introduces
+    **no new status outside the valid enum** (`todo`, `defining`, `in-progress`, `testing`,
+    `post-processing`, `done`, `failed-testing`) — a ticket that skips review still moves
+    `testing → post-processing → done` exactly like a reviewed ticket, just without the
+    tech-lead subagent call and without any review follow-up fix tickets (none were raised).
+    Every ticket write in this path stays a **whole-file, atomic write**, exactly as every other
+    transition in this document.
+- **Order (dispatch sequence).** Dispatch phases in **ascending** `skill.phases.<phase>.order`,
+  not a hardcoded plan→build→test→review sequence. Follow the configured order **literally** —
+  even when it places a phase ahead of the phase whose output it naturally depends on (e.g.
+  `test` ordered before `build`, or `review` ordered before `test`) — do not refuse to proceed
+  and do not silently "fix" a nonsensical order. Because an out-of-dependency-order run's
+  results can look wrong, **note it in the end-of-run report** whenever a ticket's phases ran
+  out of their natural plan → build → test → review dependency order, so the user can see why.
+  This is a user-accepted risk: reordering is deliberate configuration the user controls (via a
+  later Workflow-panel ticket), and this document's job is only to follow it, not to second-guess
+  it.
 
 ## Phase 1 — Plan / Define (business analyst)
 
@@ -430,10 +483,14 @@ scenarios. The project test runner is `node --test`.
      unit tests.
 2. Decide from the result:
    - **All green** → only when **both** the e2e and unit tests have actually run
-     under `node --test` and passed. Do **not** mark the ticket `done` yet: first
-     run the **tech-lead review** (Phase 4 below) and then the **post-processing**
-     step — the ordering is `testing → tech-lead review → post-processing → done`.
-     Only once the review has completed and every defined post-processing ticket's
+     under `node --test` and passed. Do **not** mark the ticket `done` yet: next
+     comes the **tech-lead review** step, then **post-processing**, so the ordering
+     is `testing → tech-lead review → post-processing → done` — **unless**
+     `skill.phases.review.enabled` is the literal `false` (the default; see **Skip
+     the review when the phase is disabled** in Phase 4 below), in which case the
+     review step is skipped entirely and the ordering collapses to
+     `testing → post-processing → done`. Only once the review has completed (or
+     been skipped per that rule) and every defined post-processing ticket's
      instructions have been run do you set `status: done`, write the file, and move
      to the next ticket. If either kind of test is missing or was not run green, it
      is **not** "all green": treat it as a failure (next bullet).
@@ -455,6 +512,16 @@ The post-processing step runs the instructions of every defined **post-processin
 ticket** (the tickets in the `post-processing` lane, `kind: post-processing`)
 against the reviewed task before it is marked `done`; those tickets are the
 user's "final events" and are themselves never built/tested/claimed.
+
+**Skip the review when the phase is disabled.** Before step 1 below, check
+`skill.phases.review.enabled` in `tasks/team-config.json` (see **Phase-enabled config and
+dispatch order** above). When it is the literal boolean `false` — the default for every
+project until the user opts in — **skip step 1 and step 2 entirely**: no reviewer subagent is
+launched and no review follow-up fix tickets are created for this ticket. The flow collapses to
+`testing → post-processing → done`: step 3 (post-processing, then `status: done`) still runs
+**unchanged** — a skipped review never blocks post-processing and never keeps the ticket out of
+`done`. When `skill.phases.review.enabled` is anything other than the literal `false` (missing,
+or a non-boolean value normalised to `true`), run the review as described below.
 
 1. Launch a reviewer subagent (Task tool, `orchestrate-tech-lead`; fall back to
    `general-purpose` and report it if that definition is missing) with the **full
@@ -563,6 +630,10 @@ below and are unit-tested.
   `in-progress`, `testing`, `post-processing`, `done`, and `failed-testing` — the
   latter is a valid, claimable status that folds into the Testing lane rather than
   having its own).
+- Skipping a disabled phase (see **Phase-enabled config and dispatch order**, and Phase 4's
+  review-skip) introduces **no new status** and no value outside that same enum — it only omits
+  a dispatch step — and every ticket write on that path remains a **whole-file, atomic write**
+  exactly like every other transition in this document.
 - Timestamps: preserve `created`, always bump `updated`.
 - Per-activity cost log: after each phase's subagent completes (BA, coder,
   tester, tech-lead) and after the post-processing step, append one entry to that
@@ -570,6 +641,9 @@ below and are unit-tested.
   standard whole-file write and `updated` bumped — recording the `activity`
   (`ba`/`code`/`test`/`review`/`post-processing`), the `model` dispatched, and its
   `startedAt`/`finishedAt`; include `tokensIn`/`tokensOut`/`costUsd` only when the
-  run actually reported them (never fabricate a token or cost figure). This is
-  additive: the existing `startedAt`/`finishedAt`/`tokens`/`costUsd` accounting and
-  the `runs` log stay untouched.
+  run actually reported them, and `cacheReadTokens`/`cacheCreationTokens` (sourced
+  from the build's telemetry) only when telemetry correlated usage for that
+  window — never fabricate a token or cost figure when data is unavailable (e.g.
+  telemetry off, or no rows matched). This is additive: the existing
+  `startedAt`/`finishedAt`/`tokens`/`costUsd` accounting and the `runs` log stay
+  untouched.

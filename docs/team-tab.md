@@ -18,14 +18,19 @@ The tab is defined in [`renderer/index.html`](../renderer/index.html) (the
 
 ## How it works
 
-The Team view is a single scroll area with three stacked sections, each with its
-own header controls:
+The Team view is a single scroll area with three stacked, **collapsible**
+sections, each with its own header controls. Every section header carries a
+focusable toggle button (chevron) that collapses/expands that section's body
+independently of the other two — mirroring the Git panel's collapsible
+sub-sections. All three sections start expanded; collapsing one leaves the
+other two untouched, and collapsed state persists across tab re-activation and
+Refresh (it resets only on app restart).
 
 | Section | What it edits | Backing store | Detailed docs |
 |---------|---------------|---------------|---------------|
 | **Agents** | Subagent definitions — list, edit the full file (description/tools/model/body), **Regenerate with AI**, and **Add agent** | `.claude/agents/*.md` (+ mirrored `assets/agents/*.md`) | [agent-management.md](agent-management.md) |
-| **Workflow** | Read-only phase pipeline + per-phase agent **model** editor + build-**concurrency** default | `.claude/skills/orchestrate/SKILL.md` (read only), agent files, `tasks/team-config.json` | [workflow-settings.md](workflow-settings.md) |
-| **Board** | The board columns/statuses — add, edit label/description/agent, reorder, remove | `tasks/team-config.json` | [dynamic-statuses.md](dynamic-statuses.md) |
+| **Workflow** | Read-only phase pipeline + per-phase agent **model** editor + per-phase **enable/reorder** + build-**concurrency** default + guided **"Regenerate this phase's instructions"** AI action | `.claude/skills/orchestrate/SKILL.md` (read only, except the one guided AI-regenerate Save), agent files, `tasks/team-config.json` | [workflow-settings.md](workflow-settings.md) |
+| **Board** | The board columns/statuses — add, edit label/description/agent/**phase link**, reorder, remove | `tasks/team-config.json` | [dynamic-statuses.md](dynamic-statuses.md) |
 
 `initTeamTab(tab)` (renderer, ~line 6567) is called on tab activation and on
 folder change. When a folder is open it calls three independent refreshers —
@@ -49,8 +54,10 @@ see [dynamic-statuses.md](dynamic-statuses.md).)
      editor, **Regenerate with AI** proposes a rewritten file from a plain-English
      instruction (requires `ANTHROPIC_API_KEY`); the result is a preview you must
      **Save** to apply.
-   - **Workflow** → review the pipeline, **Edit** a phase's agent model, or set
-     the **Build concurrency default**.
+   - **Workflow** → review the pipeline, **Edit** a phase's agent model, toggle a
+     phase **Enabled**/reorder it, set the **Build concurrency default**, or use
+     **Regenerate this phase's instructions** to propose (and, after review,
+     **Save**) a rewritten phase section.
    - **Board** → add/reorder/remove columns, then **Save** to write
      `tasks/team-config.json`.
 
@@ -72,7 +79,10 @@ tab is affected.
   `tasks/team-config.json`.
 - **Writes:** agent files (via the mirror-aware writer — see
   [assets-mirror.md](assets-mirror.md)) and `tasks/team-config.json`. The
-  Workflow panel never writes `SKILL.md`.
+  Workflow panel otherwise never writes `SKILL.md`, except through its one
+  guided "Regenerate this phase's instructions" Save, which writes only the
+  target phase's `## Phase <n>` section body (mirror-synced) — see
+  [workflow-settings.md](workflow-settings.md).
 
 ## Edge cases and limitations
 

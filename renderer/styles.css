@@ -3166,6 +3166,18 @@ body {
   gap: 10px;
   padding: 10px 12px;
 }
+/* Stats sub-tab: hosts the app-global Usage & telemetry control (moved out of
+   the Team → Workflow panel). Same padded, scrollable column as .team-body. */
+.stats-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  overflow: auto;
+}
+.stats-status { color: #888; font-size: 12px; margin-left: auto; }
 .team-section {
   display: flex;
   flex-direction: column;
@@ -3182,12 +3194,29 @@ body {
   font-weight: 600;
   color: #ccc;
   padding: 2px 0;
+  cursor: pointer;
+  user-select: none;
 }
+.team-section-header:hover { color: #fff; }
+.team-section-toggle {
+  display: inline-block;
+  width: 10px;
+  text-align: center;
+  color: #888;
+  transition: transform 0.12s ease;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+.team-section.collapsed .team-section-toggle { transform: rotate(-90deg); }
 .team-section-title { color: inherit; }
 .team-section-body {
   font-size: 12px;
   color: #888;
 }
+.team-section.collapsed .team-section-body { display: none; }
 .team-section-header .teamAgentsRefresh { margin-left: auto; }
 .team-section-header .teamWorkflowRefresh { margin-left: auto; }
 
@@ -3261,6 +3290,60 @@ body {
   line-height: 1.3;
 }
 
+/* Team tab · Workflow panel — per-phase enable/reorder (TASK-182) */
+.team-workflow-phase-disabled { opacity: 0.6; }
+.team-workflow-disabled-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: Consolas, monospace;
+  background: #2a2a2a;
+  color: #999;
+  border: 1px solid #444;
+}
+.team-workflow-phase-config {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.team-workflow-enabled-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #ddd;
+  cursor: pointer;
+}
+.team-workflow-order-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.team-workflow-order-value {
+  font-variant-numeric: tabular-nums;
+}
+.team-workflow-order-up,
+.team-workflow-order-down {
+  padding: 1px 8px;
+  line-height: 1.3;
+}
+.team-workflow-order-note { font-style: italic; }
+.team-workflow-order-warning {
+  font-size: 11px;
+  color: #f0b060;
+  line-height: 1.4;
+  background: #2a2010;
+  border: 1px solid #5a4520;
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+.team-workflow-phase-save {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 /* Team tab · Workflow panel — per-phase model editor + concurrency (TASK-106) */
 .team-workflow-model-editor {
   display: flex;
@@ -3292,6 +3375,54 @@ body {
   border-radius: 5px;
   padding: 8px;
 }
+
+/* Team tab · Workflow panel — per-phase "regenerate instructions" AI action
+   (TASK-185). Mirrors .team-agent-ai's look (the Agents panel's AI box). */
+.team-workflow-phase-regen {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  margin-top: 4px;
+  background: #14181e;
+  border: 1px solid #26313f;
+  border-radius: 4px;
+}
+.team-workflow-regen-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  background: #1a1a1a;
+  color: #ddd;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-family: inherit;
+}
+.team-workflow-regen-actions { display: flex; gap: 6px; }
+.team-workflow-regen-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px dashed #2e3a4a;
+}
+.team-workflow-regen-preview.hidden { display: none; }
+.team-workflow-regen-preview-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #1a1a1a;
+  color: #ddd;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-family: Consolas, monospace;
+  max-height: 260px;
+  overflow-y: auto;
+}
 .team-workflow-concurrency-select {
   background: #1a1a1a;
   color: #ddd;
@@ -3300,6 +3431,72 @@ body {
   padding: 4px 6px;
   font-size: 12px;
 }
+
+/* Team tab · Usage & telemetry (token/cost visibility) */
+.team-telemetry { gap: 8px; }
+.team-telemetry-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #ddd;
+  cursor: pointer;
+}
+.team-telemetry-status {
+  font-size: 11px;
+  color: #9a9a9a;
+}
+.team-telemetry-totals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+  gap: 6px;
+}
+.team-telemetry-tile {
+  background: #1a1a1a;
+  border: 1px solid #2b2b2b;
+  border-radius: 4px;
+  padding: 6px;
+  text-align: center;
+}
+.team-telemetry-val {
+  font-size: 14px;
+  font-weight: 600;
+  color: #eee;
+  font-variant-numeric: tabular-nums;
+}
+.team-telemetry-lab {
+  font-size: 10px;
+  color: #8a8a8a;
+  margin-top: 2px;
+}
+.team-telemetry-bymodel {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.team-telemetry-model-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: #b8b8b8;
+}
+.team-telemetry-model-name { color: #9ecbff; }
+.team-telemetry-model-stat { font-variant-numeric: tabular-nums; }
+.team-telemetry-forward {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid #262626;
+  padding-top: 8px;
+  margin-top: 2px;
+}
+.team-telemetry-url,
+.team-telemetry-token { font-size: 12px; }
+.team-telemetry-note { font-size: 11px; color: #6fbf73; }
+.team-telemetry-note-err { color: #e06c75; }
+.team-telemetry-scope { font-style: italic; }
+.team-telemetry-project { border-top-color: #333; }
 
 /* Team tab · Agents panel (TASK-094) */
 .team-agent {

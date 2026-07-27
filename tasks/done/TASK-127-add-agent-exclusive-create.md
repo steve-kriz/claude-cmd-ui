@@ -3,7 +3,7 @@ id: TASK-127
 title: Make add-agent create atomic (exclusive-create) instead of exists-then-write TOCTOU
 status: done
 created: 2026-07-21T02:15:52.733Z
-updated: 2026-07-21T05:27:45.683Z
+updated: 2026-07-26T04:51:02.491Z
 review-of: TASK-035
 ---
 

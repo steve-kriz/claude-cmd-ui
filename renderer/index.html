@@ -234,6 +234,7 @@
           <button class="tab-btn" data-tab="tests">Tests</button>
           <button class="tab-btn" data-tab="tasks">Tasks</button>
           <button class="tab-btn" data-tab="team">Team</button>
+          <button class="tab-btn" data-tab="stats">Stats</button>
         </div>
 
         <div class="tab-views">
@@ -711,6 +712,7 @@
             <div class="teamBody team-body scroll-area">
               <div class="teamAgentsSection team-section">
                 <div class="team-section-header">
+                  <button type="button" class="team-section-toggle" aria-expanded="true">▾</button>
                   <span class="team-section-title">Agents</span>
                   <button class="teamAgentsAddBtn small-btn primary-btn" title="Create a new agent definition">Add agent</button>
                   <button class="teamAgentsRefresh small-btn" title="Re-read .claude/agents/">Refresh</button>
@@ -719,6 +721,7 @@
               </div>
               <div class="teamWorkflowSection team-section">
                 <div class="team-section-header">
+                  <button type="button" class="team-section-toggle" aria-expanded="true">▾</button>
                   <span class="team-section-title">Workflow</span>
                   <button class="teamWorkflowRefresh small-btn" title="Re-read .claude/skills/orchestrate/SKILL.md">Refresh</button>
                 </div>
@@ -726,6 +729,7 @@
               </div>
               <div class="teamBoardSection team-section">
                 <div class="team-section-header">
+                  <button type="button" class="team-section-toggle" aria-expanded="true">▾</button>
                   <span class="team-section-title">Board</span>
                   <button class="teamBoardSaveBtn small-btn primary-btn" title="Write the whole team-config.json">Save</button>
                   <button class="teamBoardRefresh small-btn" title="Re-read tasks/team-config.json">Refresh</button>
@@ -733,6 +737,14 @@
                 <div class="teamBoardBody team-section-body">(open a folder)</div>
               </div>
             </div>
+          </div>
+
+          <div class="tab-view" data-view="stats">
+            <div class="view-toolbar">
+              <span class="view-title">Stats</span>
+              <span class="statsStatus stats-status">usage &amp; cost (open a folder)</span>
+            </div>
+            <div class="statsBody stats-body scroll-area">(open the tab to load)</div>
           </div>
 
         </div>
