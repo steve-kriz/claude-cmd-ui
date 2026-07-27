@@ -547,7 +547,10 @@ function createTab() {
       teamBoardSection: ws.querySelector('.teamBoardSection'),
       teamBoardSaveBtn: ws.querySelector('.teamBoardSaveBtn'),
       teamBoardRefresh: ws.querySelector('.teamBoardRefresh'),
-      teamBoardBody: ws.querySelector('.teamBoardBody')
+      teamBoardBody: ws.querySelector('.teamBoardBody'),
+      statsView: ws.querySelector('.tab-view[data-view="stats"]'),
+      statsStatus: ws.querySelector('.statsStatus'),
+      statsBody: ws.querySelector('.statsBody')
     },
     uiTestWatch: { active: false }
   };
@@ -942,6 +945,9 @@ function activateTab(id) {
       window.api.setTitle(leaf);
       document.title = leaf;
     }
+    if (window.api && window.api.telemetry && window.api.telemetry.setActiveProject) {
+      try { window.api.telemetry.setActiveProject(t.folder || ''); } catch (_) {}
+    }
     requestAnimationFrame(() => fitTab(t));
   }
 }
@@ -1251,7 +1257,7 @@ async function spawnTerm(tab, slot, shell, extra) {
   try { tab[slot].dataListener && tab[slot].dataListener.dispose(); } catch (_) {}
   tab[slot].resizeListener = tab[slot].term.onResize(({ cols, rows }) => window.api.pty.resize(id, cols, rows));
   const { cols, rows } = tab[slot].term;
-  const spawnOpts = { id, shell, cwd: tab.folder, cols, rows };
+  const spawnOpts = { id, shell, cwd: tab.folder, cols, rows, project: tab.folder };
   if (extra && extra.cliCommand) spawnOpts.cliCommand = extra.cliCommand;
   await window.api.pty.spawn(spawnOpts);
   tab[slot].dataListener = tab[slot].term.onData((data) => {
@@ -1399,6 +1405,8 @@ function switchSubTab(tab, name) {
     initTasksTab(tab);
   } else if (name === 'team') {
     initTeamTab(tab);
+  } else if (name === 'stats') {
+    initStatsTab(tab);
   }
 }
 
@@ -5381,12 +5389,70 @@ function tasksPrettifyLabel(slug) {
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 }
 
-// Build a normalised board column { status, label, description, agent, system }
+// The four canonical orchestrate phase keys, in canonical order. Mirror of
+// PHASE_KEYS in lib/team-config.js (itself sourced from lib/skill-workflow.js's
+// PHASE_SPECS) — backs the Board panel's per-column phase link (TASK-183) and
+// pairs with the Workflow panel's skill.phases mirror (TASK-182, WF_PHASE_*).
+const TASKS_PHASE_KEYS = ['plan', 'build', 'test', 'review'];
+// Default `enabled` per phase (mirror of PHASE_DEFAULTS' enabled field in
+// lib/team-config.js): plan/build/test mirror their historic always-on system-
+// column correspondence; review has no system column, so it stays opt-in until
+// a column is explicitly linked to it (TASK-183) or manually toggled on
+// (Workflow panel, TASK-182).
+const TASKS_PHASE_ENABLED_DEFAULTS = Object.fromEntries(
+  TASKS_PHASE_KEYS.map((key) => [key, key !== 'review'])
+);
+
+// Normalise a column's `phase` link (mirror of normalizeColumnPhase in
+// lib/team-config.js): a string equal to one of the four canonical phase keys
+// is kept; anything else (missing/unknown/non-string) becomes null.
+function tasksNormalizeColumnPhase(rawPhase) {
+  return (typeof rawPhase === 'string' && TASKS_PHASE_KEYS.includes(rawPhase)) ? rawPhase : null;
+}
+
+// Count how many columns are currently linked to each phase. Snapshotted at
+// load time (refreshTeamBoard's `baselinePhaseLinks`) so Save can detect a
+// genuine zero-to-one transition for the one-time auto-enable flip below.
+function tasksPhaseLinkCounts(columns) {
+  const counts = {};
+  for (const key of TASKS_PHASE_KEYS) counts[key] = 0;
+  for (const c of (Array.isArray(columns) ? columns : [])) {
+    if (c && TASKS_PHASE_KEYS.includes(c.phase)) counts[c.phase] += 1;
+  }
+  return counts;
+}
+
+// One-time zero-to-one auto-enable flip (TASK-183): when a phase had ZERO
+// linked columns at the panel's last load (`baselineCounts`) and now has >= 1
+// AND is currently disabled, flip it to enabled as part of this same save.
+// Never re-flips a phase the user manually re-disabled after an earlier link
+// (baseline was already >= 1), and never touches an already-enabled phase.
+function tasksApplyPhaseAutoEnable(columns, baselineCounts, skill) {
+  const s = (skill && typeof skill === 'object' && !Array.isArray(skill)) ? skill : {};
+  const phases = (s.phases && typeof s.phases === 'object' && !Array.isArray(s.phases)) ? s.phases : {};
+  const counts = tasksPhaseLinkCounts(columns);
+  const baseline = (baselineCounts && typeof baselineCounts === 'object') ? baselineCounts : {};
+  TASKS_PHASE_KEYS.forEach((key, idx) => {
+    const before = Number(baseline[key]) || 0;
+    const after = counts[key] || 0;
+    if (before !== 0 || after === 0) return;
+    const cur = (phases[key] && typeof phases[key] === 'object' && !Array.isArray(phases[key])) ? phases[key] : null;
+    const enabled = (cur && typeof cur.enabled === 'boolean') ? cur.enabled : TASKS_PHASE_ENABLED_DEFAULTS[key];
+    if (enabled !== false) return;
+    const order = (cur && cur.order != null) ? cur.order : idx + 1;
+    phases[key] = { ...(cur || {}), enabled: true, order };
+  });
+  s.phases = phases;
+  return s;
+}
+
+// Build a normalised board column { status, label, description, agent, system, phase }
 // from a raw config column. Collapsed mirror of defaultSystemColumn /
 // repairSystemColumn / buildUserColumn in lib/team-config.js — just the fields the
 // board renders. A system column defaults to its canonical label; a user column
 // falls back to a prettified slug. `agent` is display-only metadata (a nonexistent
-// agent is preserved here and warned about at render time).
+// agent is preserved here and warned about at render time); `phase` links the
+// column to a workflow phase (TASK-183), optional and normalised the same way.
 function tasksBuildColumn(slug, rawCol, system) {
   const src = rawCol && typeof rawCol === 'object' ? rawCol : {};
   const label = typeof src.label === 'string' && src.label.trim() !== ''
@@ -5394,7 +5460,8 @@ function tasksBuildColumn(slug, rawCol, system) {
     : (system ? (TASKS_SYSTEM_LABELS[slug] || tasksPrettifyLabel(slug)) : tasksPrettifyLabel(slug));
   const description = typeof src.description === 'string' ? src.description : '';
   const agent = typeof src.agent === 'string' && src.agent.trim() !== '' ? src.agent.trim() : null;
-  return { status: slug, label: String(label), description, agent, system: !!system };
+  const phase = tasksNormalizeColumnPhase(src.phase);
+  return { status: slug, label: String(label), description, agent, system: !!system, phase };
 }
 
 // Normalise ANY parsed config into the ordered board columns: the six system
@@ -5594,6 +5661,7 @@ function tasksSerializeTeamConfig(working) {
       description: c.description,
       agent: c.agent,
       system: c.system,
+      phase: c.phase,
     }));
   let version = 1;
   if (w.version != null) {
@@ -5741,9 +5809,13 @@ async function refreshTeamBoard(tab) {
   // normalizeTasksColumns tolerates any junk (→ the six system defaults) and only
   // ever yields valid, canonically-ordered columns, so the model starts clean.
   const columns = normalizeTasksColumns(raw && typeof raw === 'object' ? raw : null)
-    .map((c) => ({ status: c.status, label: c.label, description: c.description, agent: c.agent, system: c.system }));
+    .map((c) => ({ status: c.status, label: c.label, description: c.description, agent: c.agent, system: c.system, phase: c.phase }));
 
-  tab.teamBoard = { version, skill, extra, columns, agentNames, notice, dirty: false };
+  // Snapshot each phase's link count at load time (TASK-183): Save compares
+  // against this baseline to detect a genuine zero-to-one link transition.
+  const baselinePhaseLinks = tasksPhaseLinkCounts(columns);
+
+  tab.teamBoard = { version, skill, extra, columns, agentNames, notice, dirty: false, baselinePhaseLinks };
   renderTeamBoard(tab);
 }
 
@@ -5767,7 +5839,9 @@ function renderTeamBoard(tab) {
 
   const help = document.createElement('div');
   help.className = 'team-board-help';
-  help.textContent = 'Columns are the board lanes. The display agent is metadata only (it does not change orchestration). System columns cannot be removed or re-slugged.';
+  help.textContent = 'Columns are the board lanes. The display agent is metadata only (it does not change orchestration). '
+    + 'Optionally, linking a column to a workflow phase (plan/build/test/review) marks that column as the phase\'s board '
+    + 'lane; the phase itself is enabled/ordered on the Workflow panel. System columns cannot be removed or re-slugged.';
   body.appendChild(help);
 
   const list = document.createElement('div');
@@ -5949,6 +6023,32 @@ function buildTeamColumnRow(tab, col, idx) {
   }
   fields.appendChild(agentField);
 
+  const phaseField = document.createElement('label');
+  phaseField.className = 'team-column-field';
+  const phaseCap = document.createElement('span');
+  phaseCap.className = 'team-column-field-label';
+  phaseCap.textContent = 'Phase';
+  const phaseSel = document.createElement('select');
+  phaseSel.className = 'team-column-phase-select';
+  const noPhaseOpt = document.createElement('option');
+  noPhaseOpt.value = '';
+  noPhaseOpt.textContent = '(none)';
+  phaseSel.appendChild(noPhaseOpt);
+  for (const key of TASKS_PHASE_KEYS) {
+    const opt = document.createElement('option');
+    opt.value = key;
+    opt.textContent = key;
+    phaseSel.appendChild(opt);
+  }
+  phaseSel.value = tasksNormalizeColumnPhase(col.phase) || '';
+  phaseSel.addEventListener('change', () => {
+    col.phase = phaseSel.value;
+    markTeamBoardDirty(tab);
+  });
+  phaseField.appendChild(phaseCap);
+  phaseField.appendChild(phaseSel);
+  fields.appendChild(phaseField);
+
   row.appendChild(fields);
   return row;
 }
@@ -6063,6 +6163,7 @@ function buildTeamAddColumnForm(tab) {
       description: '',
       agent: null,
       system: false,
+      phase: null,
     });
     state.dirty = true;
     renderTeamBoard(tab);
@@ -6109,6 +6210,9 @@ async function saveTeamBoardConfig(tab) {
   const state = tab.teamBoard;
   if (!state || !tab.folder) return;
   const btn = tab.els.teamBoardSaveBtn;
+  // TASK-183: apply the one-time zero-to-one auto-enable flip against the
+  // baseline snapshotted at load time, BEFORE serializing.
+  state.skill = tasksApplyPhaseAutoEnable(state.columns, state.baselinePhaseLinks, state.skill);
   const content = tasksSerializeTeamConfig(state);
   const tasksDir = tasksJoin(tab.folder, 'tasks');
   const cfgPath = tasksJoin(tasksDir, 'team-config.json');
@@ -6896,6 +7000,302 @@ function initTeamTab(tab) {
   refreshTeamBoard(tab);
 }
 
+// ── Stats tab · Usage & telemetry (TASK-147/155/156/157) ────────────────────
+// The Stats sub-tab hosts the app-global "Usage & telemetry" control — moved
+// out of the Team → Workflow panel into its own tab — showing a live running
+// total of tokens/cost scoped to the focused project.
+function initStatsTab(tab) {
+  const statsStatus = tab && tab.els ? tab.els.statsStatus : null;
+  if (statsStatus) {
+    statsStatus.textContent = tab.folder
+      ? ('usage & cost — ' + tab.folder)
+      : 'usage & cost (open a folder)';
+  }
+  const body = tab && tab.els ? tab.els.statsBody : null;
+  if (!body) return;
+  body.textContent = '';
+  body.appendChild(buildTelemetryControl(tab));
+}
+
+// Renderer-duplication convention (see lib/telemetry-project-config.js): this
+// browser script cannot require() the Node module, so the tiny per-project
+// telemetry-config.json model is mirrored here. lib/telemetry-project-config.js
+// is the SOURCE OF TRUTH — keep this mirror in lockstep.
+function tasksDefaultProjectTelemetryConfig() {
+  return { version: 1, storeOnline: false };
+}
+
+function tasksNormalizeProjectTelemetryConfig(raw) {
+  try {
+    let src = raw;
+    if (typeof src === 'string') {
+      try { src = JSON.parse(src); } catch (_) { src = null; }
+    }
+    if (!src || typeof src !== 'object' || Array.isArray(src)) {
+      return tasksDefaultProjectTelemetryConfig();
+    }
+    let version = 1;
+    if (src.version != null) {
+      const v = Number(src.version);
+      if (Number.isFinite(v) && v >= 1) version = Math.floor(v);
+    }
+    const storeOnline = src.storeOnline === true || src.storeOnline === 'true' || src.storeOnline === 1;
+    const out = { version, storeOnline };
+    for (const k of Object.keys(src)) {
+      if (k === 'version' || k === 'storeOnline') continue;
+      if (tasksIsUnsafeKey(k)) continue;
+      out[k] = src[k];
+    }
+    return out;
+  } catch (_) {
+    return tasksDefaultProjectTelemetryConfig();
+  }
+}
+
+function tasksSerializeProjectTelemetryConfig(config) {
+  const normalized = tasksNormalizeProjectTelemetryConfig(config);
+  const out = {};
+  for (const k of Object.keys(normalized)) {
+    if (tasksIsUnsafeKey(k)) continue;
+    out[k] = normalized[k];
+  }
+  return JSON.stringify(out, null, 2) + '\n';
+}
+
+// Plain, locale-free display formatters for the Stats totals grid — never
+// throw, always return a string (unlike formatTokens/formatCostUsd's "k tok"
+// suffixes, which suit the ticket-cost panel but not a compact stat tile).
+function telFmtInt(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? String(Math.round(n)) : '0';
+}
+function telFmtUsd(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return '$0.00';
+  return n < 1 ? ('$' + n.toFixed(4)) : ('$' + n.toFixed(2));
+}
+
+// Torn down and re-subscribed on every mount (module-global: only one Stats
+// panel's live feed is ever wired at a time — the previously mounted panel's
+// subscription is detached first).
+let telemetryUnsub = null;
+
+// Builds the "Usage & telemetry" section: the app-global capture toggle plus
+// forward ("store online") settings, and this tab's own project-scoped totals
+// grid, per-model breakdown, live feed, and "store online for this project"
+// checkbox (TASK-157). Never throws, even for a null/undefined tab or an empty
+// tab.folder (renders a zeroed, disabled state instead).
+function buildTelemetryControl(tab) {
+  const folder = (tab && tab.folder) || '';
+
+  const section = document.createElement('div');
+  section.className = 'team-telemetry';
+
+  const toggleRow = document.createElement('label');
+  toggleRow.className = 'team-telemetry-toggle';
+  const toggleCb = document.createElement('input');
+  toggleCb.type = 'checkbox';
+  const toggleText = document.createElement('span');
+  toggleText.textContent = 'Capture token & cost telemetry';
+  toggleRow.appendChild(toggleCb);
+  toggleRow.appendChild(toggleText);
+
+  const status = document.createElement('span');
+  status.className = 'team-telemetry-status';
+
+  const scopeLine = document.createElement('div');
+  scopeLine.className = 'team-telemetry-scope';
+
+  const totalsGrid = document.createElement('div');
+  totalsGrid.className = 'team-telemetry-totals';
+
+  function makeTile(label) {
+    const tile = document.createElement('div');
+    tile.className = 'team-telemetry-tile';
+    const val = document.createElement('div');
+    val.className = 'team-telemetry-val';
+    const lab = document.createElement('div');
+    lab.className = 'team-telemetry-lab';
+    lab.textContent = label;
+    tile.appendChild(val);
+    tile.appendChild(lab);
+    totalsGrid.appendChild(tile);
+    return val;
+  }
+  const tileVals = {
+    requests: makeTile('API calls'),
+    inputTokens: makeTile('Input'),
+    outputTokens: makeTile('Output'),
+    cacheReadTokens: makeTile('Cache read'),
+    cacheCreationTokens: makeTile('Cache write'),
+    totalTokens: makeTile('Total'),
+    costUsd: makeTile('Cost')
+  };
+
+  const byModelWrap = document.createElement('div');
+  byModelWrap.className = 'team-telemetry-bymodel';
+
+  function renderUsage(usage) {
+    const totals = (usage && usage.totals) || {};
+    tileVals.requests.textContent = telFmtInt(totals.requests);
+    tileVals.inputTokens.textContent = telFmtInt(totals.inputTokens);
+    tileVals.outputTokens.textContent = telFmtInt(totals.outputTokens);
+    tileVals.cacheReadTokens.textContent = telFmtInt(totals.cacheReadTokens);
+    tileVals.cacheCreationTokens.textContent = telFmtInt(totals.cacheCreationTokens);
+    tileVals.totalTokens.textContent = telFmtInt(totals.totalTokens);
+    tileVals.costUsd.textContent = telFmtUsd(totals.costUsd);
+
+    byModelWrap.textContent = '';
+    const byModel = (usage && usage.byModel) || {};
+    for (const name of Object.keys(byModel).sort()) {
+      const m = byModel[name] || {};
+      const row = document.createElement('div');
+      row.className = 'team-telemetry-model-row';
+      const nameEl = document.createElement('span');
+      nameEl.className = 'team-telemetry-model-name';
+      nameEl.textContent = name;
+      const statEl = document.createElement('span');
+      statEl.className = 'team-telemetry-model-stat';
+      statEl.textContent = telFmtInt(m.requests) + ' calls · ' + telFmtInt(m.totalTokens) + ' tok · ' + telFmtUsd(m.costUsd);
+      row.appendChild(nameEl);
+      row.appendChild(statEl);
+      byModelWrap.appendChild(row);
+    }
+  }
+
+  const forwardWrap = document.createElement('div');
+  forwardWrap.className = 'team-telemetry-forward';
+  const forwardTitle = document.createElement('div');
+  forwardTitle.textContent = 'Store online';
+  const urlInput = document.createElement('input');
+  urlInput.className = 'team-telemetry-url';
+  urlInput.placeholder = 'https://your-endpoint (optional)';
+  const tokenInput = document.createElement('input');
+  tokenInput.type = 'password';
+  tokenInput.className = 'team-telemetry-token';
+  tokenInput.placeholder = 'Bearer token (optional)';
+  const forwardCbRow = document.createElement('label');
+  forwardCbRow.className = 'team-telemetry-toggle';
+  const forwardCb = document.createElement('input');
+  forwardCb.type = 'checkbox';
+  const forwardCbText = document.createElement('span');
+  forwardCbText.textContent = 'Forward usage to this URL';
+  forwardCbRow.appendChild(forwardCb);
+  forwardCbRow.appendChild(forwardCbText);
+  const forwardSaveBtn = document.createElement('button');
+  forwardSaveBtn.textContent = 'Save';
+  const forwardNote = document.createElement('div');
+  forwardNote.className = 'team-telemetry-note';
+  forwardWrap.appendChild(forwardTitle);
+  forwardWrap.appendChild(urlInput);
+  forwardWrap.appendChild(tokenInput);
+  forwardWrap.appendChild(forwardCbRow);
+  forwardWrap.appendChild(forwardSaveBtn);
+  forwardWrap.appendChild(forwardNote);
+
+  const projWrap = document.createElement('div');
+  projWrap.className = 'team-telemetry-forward team-telemetry-project';
+  const projRow = document.createElement('label');
+  projRow.className = 'team-telemetry-toggle';
+  const projCb = document.createElement('input');
+  projCb.type = 'checkbox';
+  const projText = document.createElement('span');
+  projText.textContent = 'Store online for this project';
+  projRow.appendChild(projCb);
+  projRow.appendChild(projText);
+  projWrap.appendChild(projRow);
+
+  section.appendChild(toggleRow);
+  section.appendChild(status);
+  section.appendChild(scopeLine);
+  section.appendChild(totalsGrid);
+  section.appendChild(byModelWrap);
+  section.appendChild(forwardWrap);
+  section.appendChild(projWrap);
+
+  scopeLine.textContent = folder ? ('Showing usage for: ' + folder) : '(open a folder to see per-project usage)';
+  projCb.disabled = !folder;
+
+  async function refresh() {
+    try {
+      const stateRes = await window.api.telemetry.getState();
+      const st = (stateRes && stateRes.state) || {};
+      toggleCb.checked = !!st.enabled;
+      status.textContent = st.enabled ? (st.running ? 'capturing' : 'enabled — restart the AI terminal') : 'off';
+    } catch (_) {
+      status.textContent = '';
+    }
+
+    if (!folder) {
+      renderUsage(null);
+      projCb.checked = false;
+      projCb.disabled = true;
+      return;
+    }
+    projCb.disabled = false;
+
+    try {
+      const cfgPath = tasksJoin(folder, 'tasks', 'telemetry-config.json');
+      const fr = await window.api.fs.readFile(cfgPath);
+      const cfg = tasksNormalizeProjectTelemetryConfig(fr && fr.ok ? fr.content : null);
+      projCb.checked = !!cfg.storeOnline;
+    } catch (_) {
+      projCb.checked = false;
+    }
+
+    try {
+      const res = await window.api.telemetry.getUsage(folder);
+      const projectUsage = res && res.usage ? res.usage.usage : null;
+      renderUsage(projectUsage);
+    } catch (_) {
+      renderUsage(null);
+    }
+  }
+
+  toggleCb.addEventListener('change', async () => {
+    try { await window.api.telemetry.setConfig({ enabled: !!toggleCb.checked }); } catch (_) {}
+    refresh();
+  });
+
+  forwardSaveBtn.addEventListener('click', async () => {
+    forwardNote.className = 'team-telemetry-note';
+    forwardNote.textContent = '';
+    try {
+      const res = await window.api.telemetry.setConfig({
+        forwardUrl: urlInput.value,
+        forwardToken: tokenInput.value,
+        forwardEnabled: !!forwardCb.checked
+      });
+      if (!res || !res.ok) throw new Error((res && res.error) || 'save failed');
+      forwardNote.textContent = 'Saved.';
+    } catch (e) {
+      forwardNote.className = 'team-telemetry-note team-telemetry-note-err';
+      forwardNote.textContent = 'Save failed: ' + ((e && e.message) || String(e));
+    }
+  });
+
+  projCb.addEventListener('change', async () => {
+    const storeOnline = !!projCb.checked;
+    const content = tasksSerializeProjectTelemetryConfig({ version: 1, storeOnline });
+    const tasksDir = tasksJoin(folder, 'tasks');
+    const cfgPath = tasksJoin(tasksDir, 'telemetry-config.json');
+    try { await window.api.fs.mkdir(tasksDir); } catch (_) {}
+    try { await window.api.fs.writeFile(cfgPath, content); } catch (_) {}
+    try { await window.api.telemetry.setProjectConfig(folder, { storeOnline }); } catch (_) {}
+  });
+
+  if (typeof telemetryUnsub === 'function') telemetryUnsub();
+  telemetryUnsub = window.api.telemetry.onUpdate((payload) => {
+    if (folder && payload.project === folder && payload.projectUsage) {
+      renderUsage(payload.projectUsage);
+    }
+  });
+
+  refresh();
+
+  return section;
+}
+
 // ── Team tab · Workflow panel (TASK-105) ────────────────────────────────────
 // Read-only pipeline visualization of the project's orchestrate skill. Reads
 // `.claude/skills/orchestrate/SKILL.md` and renders the four ordered phases
@@ -7091,6 +7491,226 @@ function wfParseWorkflow(skillMd) {
   }
 }
 
+// ── Workflow panel · per-phase enable/reorder (TASK-182) ────────────────────
+// Mirror of the enabled/order half of lib/team-config.js's PHASE_DEFAULTS /
+// normalizePhases, adapted to read a WHOLE raw team-config object (as loaded
+// off disk) rather than just skill.phases, since this is what refreshTeamWorkflow
+// already has in hand. KEEP IN LOCKSTEP with lib/team-config.js.
+const WF_PHASE_DEFAULTS = Object.fromEntries(
+  WF_PHASE_SPECS.map((spec) => [spec.key, { enabled: spec.key !== 'review', order: spec.number }])
+);
+
+// Dependency pairs for the non-blocking order warning: each entry says "this
+// phase naturally runs after that one" — order is user-configurable, but a
+// phase scheduled at or before its natural dependency is flagged (never
+// blocked; TASK-181's SKILL.md prose is the real build-time safety net).
+const WF_ORDER_DEPENDENCIES = { build: 'plan', test: 'build', review: 'test' };
+
+// Normalise a raw team-config object's skill.phases into all four canonical
+// phase keys' { enabled, order }, defaulting per WF_PHASE_DEFAULTS. Tolerates
+// null/junk/partial input and never throws.
+function wfNormalizePhaseConfig(rawConfig) {
+  const cfg = (rawConfig && typeof rawConfig === 'object' && !Array.isArray(rawConfig)) ? rawConfig : {};
+  const skill = (cfg.skill && typeof cfg.skill === 'object' && !Array.isArray(cfg.skill)) ? cfg.skill : {};
+  const rawPhases = (skill.phases && typeof skill.phases === 'object' && !Array.isArray(skill.phases)) ? skill.phases : {};
+  const out = {};
+  for (const spec of WF_PHASE_SPECS) {
+    const key = spec.key;
+    const def = WF_PHASE_DEFAULTS[key];
+    const rp = (rawPhases[key] && typeof rawPhases[key] === 'object' && !Array.isArray(rawPhases[key])) ? rawPhases[key] : null;
+    const enabled = (rp && typeof rp.enabled === 'boolean') ? rp.enabled : def.enabled;
+    const n = rp ? Number(rp.order) : NaN;
+    const order = (rp && rp.order !== undefined && Number.isInteger(n) && n > 0) ? n : def.order;
+    out[key] = { enabled, order };
+  }
+  return out;
+}
+
+// Sort `keys` (a subset of the four canonical phase keys) by their `order`
+// value in `working`, tie-broken by canonical WF_PHASE_SPECS index so an order
+// collision is resolved deterministically instead of depending on sort
+// stability alone.
+function wfSortedPhaseKeys(keys, working) {
+  const canonicalIndex = {};
+  WF_PHASE_SPECS.forEach((s, i) => { canonicalIndex[s.key] = i; });
+  const w = (working && typeof working === 'object') ? working : {};
+  const arr = (Array.isArray(keys) ? keys : []).slice();
+  arr.sort((a, b) => {
+    const oa = (w[a] && Number.isFinite(w[a].order)) ? w[a].order : canonicalIndex[a];
+    const ob = (w[b] && Number.isFinite(w[b].order)) ? w[b].order : canonicalIndex[b];
+    if (oa !== ob) return oa - ob;
+    return canonicalIndex[a] - canonicalIndex[b];
+  });
+  return arr;
+}
+
+// Non-blocking dependency-order warnings: for each phase with a natural
+// dependency (WF_ORDER_DEPENDENCIES), flag it when its `order` is not strictly
+// after its dependency's `order`. Returns a `{ [phaseKey]: message }` map
+// (Object.create(null) so it is safe to probe with any string key) — checked
+// regardless of the `enabled` flag, which is independent of ordering.
+function wfPhaseOrderWarnings(working) {
+  const warnings = Object.create(null);
+  const w = (working && typeof working === 'object') ? working : {};
+  for (const key of Object.keys(WF_ORDER_DEPENDENCIES)) {
+    const afterKey = WF_ORDER_DEPENDENCIES[key];
+    const cur = w[key];
+    const dep = w[afterKey];
+    if (!cur || !dep || !Number.isFinite(cur.order) || !Number.isFinite(dep.order)) continue;
+    if (cur.order <= dep.order) {
+      warnings[key] = key + ' would run at or before ' + afterKey + ' — order ' + cur.order
+        + ' is not after ' + afterKey + '\'s order ' + dep.order
+        + '. This phase depends on ' + afterKey + ' completing first.';
+    }
+  }
+  return warnings;
+}
+
+// ── Workflow panel · scoped SKILL.md phase-section splice (TASK-184/185) ────
+// Renderer mirror of lib/skill-section.js: the renderer is a browser script
+// and cannot `require` Node modules, so this reuses the wf* section-parsing
+// mirror above (wfSectionsOf/wfPhaseNumberOf) the exact same way
+// lib/skill-section.js reuses lib/skill-workflow.js's sectionsOf/phaseNumberOf.
+// KEEP IN LOCKSTEP with lib/skill-section.js.
+const WF_PHASE_KEYS = WF_PHASE_SPECS.map((s) => s.key);
+
+function wfSpecForKey(phaseKey) {
+  return WF_PHASE_SPECS.find((s) => s.key === phaseKey) || null;
+}
+
+// The line-ending style to rejoin with (mirror of detectEol).
+function wfDetectEol(text) {
+  return /\r\n/.test(text) ? '\r\n' : '\n';
+}
+
+// Locate the (first-wins) section for `spec.number` inside `sections` (mirror
+// of findPhaseSection).
+function wfFindPhaseSection(sections, spec) {
+  for (const section of sections) {
+    if (wfPhaseNumberOf(section.name) === spec.number) return section;
+  }
+  return null;
+}
+
+// Strip ONE surrounding markdown code fence from AI output, if present, so a
+// phase-section body the model wrapped in ``` / ```markdown still splices
+// cleanly (mirror of stripOneCodeFence). Non-string input yields ''.
+function stripOneCodeFence(text) {
+  const raw = typeof text === 'string' ? text : '';
+  const trimmed = raw.trim();
+  const m = /^```[^\n]*\n([\s\S]*?)\r?\n?```$/.exec(trimmed);
+  if (m) return m[1];
+  return raw;
+}
+
+// wfExtractPhaseBody(skillMd, phaseKey) -> { ok, body, reason } — pulls the
+// current prose body of the `## Phase <n>` section for `phaseKey`. NEVER
+// throws. Mirror of lib/skill-section.js's extractPhaseBody.
+function wfExtractPhaseBody(skillMd, phaseKey) {
+  try {
+    if (typeof skillMd !== 'string' || skillMd.length === 0) {
+      return { ok: false, body: '', reason: 'invalid-input' };
+    }
+    const spec = wfSpecForKey(phaseKey);
+    if (!spec) return { ok: false, body: '', reason: 'bad-phase-key' };
+    const sections = wfSectionsOf(skillMd);
+    const section = wfFindPhaseSection(sections, spec);
+    if (!section) return { ok: false, body: '', reason: 'missing-phase' };
+    const eol = wfDetectEol(skillMd);
+    return { ok: true, body: section.lines.join(eol), reason: 'ok' };
+  } catch (_) {
+    return { ok: false, body: '', reason: 'parse-error' };
+  }
+}
+
+// wfReplacePhaseBody(skillMd, phaseKey, newBody) -> { ok, content, reason } —
+// the full new SKILL.md text with ONLY `phaseKey`'s section body replaced;
+// every other byte (other sections, EOL style, trailing newline) preserved.
+// Refuses (no output) on any section-boundary violation. Mirror of
+// lib/skill-section.js's replacePhaseBody.
+function wfReplacePhaseBody(skillMd, phaseKey, newBody) {
+  try {
+    if (typeof skillMd !== 'string' || skillMd.length === 0) {
+      return { ok: false, content: '', reason: 'invalid-input' };
+    }
+    const spec = wfSpecForKey(phaseKey);
+    if (!spec) return { ok: false, content: '', reason: 'bad-phase-key' };
+    if (typeof newBody !== 'string') {
+      return { ok: false, content: '', reason: 'invalid-body' };
+    }
+
+    const originalSections = wfSectionsOf(skillMd);
+    const section = wfFindPhaseSection(originalSections, spec);
+    if (!section) return { ok: false, content: '', reason: 'missing-phase' };
+
+    const eol = wfDetectEol(skillMd);
+    const lines = skillMd.split(/\r?\n/);
+
+    const headingIndex = section.startLine - 1;
+    const bodyStart = headingIndex + 1;
+    const bodyLen = section.lines.length;
+
+    const cleanedBody = stripOneCodeFence(newBody);
+    const newBodyLines = cleanedBody.split(/\r?\n/);
+
+    const newLines = lines
+      .slice(0, bodyStart)
+      .concat(newBodyLines)
+      .concat(lines.slice(bodyStart + bodyLen));
+    const newContent = newLines.join(eol);
+
+    const rebuiltSections = wfSectionsOf(newContent);
+    if (rebuiltSections.length !== originalSections.length) {
+      return { ok: false, content: '', reason: 'section-boundary-violation' };
+    }
+    const targetIdx = originalSections.indexOf(section);
+    for (let i = 0; i < originalSections.length; i++) {
+      if (i === targetIdx) continue;
+      const before = originalSections[i];
+      const after = rebuiltSections[i];
+      if (!after || before.name !== after.name
+        || before.lines.join('\n') !== after.lines.join('\n')) {
+        return { ok: false, content: '', reason: 'section-boundary-violation' };
+      }
+    }
+
+    return { ok: true, content: newContent, reason: 'ok' };
+  } catch (_) {
+    return { ok: false, content: '', reason: 'parse-error' };
+  }
+}
+
+// Validate an AI-proposed phase-section body against the SKILL.md snapshot it
+// was generated from. Loop-strips nested code fences (TASK-194: a doubly/
+// triply-fenced response fully normalizes here, so the preview shown to the
+// user and what Save later splices are byte-identical), rejects empty
+// proposals and any proposal that would touch more than this one phase's
+// section (reusing wfReplacePhaseBody itself as the validator, so this can
+// never disagree with the real Save). Returns { ok, body, error }.
+function validateRegeneratedPhaseSection(proposal, skillMdSnapshot, phaseKey) {
+  const raw = typeof proposal === 'string' ? proposal : '';
+  let body = raw;
+  for (let i = 0; i < 10; i++) {
+    const next = stripOneCodeFence(body);
+    if (next === body) break;
+    body = next;
+  }
+  if (body.trim() === '') {
+    return { ok: false, body: '', error: 'The proposal is empty.' };
+  }
+  const spliced = wfReplacePhaseBody(skillMdSnapshot, phaseKey, body);
+  if (!spliced.ok) {
+    if (spliced.reason === 'section-boundary-violation') {
+      return {
+        ok: false, body: '',
+        error: 'The AI proposal is invalid — it changed more than this one phase\'s section, so nothing was written.'
+      };
+    }
+    return { ok: false, body: '', error: 'Could not validate the proposal (' + spliced.reason + ').' };
+  }
+  return { ok: true, body, error: null };
+}
+
 // Re-read SKILL.md and render the read-only pipeline. Bound to the Workflow
 // Refresh control and called on Team-tab activation (initTeamTab). There is NO
 // background polling and NO write path here. Skill absent → install banner (the
@@ -7196,12 +7816,12 @@ async function refreshTeamWorkflow(tab) {
     body.appendChild(buildWorkflowView(tab, {
       phases: [],
       warnings: ['SKILL.md could not be read (empty, binary, or unreadable).']
-    }, agentNames, agentFiles, rawConfig));
+    }, agentNames, agentFiles, rawConfig, null, skillPath));
     return;
   }
 
   const model = wfParseWorkflow(res.content);
-  body.appendChild(buildWorkflowView(tab, model, agentNames, agentFiles, rawConfig));
+  body.appendChild(buildWorkflowView(tab, model, agentNames, agentFiles, rawConfig, res.content, skillPath));
 }
 
 // Install-skill banner shown when SKILL.md is absent. Mirrors the Tasks board
@@ -7256,8 +7876,12 @@ function buildWorkflowInstallHint(tab) {
 }
 
 // Render the parsed workflow model: parse warnings first (so a partially
-// parseable SKILL.md is never a blank panel), then each phase card in order.
-function buildWorkflowView(tab, model, agentNames, agentFiles, rawConfig) {
+// parseable SKILL.md is never a blank panel), then each phase card in order,
+// then the shared phase-config Save control (TASK-182) and the concurrency
+// default. `skillMdSnapshot`/`skillPath` back the per-phase AI-regenerate box
+// (TASK-185); both are null when SKILL.md could not be read (no phase cards
+// render in that case, so they are simply unused).
+function buildWorkflowView(tab, model, agentNames, agentFiles, rawConfig, skillMdSnapshot, skillPath) {
   const wrap = document.createElement('div');
   wrap.className = 'team-workflow';
 
@@ -7278,8 +7902,101 @@ function buildWorkflowView(tab, model, agentNames, agentFiles, rawConfig) {
     wrap.appendChild(empty);
   }
 
-  for (const phase of phases) {
-    wrap.appendChild(buildWorkflowPhase(tab, phase, agentNames, agentFiles));
+  if (phases.length > 0) {
+    // Working phase-config state (TASK-182): enabled/order per canonical key,
+    // seeded from tasks/team-config.json and edited locally (toggle/reorder)
+    // until the shared Save below persists it. Never touches SKILL.md.
+    const workingPhases = wfNormalizePhaseConfig(rawConfig);
+    const presentKeys = phases.map((p) => p.key);
+
+    const phasesWrap = document.createElement('div');
+    phasesWrap.className = 'team-workflow-phases';
+    wrap.appendChild(phasesWrap);
+
+    const renderPhaseCards = () => {
+      phasesWrap.textContent = '';
+      const sortedOrder = wfSortedPhaseKeys(presentKeys, workingPhases);
+      const orderWarnings = wfPhaseOrderWarnings(workingPhases);
+      for (const phase of phases) {
+        const posIdx = sortedOrder.indexOf(phase.key);
+        const phaseCtl = {
+          workingPhases,
+          isFirst: posIdx <= 0,
+          isLast: posIdx === -1 || posIdx === sortedOrder.length - 1,
+          orderWarning: orderWarnings[phase.key] || null,
+          onToggle: (key, checked) => {
+            if (workingPhases[key]) workingPhases[key].enabled = checked;
+            renderPhaseCards();
+          },
+          onMove: (key, dir) => {
+            const order = wfSortedPhaseKeys(presentKeys, workingPhases);
+            const idx = order.indexOf(key);
+            const otherIdx = idx + dir;
+            if (idx === -1 || otherIdx < 0 || otherIdx >= order.length) return;
+            const otherKey = order[otherIdx];
+            const a = workingPhases[key];
+            const b = workingPhases[otherKey];
+            if (!a || !b) return;
+            const tmp = a.order;
+            a.order = b.order;
+            b.order = tmp;
+            renderPhaseCards();
+          },
+        };
+        phasesWrap.appendChild(buildWorkflowPhase(tab, phase, agentNames, agentFiles, phaseCtl, skillMdSnapshot, skillPath));
+      }
+    };
+    renderPhaseCards();
+
+    // Shared Save control (TASK-182): re-reads tasks/team-config.json first
+    // (mirroring buildWorkflowConcurrencyControl below) so a concurrent Board-
+    // panel or concurrency-default save is not clobbered, writes ONLY
+    // skill.phases, and never touches SKILL.md.
+    const saveSection = document.createElement('div');
+    saveSection.className = 'team-workflow-phase-save';
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'small-btn primary-btn';
+    saveBtn.textContent = 'Save phase settings';
+    const saveErr = document.createElement('div');
+    saveErr.className = 'team-agent-desc-error hidden';
+    saveSection.appendChild(saveBtn);
+    saveSection.appendChild(saveErr);
+    wrap.appendChild(saveSection);
+
+    const showSaveErr = (m) => { saveErr.textContent = m; saveErr.classList.remove('hidden'); };
+    const clearSaveErr = () => { saveErr.textContent = ''; saveErr.classList.add('hidden'); };
+
+    saveBtn.addEventListener('click', async () => {
+      clearSaveErr();
+      saveBtn.disabled = true;
+      try {
+        const cfgPath = tasksJoin(tab.folder, 'tasks', 'team-config.json');
+        let fresh = rawConfig;
+        try {
+          const r = await window.api.fs.readFile(cfgPath);
+          if (r && r.ok && !r.binary && typeof r.content === 'string' && r.content.trim() !== '') {
+            try { fresh = JSON.parse(r.content); } catch (_) { fresh = rawConfig; }
+          }
+        } catch (_) { fresh = rawConfig; }
+        const working = buildWorkingConfigFromRaw(fresh);
+        working.skill = { ...working.skill, phases: workingPhases };
+        const content = tasksSerializeTeamConfig(working);
+        const tasksDir = tasksJoin(tab.folder, 'tasks');
+        try { await window.api.fs.mkdir(tasksDir); } catch (_) {}
+        const res = await window.api.fs.writeFile(cfgPath, content);
+        if (!res || !res.ok) {
+          showSaveErr('Save failed: ' + ((res && res.error) || 'unknown error') + '. Try again.');
+          saveBtn.disabled = false;
+          return;
+        }
+      } catch (e) {
+        showSaveErr('Save failed: ' + ((e && e.message) || String(e)) + '. Try again.');
+        saveBtn.disabled = false;
+        return;
+      }
+      saveBtn.disabled = false;
+      refreshTeamWorkflow(tab);
+    });
   }
 
   // Build-concurrency default (TASK-106 part b): writes skill.concurrencyDefault
@@ -7415,11 +8132,16 @@ function buildWorkflowConcurrencyControl(tab, rawConfig) {
   return section;
 }
 
-// One read-only phase card: the SKILL.md heading, the dispatched agent, an
-// explicit missing-agent fallback warning when the dedicated agent is absent
-// from .claude/agents/, the always-shown fallback rule, and (Phase 1 only) the
-// planning model directive. All dynamic text uses textContent (no innerHTML).
-function buildWorkflowPhase(tab, phase, agentNames, agentFiles) {
+// One phase card: the SKILL.md heading, the dispatched agent, an explicit
+// missing-agent fallback warning when the dedicated agent is absent from
+// .claude/agents/, the always-shown fallback rule, (Phase 1 only) the planning
+// model directive, the per-phase Enabled/reorder controls (TASK-182, via
+// `phaseCtl`), and the "Regenerate this phase's instructions with AI" box
+// (TASK-185, via `skillMdSnapshot`/`skillPath`). All dynamic text uses
+// textContent (no innerHTML). `phaseCtl` is null/undefined when no
+// tasks/team-config.json context is available — the enable/reorder block is
+// skipped in that case (still never a blank card).
+function buildWorkflowPhase(tab, phase, agentNames, agentFiles, phaseCtl, skillMdSnapshot, skillPath) {
   const card = document.createElement('div');
   card.className = 'team-workflow-phase';
 
@@ -7504,7 +8226,265 @@ function buildWorkflowPhase(tab, phase, agentNames, agentFiles) {
     card.appendChild(note);
   }
 
+  // Enable/reorder controls (TASK-182): a first-class toggle + up/down reorder
+  // backed by skill.phases.<phase>.{enabled,order} in tasks/team-config.json.
+  // Never touches SKILL.md — only the shared Save in buildWorkflowView does.
+  if (phaseCtl && phaseCtl.workingPhases && phaseCtl.workingPhases[phase.key]) {
+    const cfg = phaseCtl.workingPhases[phase.key];
+    if (!cfg.enabled) {
+      card.classList.add('team-workflow-phase-disabled');
+      const badge = document.createElement('span');
+      badge.className = 'team-workflow-disabled-badge';
+      badge.textContent = 'Disabled';
+      card.appendChild(badge);
+    }
+
+    const toggleWrap = document.createElement('label');
+    toggleWrap.className = 'team-workflow-enabled-toggle';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'team-workflow-enabled-checkbox';
+    checkbox.checked = !!cfg.enabled;
+    const toggleLbl = document.createElement('span');
+    toggleLbl.textContent = 'Enabled';
+    toggleWrap.appendChild(checkbox);
+    toggleWrap.appendChild(toggleLbl);
+    checkbox.addEventListener('change', () => {
+      phaseCtl.onToggle(phase.key, checkbox.checked);
+    });
+    card.appendChild(toggleWrap);
+
+    const orderRow = document.createElement('div');
+    orderRow.className = 'team-workflow-order-controls';
+    const orderLbl = document.createElement('span');
+    orderLbl.className = 'team-workflow-meta-label';
+    orderLbl.textContent = 'Order';
+    const orderVal = document.createElement('span');
+    orderVal.className = 'team-workflow-order-value';
+    orderVal.textContent = String(cfg.order);
+    const upBtn = document.createElement('button');
+    upBtn.className = 'team-workflow-order-up small-btn';
+    upBtn.textContent = '↑';
+    upBtn.title = 'Move earlier';
+    upBtn.disabled = !!phaseCtl.isFirst;
+    upBtn.addEventListener('click', () => phaseCtl.onMove(phase.key, -1));
+    const downBtn = document.createElement('button');
+    downBtn.className = 'team-workflow-order-down small-btn';
+    downBtn.textContent = '↓';
+    downBtn.title = 'Move later';
+    downBtn.disabled = !!phaseCtl.isLast;
+    downBtn.addEventListener('click', () => phaseCtl.onMove(phase.key, 1));
+    orderRow.appendChild(orderLbl);
+    orderRow.appendChild(orderVal);
+    orderRow.appendChild(upBtn);
+    orderRow.appendChild(downBtn);
+    card.appendChild(orderRow);
+
+    const orderNote = document.createElement('div');
+    orderNote.className = 'team-workflow-order-note team-workflow-rule';
+    orderNote.textContent = 'Order drives the actual build/dispatch sequence — this is not display-only.';
+    card.appendChild(orderNote);
+
+    if (phaseCtl.orderWarning) {
+      const orderWarn = document.createElement('div');
+      orderWarn.className = 'team-workflow-order-warning team-workflow-fallback';
+      orderWarn.textContent = phaseCtl.orderWarning;
+      card.appendChild(orderWarn);
+    }
+  }
+
+  // "Regenerate this phase's instructions with AI" (TASK-185) — the ONE path in
+  // this panel allowed to write SKILL.md, scoped to this phase's section body
+  // only. Only mounted when a SKILL.md snapshot + its path are available (both
+  // are null on the unreadable/binary degrade path, which never renders phase
+  // cards anyway).
+  if (typeof skillMdSnapshot === 'string' && skillPath) {
+    card.appendChild(buildWorkflowPhaseRegenerator(tab, phase, skillMdSnapshot, skillPath));
+  }
+
   return card;
+}
+
+// "Regenerate this phase's instructions with AI" (TASK-185): a per-phase-card
+// AI-assisted rewrite of ONE `## Phase <n>` section body in SKILL.md, mirroring
+// the Agents panel's AI-regenerate interaction (preview-then-Save; nothing is
+// ever written automatically). `skillMdSnapshot` is the SKILL.md text captured
+// when the panel last rendered; `skillPath` is its absolute path. Save re-reads
+// SKILL.md fresh from disk (never trusting the snapshot) and writes through
+// writeWithMirror, so assets/skills/orchestrate/SKILL.md stays byte-synced.
+function buildWorkflowPhaseRegenerator(tab, phase, skillMdSnapshot, skillPath) {
+  const wrap = document.createElement('div');
+  wrap.className = 'team-workflow-regen';
+
+  const label = document.createElement('div');
+  label.className = 'team-workflow-meta-label';
+  label.textContent = "Regenerate this phase's instructions with AI";
+  wrap.appendChild(label);
+
+  const instrInput = document.createElement('textarea');
+  instrInput.className = 'team-workflow-regen-input';
+  instrInput.rows = 2;
+  instrInput.spellcheck = false;
+  instrInput.placeholder = "Describe how this phase's instructions should change…";
+  wrap.appendChild(instrInput);
+
+  const actions = document.createElement('div');
+  actions.className = 'team-workflow-regen-actions';
+  const regenBtn = document.createElement('button');
+  regenBtn.className = 'small-btn';
+  regenBtn.textContent = 'Regenerate instructions with AI';
+  actions.appendChild(regenBtn);
+  wrap.appendChild(actions);
+
+  const msg = document.createElement('div');
+  msg.className = 'team-agent-ai-msg hidden';
+  wrap.appendChild(msg);
+
+  const previewWrap = document.createElement('div');
+  previewWrap.className = 'team-workflow-regen-preview hidden';
+  const previewNote = document.createElement('div');
+  previewNote.className = 'team-workflow-regen-note';
+  previewNote.textContent = 'AI proposal pending Save — nothing has been written yet.';
+  const previewBody = document.createElement('div');
+  previewBody.className = 'team-workflow-regen-preview-body';
+  const previewActions = document.createElement('div');
+  previewActions.className = 'team-workflow-regen-actions';
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'small-btn primary-btn';
+  saveBtn.textContent = 'Save';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'small-btn';
+  cancelBtn.textContent = 'Cancel';
+  previewActions.appendChild(saveBtn);
+  previewActions.appendChild(cancelBtn);
+  const saveErr = document.createElement('div');
+  saveErr.className = 'team-agent-desc-error hidden';
+  previewWrap.appendChild(previewNote);
+  previewWrap.appendChild(previewBody);
+  previewWrap.appendChild(previewActions);
+  previewWrap.appendChild(saveErr);
+  wrap.appendChild(previewWrap);
+
+  const showMsg = (m) => { msg.textContent = m; msg.classList.remove('hidden'); };
+  const clearMsg = () => { msg.textContent = ''; msg.classList.add('hidden'); };
+  const showSaveErr = (m) => { saveErr.textContent = m; saveErr.classList.remove('hidden'); };
+  const clearSaveErr = () => { saveErr.textContent = ''; saveErr.classList.add('hidden'); };
+  const hidePreview = () => { previewWrap.classList.add('hidden'); previewBody.textContent = ''; };
+
+  regenBtn.addEventListener('click', async () => {
+    clearMsg();
+    clearSaveErr();
+    hidePreview();
+    const instruction = instrInput.value.trim();
+    // Empty instruction → inline message, NO API call.
+    if (instruction === '') {
+      showMsg("Enter an instruction describing how this phase's instructions should change.");
+      return;
+    }
+    const extracted = wfExtractPhaseBody(skillMdSnapshot, phase.key);
+    const currentBody = extracted.ok ? extracted.body : '';
+
+    const bodyAtRequest = tab.els.teamWorkflowBody;
+    const prevLabel = regenBtn.textContent;
+    regenBtn.disabled = true;
+    regenBtn.textContent = 'Regenerating…';
+
+    let res;
+    try {
+      res = await window.api.skill.regeneratePhase(currentBody, instruction);
+    } catch (e) {
+      res = { ok: false, reason: 'error' };
+    }
+
+    // Stale-guard: a folder/tab switch or panel re-render mid-request discards
+    // the response entirely — no DOM update, no write — and this (now-orphaned)
+    // card's button state is left exactly as it was when the guard fired.
+    if (tab.els.teamWorkflowBody !== bodyAtRequest || wrap.isConnected === false) return;
+
+    regenBtn.disabled = false;
+    regenBtn.textContent = prevLabel;
+
+    if (!res || !res.ok) {
+      const reason = res && res.reason;
+      if (reason === 'no-key') {
+        showMsg('Set ANTHROPIC_API_KEY (Settings) to use AI regeneration — no request was sent.');
+      } else {
+        showMsg('AI regeneration failed (' + (reason || 'error') + '). Nothing was written.');
+      }
+      return;
+    }
+
+    const validated = validateRegeneratedPhaseSection(res.content, skillMdSnapshot, phase.key);
+    if (!validated.ok) {
+      showMsg(validated.error || 'AI returned an invalid proposal. Nothing was written.');
+      return;
+    }
+
+    // Preview only — nothing is written until Save.
+    previewBody.textContent = validated.body;
+    previewWrap.classList.remove('hidden');
+  });
+
+  cancelBtn.addEventListener('click', () => {
+    clearSaveErr();
+    hidePreview();
+    instrInput.value = '';
+  });
+
+  saveBtn.addEventListener('click', async () => {
+    clearSaveErr();
+    const bodyAtRequest = tab.els.teamWorkflowBody;
+    const proposedBody = previewBody.textContent;
+    saveBtn.disabled = true;
+    cancelBtn.disabled = true;
+
+    // Re-read SKILL.md fresh from disk (never trusting the build-time snapshot
+    // — a concurrent manual edit is respected); fall back to the captured
+    // snapshot only if the re-read itself fails.
+    let fresh = skillMdSnapshot;
+    try {
+      const r = await window.api.fs.readFile(skillPath);
+      if (r && r.ok && !r.binary && typeof r.content === 'string') fresh = r.content;
+    } catch (_) { /* keep the captured snapshot */ }
+
+    const spliced = wfReplacePhaseBody(fresh, phase.key, proposedBody);
+    if (!spliced.ok) {
+      saveBtn.disabled = false;
+      cancelBtn.disabled = false;
+      showSaveErr('Could not save — the phase section changed shape on disk (' + spliced.reason + '). Regenerate again.');
+      return;
+    }
+
+    let res;
+    try {
+      res = await writeWithMirror(tab, skillPath, spliced.content);
+    } catch (e) {
+      res = { ok: false, error: (e && e.message) || String(e) };
+    }
+    saveBtn.disabled = false;
+    cancelBtn.disabled = false;
+
+    if (!res || !res.ok) {
+      // Mirror-only failure: primary landed, assets copy drifted — name BOTH paths.
+      if (res && res.primaryOk && res.mirrorPath) {
+        showSaveErr('Saved ' + skillPath + ' but its mirror copy ' + res.mirrorPath +
+          ' could NOT be updated — the two copies have drifted: ' +
+          (res.mirrorError || 'mirror write failed'));
+        return;
+      }
+      showSaveErr('Save failed: ' + ((res && res.error) || 'unknown error') +
+        '. Your proposal was kept — try again.');
+      return;
+    }
+
+    hidePreview();
+    // Stale-guard: the write itself already happened either way; only skip the
+    // re-read/re-render when the folder/tab changed mid-save.
+    if (tab.els.teamWorkflowBody !== bodyAtRequest) return;
+    refreshTeamWorkflow(tab);
+  });
+
+  return wrap;
 }
 
 // Curated model suggestions seeding the per-phase editor's datalist. Free text is

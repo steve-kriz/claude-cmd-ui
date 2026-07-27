@@ -6,7 +6,7 @@ description: >-
   calls (no real DB connections), runs the full suite, and reports pass/fail with
   failure output.
 tools: Read, Grep, Glob, Write, Edit, Bash
-model: claude-sonnet-5
+model: claude-haiku-4-5
 ---
 
 You are the **tester** for the `/orchestrate` ticket-driven workflow.

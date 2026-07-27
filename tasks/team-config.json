@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "columns": [
+    {
+      "status": "todo",
+      "label": "To Do",
+      "description": "",
+      "agent": null,
+      "system": true,
+      "phase": null
+    },
+    {
+      "status": "defining",
+      "label": "Defining",
+      "description": "",
+      "agent": null,
+      "system": true,
+      "phase": "plan"
+    },
+    {
+      "status": "in-progress",
+      "label": "In Progress",
+      "description": "",
+      "agent": null,
+      "system": true,
+      "phase": "build"
+    },
+    {
+      "status": "testing",
+      "label": "Testing",
+      "description": "",
+      "agent": null,
+      "system": true,
+      "phase": "test"
+    },
+    {
+      "status": "post-processing",
+      "label": "Post-processing",
+      "description": "",
+      "agent": null,
+      "system": true,
+      "phase": null
+    },
+    {
+      "status": "pr-review",
+      "label": "PR review",
+      "description": "",
+      "agent": null,
+      "system": false,
+      "phase": "review"
+    },
+    {
+      "status": "done",
+      "label": "Done",
+      "description": "",
+      "agent": null,
+      "system": true,
+      "phase": null
+    }
+  ],
+  "skill": {
+    "phases": {
+      "plan": {
+        "enabled": true,
+        "order": 1
+      },
+      "build": {
+        "enabled": true,
+        "order": 2
+      },
+      "test": {
+        "enabled": true,
+        "order": 3
+      },
+      "review": {
+        "enabled": true,
+        "order": 4
+      }
+    },
+    "concurrencyDefault": 5
+  }
+}

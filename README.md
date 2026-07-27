@@ -99,6 +99,9 @@ usage, and API/IPC references.
 - **[Per-activity ticket cost log](docs/ticket-cost.md)** — each ticket records a
   per-activity (ba/code/test/review/post-processing) cost log — model, timing,
   tokens, and cost — surfaced as a cost view in the ticket modal.
+- **[Usage & telemetry](docs/telemetry.md)** — turn on Claude Code's built-in
+  OpenTelemetry from the Team tab; a loopback receiver shows live tokens & cost
+  in-app and can forward a compact JSON summary to a URL you choose.
 - **[Keep-awake wake-lock](docs/keep-awake.md)** — hold the OS awake while builds
   run.
 - **[Attention when waiting for input](docs/window-attention.md)** — pulse the
@@ -240,6 +243,18 @@ node --test test/ticket-queue.test.js
 > **Note:** editing any instruction file under `.claude/` requires syncing its
 > byte-for-byte copy under `assets/` or the drift-guard tests fail.
 
+> **Note:** when a test needs to exercise `renderer.js`/`main.js`/`preload.js`
+> logic that has no real `module.exports` to `require()` (renderer.js is a
+> plain browser script, not a CommonJS module), extract and invoke the REAL
+> function from source — see the `extractFn` + isolated `Function`-scope
+> pattern in `test/task-162-telemetry-scope-consistency.e2e.test.js` and
+> `test/task-157-stats-per-project.test.js` — rather than asserting against
+> source text with regex or hand-rolling a copy of the logic inside the test.
+> Both of those alternatives can pass even when the real implementation
+> regresses. When a module genuinely does export the function (e.g.
+> `preload.js`), prefer `require()`-ing the real export directly instead (see
+> `test/task-164-preload-telemetry-bridge.test.js`).
+
 ## Tasks board & the Orchestrate workflow
 
 The **Tasks** tab is a live kanban board for ticket-driven development: you plan a
@@ -361,6 +376,7 @@ The full per-feature documentation set lives in [`docs/`](docs):
 | [docs/ticket-archiving.md](docs/ticket-archiving.md) | Stale-done card archiving into the Done-lane "Archived (N)" expander |
 | [docs/ba-planner-clarifying-questions.md](docs/ba-planner-clarifying-questions.md) | Phase-1 BA clarifying questions and answer-before-planning-completes flow |
 | [docs/ticket-cost.md](docs/ticket-cost.md) | Per-activity ticket cost log (`activities`) and the modal cost view |
+| [docs/telemetry.md](docs/telemetry.md) | Live token/cost telemetry from Claude Code's OpenTelemetry, in-app receiver + optional forward-to-URL |
 | [docs/keep-awake.md](docs/keep-awake.md) | OS wake-lock while builds run |
 | [docs/window-attention.md](docs/window-attention.md) | Waiting-tab dot pulse and OS taskbar flash when Claude needs input |
 | [docs/configuration.md](docs/configuration.md) | Every env var and state file |

@@ -61,12 +61,20 @@ function loadRendererFactory() {
     extractConst(rendererSrc, 'TASKS_RESERVED_SLUGS'),
     extractConst(rendererSrc, 'TASKS_MAX_SLUG_LENGTH'),
     extractConst(rendererSrc, 'TASKS_SLUG_RE'),
+    // TASK-180 - tasksBuildColumn normalises a column's optional `phase` link
+    // via tasksNormalizeColumnPhase, which reads TASKS_PHASE_KEYS.
+    extractConst(rendererSrc, 'TASKS_PHASE_KEYS'),
+    // TASK-183 - refreshTeamBoard's baseline phase-link snapshot uses
+    // tasksPhaseLinkCounts (which reads TASKS_PHASE_KEYS above).
+    extractConst(rendererSrc, 'TASKS_PHASE_ENABLED_DEFAULTS'),
+    extractFn(rendererSrc, 'tasksPhaseLinkCounts'),
     extractConst(rendererSrc, 'TASKS_UNSAFE_KEYS'),
     extractConst(rendererSrc, 'TASKS_MAX_CONCURRENCY'),
     extractConst(rendererSrc, 'TASKS_DEFAULT_CONCURRENCY'),
     extractFn(rendererSrc, 'tasksIsUnsafeKey'),
     extractFn(rendererSrc, 'resolveTasksConcurrency'),
     extractFn(rendererSrc, 'tasksPrettifyLabel'),
+    extractFn(rendererSrc, 'tasksNormalizeColumnPhase'),
     extractFn(rendererSrc, 'tasksBuildColumn'),
     extractFn(rendererSrc, 'normalizeTasksColumns'),
     extractFn(rendererSrc, 'tasksSerializeTeamConfig'),

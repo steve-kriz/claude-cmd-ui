@@ -77,6 +77,9 @@ function loadEditor(window, document, console, localStorage) {
     extractConst(rendererSrc, 'TASKS_RESERVED_SLUGS'),
     extractConst(rendererSrc, 'TASKS_MAX_SLUG_LENGTH'),
     extractConst(rendererSrc, 'TASKS_SLUG_RE'),
+    // TASK-180 - tasksBuildColumn normalises a column's optional `phase` link
+    // via tasksNormalizeColumnPhase, which reads TASKS_PHASE_KEYS.
+    extractConst(rendererSrc, 'TASKS_PHASE_KEYS'),
     'let wfModelDatalistSeq = 0;',
     // --- path + mirror helpers ---
     extractFn(rendererSrc, 'inferSep'),
@@ -104,6 +107,7 @@ function loadEditor(window, document, console, localStorage) {
     extractFn(rendererSrc, 'initTasksConcurrency'),
     extractFn(rendererSrc, 'buildCommandFor'),
     extractFn(rendererSrc, 'tasksPrettifyLabel'),
+    extractFn(rendererSrc, 'tasksNormalizeColumnPhase'),
     extractFn(rendererSrc, 'tasksBuildColumn'),
     extractFn(rendererSrc, 'normalizeTasksColumns'),
     extractFn(rendererSrc, 'tasksSerializeTeamConfig'),
@@ -308,7 +312,7 @@ async function enterEdit(wrap) {
 }
 
 const OPUS = 'claude-opus-4-8';    // ba.md + tech-lead.md pin the premium tier
-const SONNET = 'claude-sonnet-5';  // coder.md + tester.md pin the swarm default
+const SONNET = 'claude-sonnet-5';  // coder.md pins the swarm default
 
 // A synthetic read-only agent def with NO `model:` key, used to drive the
 // serializer's "insert a model key in canonical position" path now that every
@@ -540,7 +544,7 @@ test('Scenario (failure): an out-of-range concurrencyDefault 99 clamps to MAX an
     // ... and the ux-review column, version, other skill keys and the unknown
     // top-level field all survive (a concurrency-only save never drops them).
     assert.deepEqual(persisted.columns.find((c) => c.status === 'ux-review'),
-      { status: 'ux-review', label: 'UX Review', description: 'design pass', agent: null, system: false },
+      { status: 'ux-review', label: 'UX Review', description: 'design pass', agent: null, system: false, phase: null },
       'the user column is preserved (normalized shape)');
     assert.equal(persisted.version, 2, 'version preserved');
     assert.equal(persisted.skill.planningModel, 'claude-fable-5', 'other skill keys preserved');

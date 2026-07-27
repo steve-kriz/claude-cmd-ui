@@ -53,6 +53,24 @@ name a nonexistent agent; that is warned about at render time, never dispatched)
 **`skill.concurrencyDefault`** is normalised through `resolveConcurrency` (from
 `lib/ticket-queue.js`), so the file can never carry an out-of-range value.
 
+**Schema additions (TASK-180).** Two fields are normalised by
+`lib/team-config.js`:
+
+- A per-column **`phase`** field: one of the four canonical phase keys
+  (`plan`/`build`/`test`/`review`, sourced from `PHASE_SPECS` in
+  `lib/skill-workflow.js`) or `null`. It is optional metadata linking a column
+  to a workflow phase; every column defaults to `phase: null` and
+  `normalizeColumnPhase` resets anything invalid back to `null`. The Board
+  panel's per-column **Phase** select (TASK-183, below) is the authoring UI.
+- **`skill.phases`** — a `{ plan, build, test, review }` map, each an
+  `{ enabled, order }` pair. `plan`/`build`/`test` default `enabled: true`;
+  `review` defaults `enabled: false` (it has no system board column today).
+  `normalizePhases` repairs a missing/malformed map back to these defaults.
+  The [Workflow panel](workflow-settings.md) is the authoring UI (enable/reorder,
+  TASK-182); the live phase-skipping behaviour it drives is TASK-181.
+
+Both round-trip through `normalizeConfig`/`serializeConfig`.
+
 Public API of `lib/team-config.js`: `defaultConfig()`, `normalizeConfig(raw)`
 (returns a complete config with a `warnings` list of every repair),
 `validateNewColumn(label, slug, config)`, `slugForLabel(label)`,
@@ -114,7 +132,18 @@ working model and persists the **whole** file in one write:
 - Each column row (`buildTeamColumnRow`) shows reorder ↑/↓, the slug, a `system`
   badge for system columns, editable **Label**/**Description**/**Display agent**
   (a `<select>` of `.claude/agents/` names; a saved-but-missing agent is kept as a
-  `(missing)` option and warned), and — user columns only — a **Remove** button.
+  `(missing)` option and warned), a **Phase** select (`(none)` +
+  `plan`/`build`/`test`/`review`, TASK-183 — display/config metadata like `agent`;
+  it links the column to a workflow phase but does not itself change board
+  routing), and — user columns only — a **Remove** button.
+- **Phase auto-enable (TASK-183).** Save applies a one-time convenience flip:
+  linking a column to a phase that had **zero** linked columns as of the panel's
+  last load, while that phase is currently disabled, flips
+  `skill.phases.<phase>.enabled` to `true` in the same write (e.g. adding a
+  "PR Review" column linked to `review` turns `review` on). Linking a second
+  column to an already-linked (or already-enabled) phase never re-flips, and a
+  phase the user manually re-disabled afterward stays disabled even while the
+  link remains — the manual Workflow-panel toggle always wins.
 - **Add column** (`buildTeamAddColumnForm`): a label input with a live derived-slug
   preview (`tasksSlugForLabel`), a position select, and validation
   (`tasksValidateNewColumn`, mirror of `validateNewColumn`) before anything enters

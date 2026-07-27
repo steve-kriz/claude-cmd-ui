@@ -1,20 +1,38 @@
-// AWS Lambda that stores claude-cmd-ui prompt logs in CloudWatch Logs.
+// AWS Lambda that stores claude-cmd-ui prompt logs AND OTEL usage/cost telemetry
+// in CloudWatch Logs.
 //
+// PROMPT LOGS (lib/cloud-logs.js):
 //   POST {endpoint}            body: { username, project, entry }
 //     → writes one event to log group LOG_GROUP, stream `${username}__${project}`.
 //
 //   GET  {endpoint}?username=…&project=…
 //     → returns { ok: true, entries: [ ...entry objects in ingest order ] }.
 //
+// OTEL TELEMETRY (lib/telemetry.js buildForwardPayload → the app's "store online"
+// forward hop). The app POSTs its own compact `telemetry.usage.v1` summary here
+// with an `Authorization: Bearer <token>` header:
+//   POST {endpoint}            body: { source, schema:'telemetry.usage.v1',
+//                                       generatedAt, host, sessionId, username,
+//                                       project, totals, byModel, recent }
+//     → writes one event to log group TELEMETRY_LOG_GROUP, stream `${host}`.
+//
+//   GET  {endpoint}?schema=telemetry.usage.v1&host=…
+//     → returns { ok: true, entries: [ ...telemetry payloads in ingest order ] }.
+//
+// The POST route auto-detects which shape it got (telemetry payloads carry
+// `schema === 'telemetry.usage.v1'`) so a single endpoint serves both clients.
+//
 // Configure via environment variables:
-//   LOG_GROUP    CloudWatch log group name. Default: /claude-cmd-ui/prompts
-//   AWS_REGION   Region (set automatically by Lambda)
-//   API_KEY      Optional shared secret. Clients must send `X-Api-Key: <value>`.
+//   LOG_GROUP            Prompt-log CloudWatch log group. Default: /claude-cmd-ui/prompts
+//   TELEMETRY_LOG_GROUP  Telemetry CloudWatch log group. Default: /claude-cmd-ui/telemetry
+//   AWS_REGION           Region (set automatically by Lambda)
+//   API_KEY              Optional shared secret. Clients send it as `X-Api-Key: <value>`
+//                        (prompt logs) or `Authorization: Bearer <value>` (telemetry).
 //
 // IAM permissions required by the Lambda execution role:
 //   logs:CreateLogGroup, logs:CreateLogStream,
 //   logs:PutLogEvents,   logs:GetLogEvents
-// on the LOG_GROUP (and `${LOG_GROUP}:*`).
+// on both LOG_GROUP and TELEMETRY_LOG_GROUP (and `${…}:*`).
 
 import {
   CloudWatchLogsClient,
@@ -25,6 +43,8 @@ import {
 } from '@aws-sdk/client-cloudwatch-logs';
 
 const LOG_GROUP = process.env.LOG_GROUP || '/claude-cmd-ui/prompts';
+const TELEMETRY_LOG_GROUP = process.env.TELEMETRY_LOG_GROUP || '/claude-cmd-ui/telemetry';
+const TELEMETRY_SCHEMA = 'telemetry.usage.v1';
 const REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION;
 const API_KEY = (process.env.API_KEY || '').trim();
 
@@ -50,24 +70,24 @@ function streamName(username, project) {
   return `${sanitize(username)}__${sanitize(project)}`;
 }
 
-async function ensureGroup() {
+async function ensureGroup(group = LOG_GROUP) {
   try {
-    await client.send(new CreateLogGroupCommand({ logGroupName: LOG_GROUP }));
-    console.log('[prompt-logs] created log group', LOG_GROUP);
+    await client.send(new CreateLogGroupCommand({ logGroupName: group }));
+    console.log('[prompt-logs] created log group', group);
   } catch (e) {
     if (e.name !== 'ResourceAlreadyExistsException') {
-      console.error('[prompt-logs] ensureGroup failed', LOG_GROUP, e.name, e.message);
+      console.error('[prompt-logs] ensureGroup failed', group, e.name, e.message);
       throw e;
     }
   }
 }
-async function ensureStream(name) {
+async function ensureStream(name, group = LOG_GROUP) {
   try {
-    await client.send(new CreateLogStreamCommand({ logGroupName: LOG_GROUP, logStreamName: name }));
-    console.log('[prompt-logs] created log stream', name);
+    await client.send(new CreateLogStreamCommand({ logGroupName: group, logStreamName: name }));
+    console.log('[prompt-logs] created log stream', group, name);
   } catch (e) {
     if (e.name !== 'ResourceAlreadyExistsException') {
-      console.error('[prompt-logs] ensureStream failed', name, e.name, e.message);
+      console.error('[prompt-logs] ensureStream failed', group, name, e.name, e.message);
       throw e;
     }
   }
@@ -97,7 +117,12 @@ function headerLookup(event, name) {
 }
 function checkApiKey(event) {
   if (!API_KEY) return true;
-  return String(headerLookup(event, 'x-api-key') || '').trim() === API_KEY;
+  // Prompt-log clients send `X-Api-Key`; the app's telemetry forwarder sends the
+  // same secret as `Authorization: Bearer <key>`. Accept either.
+  if (String(headerLookup(event, 'x-api-key') || '').trim() === API_KEY) return true;
+  const auth = String(headerLookup(event, 'authorization') || '').trim();
+  const bearer = auth.replace(/^Bearer\s+/i, '').trim();
+  return bearer === API_KEY;
 }
 
 async function handleAdd(event) {
@@ -119,8 +144,8 @@ async function handleAdd(event) {
     entryKeys: Object.keys(body.entry || {}),
     entryTs: body.entry && body.entry.ts
   });
-  await ensureGroup();
-  await ensureStream(stream);
+  await ensureGroup(LOG_GROUP);
+  await ensureStream(stream, LOG_GROUP);
 
   const tsRaw = body.entry && body.entry.ts ? Date.parse(body.entry.ts) : NaN;
   const ts = Number.isFinite(tsRaw) ? tsRaw : Date.now();
@@ -192,6 +217,101 @@ async function handleList(event) {
   return ok({ ok: true, entries });
 }
 
+// --- OTEL usage/cost telemetry (lib/telemetry.js buildForwardPayload) ---------
+
+// A telemetry forward payload is self-describing via its schema tag; fall back to
+// the source+totals shape so an older/partial payload is still recognised.
+function isTelemetryPayload(body) {
+  return !!body && (body.schema === TELEMETRY_SCHEMA
+    || (body.source === 'claude-cmd-ui' && body.totals != null && body.entry == null));
+}
+
+// One telemetry stream per host, so a machine's usage history stays together.
+function telemetryStreamName(host) {
+  return sanitize(host || 'unknown-host');
+}
+
+async function handleTelemetry(event, body) {
+  const stream = telemetryStreamName(body.host);
+  console.log('[prompt-logs] handleTelemetry', {
+    schema: body.schema,
+    host: body.host,
+    sessionId: body.sessionId,
+    username: body.username,
+    project: body.project,
+    stream,
+    requests: body.totals && body.totals.requests,
+    costUsd: body.totals && body.totals.costUsd,
+    models: body.byModel ? Object.keys(body.byModel).length : 0,
+    recent: Array.isArray(body.recent) ? body.recent.length : 0
+  });
+  await ensureGroup(TELEMETRY_LOG_GROUP);
+  await ensureStream(stream, TELEMETRY_LOG_GROUP);
+
+  const tsRaw = body.generatedAt ? Date.parse(body.generatedAt) : NaN;
+  const ts = Number.isFinite(tsRaw) ? tsRaw : Date.now();
+
+  const message = JSON.stringify(body);
+  const put = await client.send(new PutLogEventsCommand({
+    logGroupName: TELEMETRY_LOG_GROUP,
+    logStreamName: stream,
+    logEvents: [{ timestamp: ts, message }]
+  }));
+  console.log('[prompt-logs] wrote telemetry', {
+    stream,
+    ts,
+    bytes: message.length,
+    rejected: put && put.rejectedLogEventsInfo ? put.rejectedLogEventsInfo : null
+  });
+  return ok({ ok: true });
+}
+
+async function handleTelemetryList(event) {
+  const qs = getQuery(event);
+  const host = qs.host;
+  if (!host) {
+    console.warn('[prompt-logs] handleTelemetryList missing host');
+    return fail(400, 'host is required');
+  }
+  const stream = telemetryStreamName(host);
+  console.log('[prompt-logs] handleTelemetryList', { host, stream });
+
+  const entries = [];
+  let token;
+  let pages = 0;
+  let malformed = 0;
+  try {
+    while (true) {
+      const res = await client.send(new GetLogEventsCommand({
+        logGroupName: TELEMETRY_LOG_GROUP,
+        logStreamName: stream,
+        startFromHead: true,
+        limit: 10000,
+        nextToken: token
+      }));
+      pages += 1;
+      for (const e of res.events || []) {
+        try {
+          const parsed = JSON.parse(e.message);
+          if (parsed) entries.push(parsed);
+        } catch { malformed += 1; }
+      }
+      const next = res.nextForwardToken;
+      if (!next || next === token || !res.events || res.events.length === 0) break;
+      token = next;
+    }
+  } catch (e) {
+    if (e.name === 'ResourceNotFoundException') {
+      console.log('[prompt-logs] telemetry stream not found (returning empty)', stream);
+      return ok({ ok: true, entries: [] });
+    }
+    console.error('[prompt-logs] handleTelemetryList failed', stream, e.name, e.message);
+    throw e;
+  }
+  console.log('[prompt-logs] handleTelemetryList done', { stream, pages, entries: entries.length, malformed });
+  return ok({ ok: true, entries });
+}
+
 export const handler = async (event) => {
   const started = Date.now();
   const method = String(getMethod(event)).toUpperCase();
@@ -222,12 +342,18 @@ export const handler = async (event) => {
       return { statusCode: 204, headers: CORS, body: '' };
     }
     if (method === 'POST') {
-      const res = await handleAdd(event);
+      const body = getBody(event);
+      const res = isTelemetryPayload(body)
+        ? await handleTelemetry(event, body)
+        : await handleAdd(event);
       console.log('[prompt-logs] done', { method, status: res.statusCode, ms: Date.now() - started });
       return res;
     }
     if (method === 'GET') {
-      const res = await handleList(event);
+      const qs = getQuery(event);
+      const res = qs && qs.schema === TELEMETRY_SCHEMA
+        ? await handleTelemetryList(event)
+        : await handleList(event);
       console.log('[prompt-logs] done', { method, status: res.statusCode, ms: Date.now() - started });
       return res;
     }

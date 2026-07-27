@@ -295,14 +295,24 @@ test('Scenario (edge): activating Team with NO folder shows "(open a folder)" ev
   const buttons = panel.match(/<button[^>]*>/g) || [];
   // TASK-095 added the Agents "Add agent" button; TASK-103 added the Board panel's
   // "Save" and "Refresh" header controls; TASK-105 added the Workflow panel's
-  // "Refresh" header control. The scaffold now ships exactly FIVE header buttons
-  // (and nothing else): Agents Add + Refresh, Workflow Refresh, Board Save + Refresh.
-  assert.equal(buttons.length, 5, 'the scaffold ships exactly five header buttons (Agents Add/Refresh + Workflow Refresh + Board Save/Refresh)');
+  // "Refresh" header control; TASK-144 added a per-section accordion toggle
+  // button (".team-section-toggle") to EACH of the three "team-section-header"
+  // blocks (Agents, Workflow, Board). The scaffold now ships exactly EIGHT
+  // header buttons (and nothing else): Agents Add + Refresh, Workflow Refresh,
+  // Board Save + Refresh, and the three TASK-144 accordion toggles.
+  assert.equal(buttons.length, 8, 'the scaffold ships exactly eight header buttons (Agents Add/Refresh + Workflow Refresh + Board Save/Refresh + 3 accordion toggles)');
   assert.ok(buttons.some((b) => /class="teamAgentsAddBtn/.test(b)), 'ships the Agents "Add agent" control (TASK-095)');
   assert.ok(buttons.some((b) => /class="teamAgentsRefresh/.test(b)), 'ships the Agents "Refresh" control (TASK-094)');
   assert.ok(buttons.some((b) => /class="teamWorkflowRefresh/.test(b)), 'ships the Workflow "Refresh" control (TASK-105)');
   assert.ok(buttons.some((b) => /class="teamBoardSaveBtn/.test(b)), 'ships the Board "Save" control (TASK-103)');
   assert.ok(buttons.some((b) => /class="teamBoardRefresh/.test(b)), 'ships the Board "Refresh" control (TASK-103)');
+  // TASK-144: exactly 3 accordion toggle buttons ship (one per section), each
+  // expanded by default (aria-expanded="true") and typed to avoid form-submit
+  // side effects (type="button").
+  const toggleButtons = buttons.filter((b) => /class="team-section-toggle"/.test(b));
+  assert.equal(toggleButtons.length, 3, 'ships exactly 3 accordion toggle buttons, one per section (TASK-144)');
+  assert.ok(toggleButtons.every((b) => /type="button"/.test(b)), 'each accordion toggle is type="button" (TASK-144)');
+  assert.ok(toggleButtons.every((b) => /aria-expanded="true"/.test(b)), 'each accordion toggle starts expanded (TASK-144)');
   // The Add-agent FORM lives in a separate #addAgentModal (not this panel), so the
   // Team panel itself still ships no inline inputs/selects.
   assert.ok(!/<input/.test(panel) && !/<select/.test(panel), 'the Team panel ships no inline inputs/selects');

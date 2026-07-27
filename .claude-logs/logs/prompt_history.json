@@ -338,5 +338,210 @@
     "ts": "2026-07-25T03:14:58.076Z",
     "source": "user",
     "prompt": "optimise the orchistrator and make the agents utilise cache the most efficient way. m"
+  },
+  {
+    "ts": "2026-07-25T10:51:36.985Z",
+    "source": "user",
+    "prompt": "optimise the orchistration for cost as much as possible. make the team config be able to change the aettings as needed"
+  },
+  {
+    "ts": "2026-07-26T04:05:44.118Z",
+    "source": "user",
+    "prompt": "enable otel and capture telemetry so that I can see how many tokens I am using and what the cost would be, allow me to turn this on and post it to a URL so it can be stored online. tell me if this is not possible or if there are issues, do not make up and answer. make this part of the app so that I can enabled in this app somehow"
+  },
+  {
+    "ts": "2026-07-26T04:06:24.387Z",
+    "source": "user",
+    "prompt": "/lo"
+  },
+  {
+    "ts": "2026-07-26T04:07:58.260Z",
+    "source": "user",
+    "prompt": "c4uyjYUK2INGNpLMLzBH1DXk7Tr4vaUdd2lrz7ohrnGxFzHVg#Jo7JMr_do1UPhIz6UBCAdNKtiziHYa0YirSWiuIfrzk"
+  },
+  {
+    "ts": "2026-07-26T04:52:50.634Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-26T05:00:15.818Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-26T05:00:18.936Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-26T05:00:22.067Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-26T05:00:25.200Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-26T06:24:35.744Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-26T07:27:12.626Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-26T07:42:39.123Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-26T07:58:22.399Z",
+    "source": "user",
+    "prompt": "claude"
+  },
+  {
+    "ts": "2026-07-26T08:00:24.130Z",
+    "source": "user",
+    "prompt": "change the lambda to be able to log otel data from this app using the telemetry endpoint"
+  },
+  {
+    "ts": "2026-07-26T20:30:54.303Z",
+    "source": "user",
+    "prompt": "change the telemetry to add a sessionId + addd the usernam"
+  },
+  {
+    "ts": "2026-07-26T20:32:04.964Z",
+    "source": "user",
+    "prompt": "Cefalù,"
+  },
+  {
+    "ts": "2026-07-26T20:32:27.496Z",
+    "source": "user",
+    "prompt": "change telemetry to add a session Id + add the username + add the project folder name"
+  },
+  {
+    "ts": "2026-07-26T20:44:31.454Z",
+    "source": "user",
+    "prompt": "pull out the usage and telemetry and settings and add a new tab called stats"
+  },
+  {
+    "ts": "2026-07-26T20:56:37.316Z",
+    "source": "user",
+    "prompt": "/usag"
+  },
+  {
+    "ts": "2026-07-26T21:08:29.395Z",
+    "source": "user",
+    "prompt": "change stats tab, capture telemetry per project, and enable disable store online per project"
+  },
+  {
+    "ts": "2026-07-26T21:48:29.930Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-26T22:02:21.115Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-26T22:03:30.306Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-26T23:53:00.084Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-27T01:10:17.699Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-27T02:29:20.118Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-27T02:31:01.953Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-27T02:31:36.363Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-27T02:31:48.030Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-27T02:32:17.757Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-27T02:35:08.644Z",
+    "source": "user",
+    "prompt": "change the workflow steps so that I can edit them and update the skills based logic using gen AI to adjust the skill. I should be able to enable, disable a workflow step. Allow me to select a workflow to link the board to the workflow step"
+  },
+  {
+    "ts": "2026-07-27T02:39:19.233Z",
+    "source": "user",
+    "prompt": "add a new column PR review in the board and link it to the phase 4 jst like the rest"
+  },
+  {
+    "ts": "2026-07-27T03:17:00.351Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-27T04:21:16.657Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-27T04:21:23.723Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-27T10:27:06.859Z",
+    "source": "user",
+    "prompt": "when I edit workflow its still not showing the full edit mode and I cant choose the workflow in the board setting"
+  },
+  {
+    "ts": "2026-07-27T11:33:28.184Z",
+    "source": "user",
+    "prompt": "continue"
+  },
+  {
+    "ts": "2026-07-27T20:42:10.814Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-27T20:43:29.129Z",
+    "source": "user",
+    "prompt": "fix the stats tab, the stats are no longer displaying"
+  },
+  {
+    "ts": "2026-07-27T20:59:04.847Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-07-27T21:00:43.319Z",
+    "source": "user",
+    "prompt": "stats is blank, values are not showing up as the code is using tokens. this should show tokens used in realt time using otel service"
   }
 ]

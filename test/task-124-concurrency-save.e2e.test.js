@@ -70,6 +70,9 @@ function loadEditor(window, document, console, localStorage) {
     extractConst(rendererSrc, 'TASKS_RESERVED_SLUGS'),
     extractConst(rendererSrc, 'TASKS_MAX_SLUG_LENGTH'),
     extractConst(rendererSrc, 'TASKS_SLUG_RE'),
+    // TASK-180 - tasksBuildColumn normalises a column's optional `phase` link
+    // via tasksNormalizeColumnPhase, which reads TASKS_PHASE_KEYS.
+    extractConst(rendererSrc, 'TASKS_PHASE_KEYS'),
     // path helpers
     extractFn(rendererSrc, 'inferSep'),
     extractFn(rendererSrc, 'appendPath'),
@@ -85,6 +88,7 @@ function loadEditor(window, document, console, localStorage) {
     extractFn(rendererSrc, 'initTasksConcurrency'),
     extractFn(rendererSrc, 'buildCommandFor'),
     extractFn(rendererSrc, 'tasksPrettifyLabel'),
+    extractFn(rendererSrc, 'tasksNormalizeColumnPhase'),
     extractFn(rendererSrc, 'tasksBuildColumn'),
     extractFn(rendererSrc, 'normalizeTasksColumns'),
     extractFn(rendererSrc, 'tasksSerializeTeamConfig'),
@@ -295,7 +299,7 @@ test('F1 Scenario (failure): a Save whose re-read FAILS falls back to rawConfig 
     assert.deepEqual(persisted.someUnknownField, { keep: true }, 'unknown top-level field preserved');
     assert.deepEqual(persisted.anotherUnknown, [1, 2, 3], 'second unknown field preserved');
     assert.deepEqual(persisted.columns.find((c) => c.status === 'ux-review'),
-      { status: 'ux-review', label: 'UX Review', description: 'design pass', agent: null, system: false },
+      { status: 'ux-review', label: 'UX Review', description: 'design pass', agent: null, system: false, phase: null },
       'the user column survived the bad re-read');
     for (const s of ['todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done']) {
       assert.ok(persisted.columns.some((c) => c.status === s), `system column ${s} present`);

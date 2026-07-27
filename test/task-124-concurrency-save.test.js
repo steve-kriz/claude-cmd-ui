@@ -62,6 +62,9 @@ function load(localStorage) {
     extractConst(rendererSrc, 'TASKS_RESERVED_SLUGS'),
     extractConst(rendererSrc, 'TASKS_MAX_SLUG_LENGTH'),
     extractConst(rendererSrc, 'TASKS_SLUG_RE'),
+    // TASK-180 - tasksBuildColumn normalises a column's optional `phase` link
+    // via tasksNormalizeColumnPhase, which reads TASKS_PHASE_KEYS.
+    extractConst(rendererSrc, 'TASKS_PHASE_KEYS'),
     extractFn(rendererSrc, 'resolveTasksConcurrency'),
     extractFn(rendererSrc, 'readStoredTasksConcurrency'),
     extractFn(rendererSrc, 'tasksConcurrencyStorageKey'),
@@ -69,6 +72,7 @@ function load(localStorage) {
     extractFn(rendererSrc, 'currentTasksConcurrency'),
     extractFn(rendererSrc, 'buildCommandFor'),
     extractFn(rendererSrc, 'tasksPrettifyLabel'),
+    extractFn(rendererSrc, 'tasksNormalizeColumnPhase'),
     extractFn(rendererSrc, 'tasksBuildColumn'),
     extractFn(rendererSrc, 'normalizeTasksColumns'),
     extractFn(rendererSrc, 'tasksSerializeTeamConfig'),

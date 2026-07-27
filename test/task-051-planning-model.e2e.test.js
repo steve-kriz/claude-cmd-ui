@@ -28,6 +28,7 @@ const PROJECT_AGENTS = path.join(ROOT, '.claude', 'agents');
 
 const SONNET = 'claude-sonnet-5';
 const OPUS = 'claude-opus-4-8';
+const HAIKU = 'claude-haiku-4-5'; // the cheap tier (tester)
 
 function readFileLF(p) {
   return fs.readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
@@ -85,13 +86,26 @@ function phase234Slice(src) {
 // ===========================================================================
 // Scenario: SKILL Model-routing names claude-sonnet-5 as the swarm default
 // ===========================================================================
-test('Scenario: SKILL Model-routing names claude-sonnet-5 (default) for the coder + tester', () => {
+test('Scenario: SKILL Model-routing names claude-sonnet-5 (default) for the coder', () => {
   for (const [label, src] of [['assets', skillAssetsSrc], ['.claude', skillProjectSrc]]) {
     assert.ok(src.includes(SONNET), `${label}/SKILL.md names ${SONNET}`);
     assert.match(src, /Default model: `claude-sonnet-5`/,
       `${label}/SKILL.md states the swarm default is claude-sonnet-5`);
-    assert.match(src, /Dispatch the \*\*coder\*\* \(Phase 2\) and the\s+\*\*tester\*\* \(Phase 3\) on this default/,
-      `${label}/SKILL.md dispatches coder + tester on the default`);
+    assert.match(src, /The \*\*coder\*\* \(Phase 2\) runs on this\s+default tier/,
+      `${label}/SKILL.md dispatches the coder on the default tier`);
+  }
+});
+
+// ===========================================================================
+// Scenario: SKILL Model-routing puts the tester on the cheap claude-haiku-4-5 tier
+// ===========================================================================
+test('Scenario: SKILL Model-routing routes the tester (Phase 3) to the cheap claude-haiku-4-5 tier', () => {
+  for (const [label, src] of [['assets', skillAssetsSrc], ['.claude', skillProjectSrc]]) {
+    assert.ok(src.includes(HAIKU), `${label}/SKILL.md names ${HAIKU}`);
+    assert.match(src, /Cheap tier `claude-haiku-4-5` for the tester \(Phase 3\)/,
+      `${label}/SKILL.md routes the tester to the cheap claude-haiku-4-5 tier`);
+    assert.match(src, /falls back to `claude-sonnet-5` only if `claude-haiku-4-5` is unavailable/,
+      `${label}/SKILL.md degrades the tester to the default when the cheap tier is unavailable`);
   }
 });
 
@@ -127,10 +141,10 @@ const AGENT_MODEL = {
   'ba.md': { name: 'orchestrate-ba', model: OPUS, tools: ['Read', 'Grep', 'Glob'] },
   'tech-lead.md': { name: 'orchestrate-tech-lead', model: OPUS, tools: ['Read', 'Grep', 'Glob'] },
   'coder.md': { name: 'orchestrate-coder', model: SONNET, tools: ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash'] },
-  'tester.md': { name: 'orchestrate-tester', model: SONNET, tools: ['Read', 'Grep', 'Glob', 'Write', 'Edit', 'Bash'] },
+  'tester.md': { name: 'orchestrate-tester', model: HAIKU, tools: ['Read', 'Grep', 'Glob', 'Write', 'Edit', 'Bash'] },
 };
 
-test('Scenario: BA + tech-lead frontmatter declare model claude-opus-4-8; coder + tester declare claude-sonnet-5', () => {
+test('Scenario: BA + tech-lead frontmatter declare model claude-opus-4-8; coder declares claude-sonnet-5; tester declares claude-haiku-4-5', () => {
   for (const [label, dir] of [['assets', ASSETS_AGENTS], ['.claude', PROJECT_AGENTS]]) {
     for (const [file, exp] of Object.entries(AGENT_MODEL)) {
       const parsed = parseAgentFrontmatter(readFileLF(path.join(dir, file)));
@@ -164,9 +178,11 @@ test('Scenario: The routing directive lives before Phase 2 — Phase 2/3/4 name 
     const tail = phase234Slice(src);
     assert.ok(!tail.includes(SONNET), `${label}/SKILL.md Phase 2/3/4 must NOT name ${SONNET}`);
     assert.ok(!tail.includes(OPUS), `${label}/SKILL.md Phase 2/3/4 must NOT name ${OPUS}`);
+    assert.ok(!tail.includes(HAIKU), `${label}/SKILL.md Phase 2/3/4 must NOT name ${HAIKU}`);
     const phase2Idx = src.indexOf('## Phase 2 — Build');
     assert.ok(src.lastIndexOf(SONNET) < phase2Idx, `${label}/SKILL.md: every ${SONNET} mention is before Phase 2`);
     assert.ok(src.lastIndexOf(OPUS) < phase2Idx, `${label}/SKILL.md: every ${OPUS} mention is before Phase 2`);
+    assert.ok(src.lastIndexOf(HAIKU) < phase2Idx, `${label}/SKILL.md: every ${HAIKU} mention is before Phase 2`);
   }
 });
 
