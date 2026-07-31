@@ -18,6 +18,8 @@ const agentRegenerate = require('./lib/agent-regenerate');
 const skillRegenerate = require('./lib/skill-regenerate');
 const { redactSecrets } = require('./lib/slack-proxy');
 const { createTelemetryReceiver } = require('./lib/telemetry-receiver');
+const claudeUsage = require('./lib/claude-usage');
+const { probeUsage } = require('./lib/claude-usage-probe');
 
 const ptys = new Map();
 let mainWindow = null;
@@ -306,7 +308,8 @@ app.on('will-quit', () => {
 });
 
 // ── Window attention flash (TASK-078) ────────────────────────────────────────
-// When a tab is waiting/finished or a board ticket awaits an answer, and the
+// When a tab is waiting on a menu or a board ticket awaits an answer — i.e. a real
+// call to action, never a merely-finished run — and the
 // window is NOT focused, request OS attention (Windows taskbar flash / macOS dock
 // bounce) via BrowserWindow.flashFrame(true); clear it when no condition remains
 // or the window gains focus. The renderer owns the state and reports the app-wide
@@ -623,6 +626,82 @@ ipcMain.handle('telemetry:clear', async () => {
   if (telemetryReceiver) telemetryReceiver.clear();
   return { ok: true };
 });
+
+// ── Weekly usage bar (`/usage` scrape) ───────────────────────────────────────
+// The cmd pane's usage bar needs the weekly rate-limit percentage, which only
+// Claude Code's interactive `/usage` panel knows. lib/claude-usage-probe.js gets
+// it by driving a short-lived off-screen `claude`; that costs a few seconds and a
+// spawned process, so it is ALWAYS served from a cache here:
+//
+//  • one app-global entry — the limit is per account, so every tab and every
+//    window shares the same figure and one probe serves all of them,
+//  • single-flight — concurrent asks (several tabs mounting at once) await the
+//    SAME in-flight probe instead of each spawning their own `claude`,
+//  • TTL'd — a fresh-enough answer is returned without probing at all.
+//
+// The pace marker is recomputed from the cached reset instant on every read, so a
+// cached entry's marker keeps advancing through the week rather than freezing at
+// whatever it was when the probe ran.
+const USAGE_CACHE_TTL_MS = 5 * 60 * 1000;
+let usageCache = null;        // { view, at }
+let usageInFlight = null;     // Promise<view> while a probe is running
+
+// Re-derive the pace marker (and the state/tooltip that depend on it) for a view
+// that was captured earlier. Pure-ish: reads the clock, delegates the maths to
+// lib/claude-usage so there is one implementation of "where should we be".
+function refreshUsagePace(view, nowDate) {
+  if (!view || !view.ok || !view.weekResetsAt) return view;
+  try {
+    const resetAt = new Date(view.weekResetsAt);
+    const pacePercent = claudeUsage.weekPacePercent(resetAt, nowDate);
+    return {
+      ...view,
+      pacePercent,
+      state: claudeUsage.usageState(view.percent, pacePercent),
+      title: claudeUsage.usageTitleFor({
+        ok: true,
+        weekPercent: view.percent,
+        pacePercent,
+        weekResetsRaw: view.weekResetsRaw,
+        weekResetsZone: view.weekResetsZone,
+        sessionPercent: view.sessionPercent,
+      }),
+    };
+  } catch (_) {
+    return view;
+  }
+}
+
+// Serve the weekly usage view. `{ force: true }` bypasses the TTL (the bar's
+// manual refresh); `cwd` is the folder the throwaway `claude` is launched in —
+// it must be one Claude Code already trusts, which is why the renderer passes the
+// tab's own project folder. Never throws and never rejects: a failed probe
+// resolves to an `ok: false` view carrying a reason for the bar's tooltip.
+async function getClaudeUsage(arg) {
+  const a = arg && typeof arg === 'object' ? arg : {};
+  const now = Date.now();
+  if (!a.force && usageCache && (now - usageCache.at) < USAGE_CACHE_TTL_MS) {
+    return { ok: true, view: refreshUsagePace(usageCache.view, new Date()), cached: true };
+  }
+  if (usageInFlight) {
+    const view = await usageInFlight;
+    return { ok: true, view: refreshUsagePace(view, new Date()), cached: true };
+  }
+  usageInFlight = probeUsage({ cwd: typeof a.cwd === 'string' && a.cwd ? a.cwd : undefined })
+    .then((view) => {
+      // Cache successes only. A failure (no login, untrusted folder, missing CLI)
+      // must not be pinned for the whole TTL — the next ask retries.
+      if (view && view.ok) usageCache = { view, at: Date.now() };
+      return view;
+    })
+    .catch(() => ({ ok: false, reason: 'unparsed', percent: null, pacePercent: null, state: 'unknown', label: '—', title: 'Weekly usage unavailable.' }))
+    .finally(() => { usageInFlight = null; });
+
+  const view = await usageInFlight;
+  return { ok: true, view, cached: false };
+}
+
+ipcMain.handle('usage:get', (_evt, arg) => getClaudeUsage(arg));
 
 // Record the folder the user is currently focused on (the renderer reports it as
 // tabs are switched) so the forwarded telemetry summary is tagged with the active

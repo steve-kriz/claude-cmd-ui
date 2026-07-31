@@ -160,6 +160,17 @@
               <option value="claude">cmd · claude</option>
               <option value="opencode">git bash · openCode</option>
             </select>
+            <!-- Weekly rate-limit bar (scraped from Claude Code's /usage). The
+                 fill is actual usage; the notch is where a linear burn through
+                 the week would have us. Hidden until a scrape succeeds, and only
+                 shown for the claude agent. Click to re-scrape. -->
+            <button class="usageBar usage-bar hidden" type="button" title="Weekly usage — loading…">
+              <span class="usage-bar-track">
+                <span class="usageBarFill usage-bar-fill"></span>
+                <span class="usageBarPace usage-bar-pace"></span>
+              </span>
+              <span class="usageBarLabel usage-bar-label">—</span>
+            </button>
             <span class="claudeStatus pane-subtitle">(checking…)</span>
           </span>
           <div class="queue-controls">

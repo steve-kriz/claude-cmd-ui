@@ -204,11 +204,29 @@ contextBridge.exposeInMainWorld('api', {
     // Tag forwarded summaries with the folder the user is currently focused on;
     // the renderer calls this as tabs are switched. Fire-and-forget.
     setActiveProject: (name) => ipcRenderer.invoke('telemetry:setActiveProject', name),
-    // Live push after every ingest: cb({ usage, metricTotals, running }).
+    // Live push after every ingest: cb({ usage, metricTotals, running, project,
+    // projectUsage, projectRecent }). `projectRecent` is that project's
+    // per-call rows, which feed the Stats tab's prompt log.
     onUpdate: (cb) => {
       const listener = (_e, payload) => cb(payload);
       ipcRenderer.on('telemetry:update', listener);
       return () => ipcRenderer.removeListener('telemetry:update', listener);
     }
+  },
+
+  usage: {
+    // Weekly rate-limit usage for the cmd pane's usage bar, scraped from Claude
+    // Code's `/usage` panel in an off-screen throwaway `claude` (lib/claude-usage-
+    // probe.js). Resolves { ok: true, view, cached } where `view` carries
+    // { ok, percent, pacePercent, state, label, title, … }; a failed scrape is a
+    // view with ok:false + a reason, never a rejection.
+    //
+    // `cwd` must be a folder Claude Code already trusts (pass the tab's own
+    // project folder) — the probe deliberately will not answer a trust prompt on
+    // the user's behalf. `force` bypasses main's 5-minute cache.
+    get: (arg) => ipcRenderer.invoke('usage:get', {
+      cwd: arg && arg.cwd,
+      force: !!(arg && arg.force)
+    })
   }
 });

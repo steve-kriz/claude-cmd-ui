@@ -153,7 +153,7 @@ function makeApp(opts = {}) {
     if (!windowApi.attention || !windowApi.attention.report) return;
     let attentionCount = 0;
     for (const tb of TABS.values()) {
-      if (tb && (tb.status === 'waiting' || tb.status === 'finished')) attentionCount++;
+      if (tb && tb.status === 'waiting') attentionCount++;
       const tickets = tb && tb.tasks && tb.tasks.tickets;
       if (!tickets || typeof tickets.values !== 'function') continue;
       for (const tk of tickets.values()) {
@@ -227,19 +227,43 @@ test('Scenario: an attention condition while unfocused requests attention (flash
 });
 
 // ===========================================================================
-// Scenario: Finished (idle) tab also counts as attention
+// Scenario: A finished (idle) tab is NOT a call to action and must NOT flash.
+//   Given a busy tab and an unfocused window
+//   When the run completes and the tab becomes "finished"
+//   Then no OS flash is requested (nothing is asking the user a question)
+// A finished tab used to count, so the taskbar flashed after EVERY run. The flash
+// is reserved for a genuine call to action: a `waiting` tab or an unanswered
+// ticket question.
 // ===========================================================================
-test('Scenario: a finished (idle) tab also counts as attention while unfocused', () => {
-  // Given a finished tab and an unfocused window
+test('Scenario: a finished (idle) tab is NOT a call to action and never flashes', () => {
+  // Given a busy tab and an unfocused window
   const app = makeApp({ focused: false });
   const tab = app.addTab('t1', 'busy');
 
-  // When it transitions to "finished"
+  // When the run completes → "finished"
   app.setTabStatus(tab, 'finished');
 
-  // Then attention is requested (finished is an attention condition)
-  assert.deepEqual(app.flashCalls, [true], 'finished tab flashes while unfocused');
-  assert.equal(shouldRequestAttention({ attentionCount: 1, windowFocused: false }), true);
+  // Then nothing flashes — the count is zero, so the verdict is false
+  assert.equal(flashedTrue(app), 0, 'a finished tab never flashes the taskbar');
+  assert.deepEqual(app.flashCalls, [], 'no flashFrame call at all (already off, deduped)');
+  assert.equal(app.windowAttentionOn, false, 'applied state stays OFF after a run finishes');
+});
+
+// ===========================================================================
+// Scenario: A waiting tab that finishes clears the flash.
+//   Given an unfocused flashing window because a tab is waiting on a menu
+//   When the tab leaves "waiting" and goes "finished"
+//   Then the flash clears (the question is gone; idleness alone is not a CTA)
+// ===========================================================================
+test('Scenario: a waiting tab going finished clears the flash', () => {
+  const app = makeApp({ focused: false });
+  const tab = app.addTab('t1', 'waiting');
+  app.reportWindowAttention();
+  assert.deepEqual(app.flashCalls, [true], 'flashing while the question is live');
+
+  app.setTabStatus(tab, 'finished');
+  assert.deepEqual(app.flashCalls, [true, false], 'finishing clears the flash');
+  assert.equal(app.windowAttentionOn, false);
 });
 
 // ===========================================================================
@@ -361,7 +385,7 @@ test('Scenario: multiple conditions = single state; flash clears only when the L
 });
 
 // ===========================================================================
-// Scenario: Closing a waiting/finished tab (or its pty exiting) re-reports.
+// Scenario: Closing a waiting tab (or its pty exiting) re-reports.
 // ===========================================================================
 test('Scenario: closing the last waiting tab re-reports and clears the flash', () => {
   const app = makeApp({ focused: false });
@@ -374,13 +398,13 @@ test('Scenario: closing the last waiting tab re-reports and clears the flash', (
   assert.deepEqual(app.flashCalls, [true, false], 'closing the last waiting tab clears the flash');
 });
 
-test('Scenario: a pty exit on the last finished tab re-reports and clears the flash', () => {
+test('Scenario: a pty exit on the last waiting tab re-reports and clears the flash', () => {
   const app = makeApp({ focused: false });
-  const tab = app.addTab('t1', 'finished');
+  const tab = app.addTab('t1', 'waiting');
   app.reportWindowAttention();
   assert.deepEqual(app.flashCalls, [true]);
 
-  // pty:exit sets the tab away from finished, then re-reports.
+  // pty:exit sets the tab away from waiting, then re-reports.
   tab.status = 'idle';
   app.ptyExit('t1');
   assert.deepEqual(app.flashCalls, [true, false], 'pty exit clears the flash if it was the last condition');
@@ -448,7 +472,7 @@ test('Scenario (edge): renderer crash (render-process-gone) clears an active fla
 
 test('Scenario (edge): renderer hang (unresponsive) also clears an active flash', () => {
   const app = makeApp({ focused: false });
-  app.addTab('t1', 'finished');
+  app.addTab('t1', 'waiting');
   app.reportWindowAttention();
   assert.deepEqual(app.flashCalls, [true]);
   app.mainUnresponsive();
@@ -582,10 +606,14 @@ test('DRIFT GUARD (main.js): focus, render-process-gone and unresponsive all cle
   assert.match(mainSrc, /require\('\.\/lib\/window-attention'\)/, 'main.js requires the pure decision module');
 });
 
-test('DRIFT GUARD (renderer.js): reportWindowAttention counts waiting/finished tabs + waiting-for-answer tickets', () => {
+test('DRIFT GUARD (renderer.js): reportWindowAttention counts ONLY waiting tabs + waiting-for-answer tickets', () => {
   const body = extractFn(rendererSrc, 'reportWindowAttention');
-  assert.match(body, /tb\.status === 'waiting' \|\| tb\.status === 'finished'/, 'counts waiting/finished tabs');
+  assert.match(body, /tb\.status === 'waiting'/, 'counts waiting tabs (Claude paused on a menu)');
   assert.match(body, /isTicketWaitingForAnswer\(tk\.fm\)/, 'counts board tickets waiting for an answer');
+  // `finished` must NOT be an attention condition — a run merely going idle is not
+  // a call to action, and counting it flashed the taskbar after every run.
+  const code = body.replace(/\/\/[^\n]*/g, '');   // strip comments; only real code counts
+  assert.doesNotMatch(code, /status === 'finished'/, 'a finished tab is not an attention condition');
   assert.match(body, /window\.api\.attention\.report\(attentionCount\)/, 'reports the aggregate count over the bridge');
   assert.match(body, /try\s*\{[\s\S]*catch/, 'the report is wrapped so a bridge failure never throws');
 });

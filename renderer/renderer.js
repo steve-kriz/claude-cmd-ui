@@ -335,6 +335,10 @@ function createTab() {
       cmdTerm: ws.querySelector('.cmdTerm'),
       bashTerm: ws.querySelector('.bashTerm'),
       agentSelect: ws.querySelector('.agentSelect'),
+      usageBar: ws.querySelector('.usageBar'),
+      usageBarFill: ws.querySelector('.usageBarFill'),
+      usageBarPace: ws.querySelector('.usageBarPace'),
+      usageBarLabel: ws.querySelector('.usageBarLabel'),
       claudeStatus: ws.querySelector('.claudeStatus'),
       claudeBanner: ws.querySelector('.claudeInstallBanner'),
       claudeInstallNpmBtn: ws.querySelector('.claudeInstallNpmBtn'),
@@ -890,9 +894,18 @@ function createTab() {
     if (agent === tab.agent) return;
     tab.agent = agent;
     persistSession();
+    // The weekly bar is a Claude rate limit, so it is meaningless for openCode:
+    // switching agents shows or hides it immediately.
+    refreshUsageBar(tab);
     if (!tab.folder) return;
     launchCmdAgent(tab).catch((e) => console.error('[agentSelect]', e));
   });
+
+  // Clicking the bar forces a fresh scrape (bypasses main's 5-minute cache), so
+  // the user can confirm a figure right after a heavy run instead of waiting.
+  if (tab.els.usageBar) {
+    tab.els.usageBar.addEventListener('click', () => refreshUsageBar(tab, { force: true }));
+  }
 
   tab.els.opencodeInstallBtn.addEventListener('click', () => {
     // opencode's official installer; runs in the Git Bash that now backs the cmd pane.
@@ -948,6 +961,10 @@ function activateTab(id) {
     if (window.api && window.api.telemetry && window.api.telemetry.setActiveProject) {
       try { window.api.telemetry.setActiveProject(t.folder || ''); } catch (_) {}
     }
+    // Paint the weekly usage bar for the tab being looked at, and make sure the
+    // shared poll is running. Cheap: normally a cached read, no probe.
+    refreshUsageBar(t);
+    startUsagePolling();
     requestAnimationFrame(() => fitTab(t));
   }
 }
@@ -1303,6 +1320,90 @@ function setupSplitter(tab) {
   });
 }
 
+// ────────────────────────────────────────────────────── weekly usage bar
+//
+// The bar beside the agent select shows how much of the WEEKLY Claude rate limit
+// is gone (the fill) against where a linear burn through the week would put us
+// (the notch) — so "am I ahead of my week?" is answerable at a glance.
+//
+// The figure comes from Claude Code's `/usage` panel, scraped in an off-screen
+// throwaway `claude` by main (lib/claude-usage-probe.js) and cached app-wide for
+// five minutes: it is a per-account limit, so every tab renders the SAME numbers
+// and no tab's refresh costs another probe. All the arithmetic lives in
+// lib/claude-usage.js; the renderer only binds the view it is handed.
+
+// Poll cadence. Matches main's cache TTL, so a tick normally costs one cached IPC
+// round-trip and no probe. Cached reads still re-derive the pace marker against
+// the current clock, which is what keeps the notch creeping forward through the
+// week between actual scrapes.
+const USAGE_POLL_MS = 5 * 60 * 1000;
+let usagePollTimer = null;
+
+// Paint one tab's bar from a lib/claude-usage view. A view with `ok: false`
+// (probe failed, panel unreadable, not logged in) hides the bar rather than
+// showing a zero — a quota bar reading 0% when it simply could not be read is
+// actively misleading. The reason still lands in the title for the next hover.
+function applyUsageView(tab, view) {
+  const els = tab && tab.els;
+  if (!els || !els.usageBar) return;
+  const bar = els.usageBar;
+  bar.classList.remove('is-loading');
+
+  // openCode panes have no Claude weekly limit to report.
+  if (tab.agent !== 'claude' || !view || !view.ok) {
+    bar.classList.add('hidden');
+    if (view && view.title) bar.title = view.title;
+    return;
+  }
+
+  const pct = Math.min(100, Math.max(0, Number(view.percent) || 0));
+  const pace = view.pacePercent == null ? null : Math.min(100, Math.max(0, Number(view.pacePercent)));
+
+  bar.classList.remove('hidden');
+  bar.classList.remove('state-ok', 'state-near', 'state-over', 'state-unknown');
+  bar.classList.add('state-' + (view.state || 'ok'));
+  bar.classList.toggle('pace-unknown', pace == null);
+  bar.title = view.title || '';
+  if (els.usageBarFill) els.usageBarFill.style.width = pct + '%';
+  if (els.usageBarPace) els.usageBarPace.style.left = (pace == null ? 0 : pace) + '%';
+  // textContent, never innerHTML: the label is derived from scraped terminal
+  // output, which is untrusted text.
+  if (els.usageBarLabel) els.usageBarLabel.textContent = view.label || '—';
+}
+
+// Fetch and paint one tab's bar. `force` bypasses main's cache (a real re-scrape,
+// a few seconds). Best-effort throughout: a missing bridge or a rejected invoke
+// leaves the bar as it was rather than throwing into a UI event handler.
+async function refreshUsageBar(tab, opts = {}) {
+  const els = tab && tab.els;
+  if (!els || !els.usageBar) return;
+  if (tab.agent !== 'claude') { applyUsageView(tab, null); return; }
+  if (!window.api || !window.api.usage || !window.api.usage.get) return;
+  // A forced scrape takes seconds; dim the bar so the click visibly registers.
+  if (opts.force) els.usageBar.classList.add('is-loading');
+  try {
+    const res = await window.api.usage.get({ cwd: tab.folder || '', force: !!opts.force });
+    applyUsageView(tab, res && res.view);
+  } catch (_) {
+    els.usageBar.classList.remove('is-loading');
+  }
+}
+
+// Repaint every claude tab's bar. One cached IPC per tab; main coalesces the
+// underlying probe so a window full of tabs still triggers at most one `claude`.
+function refreshAllUsageBars(opts = {}) {
+  for (const tb of TABS.values()) {
+    if (tb) refreshUsageBar(tb, opts);
+  }
+}
+
+// Start the shared poll once. Idempotent so repeated calls (tab creation) don't
+// stack timers.
+function startUsagePolling() {
+  if (usagePollTimer) return;
+  usagePollTimer = setInterval(() => refreshAllUsageBars(), USAGE_POLL_MS);
+}
+
 // ───────────────────────────────────────────────────────── claude status
 
 function setTabStatus(tab, status) {
@@ -1315,6 +1416,10 @@ function setTabStatus(tab, status) {
     slackOnFinished(tab);
     tryDispatchNextPrompt(tab);
     maybeContinueBuild(tab);
+    // A run just consumed quota, so this is the moment the weekly bar is most
+    // likely stale. Deliberately NOT forced: main's cache absorbs a burst of
+    // finishes into at most one real `/usage` probe per TTL.
+    refreshUsageBar(tab);
   }
   // Single status choke point — any tab entering/leaving waiting/finished changes
   // the app-wide attention state (TASK-078). Only report on an actual transition
@@ -4774,8 +4879,30 @@ function closeAwsEnvPopup() {
   openAwsEnvTab = null;
   if (tab.els.awsEnvPopup) tab.els.awsEnvPopup.classList.add('hidden');
   if (tab.els.awsEnvBtn) tab.els.awsEnvBtn.classList.remove('open');
-  document.removeEventListener('click', closeAwsEnvPopup, true);
-  window.removeEventListener('blur', closeAwsEnvPopup);
+  document.removeEventListener('click', onAwsEnvDocClick, true);
+  window.removeEventListener('blur', onAwsEnvWindowBlur);
+}
+
+// Close only when the click lands outside the popup (and its trigger button).
+// The document listener runs in the capture phase, so a bubble-phase
+// stopPropagation on the popup can't shield inside clicks — check containment
+// here instead.
+function onAwsEnvDocClick(e) {
+  const tab = openAwsEnvTab;
+  if (!tab) return;
+  if (tab.els.awsEnvPopup && tab.els.awsEnvPopup.contains(e.target)) return;
+  if (tab.els.awsEnvBtn && tab.els.awsEnvBtn.contains(e.target)) return;
+  closeAwsEnvPopup();
+}
+
+// Opening a native <select> (the profile picker) fires a window `blur` in
+// Chromium/Electron because the option list is a separate OS-level popup. If we
+// closed on every blur, choosing a profile would tear down the whole popup. So
+// only close when focus has genuinely left the popup (e.g. alt-tab away).
+function onAwsEnvWindowBlur() {
+  const popup = openAwsEnvTab && openAwsEnvTab.els.awsEnvPopup;
+  if (popup && popup.contains(document.activeElement)) return;
+  closeAwsEnvPopup();
 }
 
 function toggleAwsEnvPopup(tab) {
@@ -4787,8 +4914,8 @@ function toggleAwsEnvPopup(tab) {
   tab.els.awsEnvBtn.classList.add('open');
   // Defer so the click that opened the popup doesn't immediately close it.
   setTimeout(() => {
-    document.addEventListener('click', closeAwsEnvPopup, true);
-    window.addEventListener('blur', closeAwsEnvPopup);
+    document.addEventListener('click', onAwsEnvDocClick, true);
+    window.addEventListener('blur', onAwsEnvWindowBlur);
   }, 0);
 }
 
@@ -7075,6 +7202,57 @@ function telFmtUsd(v) {
   return n < 1 ? ('$' + n.toFixed(4)) : ('$' + n.toFixed(2));
 }
 
+// ── Prompt-log (per-API-call) display helpers ───────────────────────────────
+// The log renders ONE row per `claude_code.api_request` row, so each line is
+// one prompt's own traffic and cost — not a running total.
+function telNum(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+// "Up" = everything sent TO the model on that call: fresh input tokens plus
+// cache writes plus cache reads. Cache reads are counted as up-traffic because
+// they ARE the prompt's context (they are simply billed cheaper) — leaving them
+// out would make a 29k-token cached prompt read as "30 tokens up".
+function telUpTokens(r) {
+  return telNum(r && r.inputTokens) + telNum(r && r.cacheCreationTokens) + telNum(r && r.cacheReadTokens);
+}
+// "Down" = what the model sent back.
+function telDownTokens(r) {
+  return telNum(r && r.outputTokens);
+}
+// "claude-haiku-4-5-20251001" -> "haiku-4-5" for the log's narrow model column
+// (the full id stays in the row tooltip). Display-only: unlike
+// lib/telemetry.js's modelFamily this is NOT used for any matching, so it just
+// drops the vendor prefix and a trailing yyyymmdd date and leaves anything
+// else alone.
+function telShortModel(model) {
+  const s = String(model == null ? '' : model).trim();
+  if (s === '') return '(unknown)';
+  return s.replace(/^claude-/, '').replace(/-\d{8}$/, '');
+}
+// ISO timestamp -> local "HH:MM:SS". Locale-free (like telFmtInt/telFmtUsd) and
+// never throws: a missing/unparseable timestamp renders as an em dash.
+function telFmtTime(ts) {
+  const d = new Date(String(ts == null ? '' : ts));
+  if (isNaN(d.getTime())) return '—';
+  const p = (n) => (n < 10 ? '0' + n : String(n));
+  return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
+// The row tooltip: the full per-call breakdown the compact row summarizes.
+function telRowTitle(r) {
+  const row = r || {};
+  return [
+    'model ' + (String(row.model || '') || '(unknown)'),
+    'input ' + telFmtInt(row.inputTokens),
+    'cache write ' + telFmtInt(row.cacheCreationTokens),
+    'cache read ' + telFmtInt(row.cacheReadTokens),
+    'output ' + telFmtInt(row.outputTokens),
+    'up ' + telFmtInt(telUpTokens(row)),
+    'down ' + telFmtInt(telDownTokens(row)),
+    'cost ' + telFmtUsd(row.costUsd),
+  ].join(' · ');
+}
+
 // Torn down and re-subscribed on every mount (module-global: only one Stats
 // panel's live feed is ever wired at a time — the previously mounted panel's
 // subscription is detached first).
@@ -7163,6 +7341,86 @@ function buildTelemetryControl(tab) {
     }
   }
 
+  // ── Prompt log ────────────────────────────────────────────────────────────
+  // One row per captured API call — time, model, tokens up, tokens down, cost —
+  // newest first, plus a footer summing the logged calls. This is the "live
+  // feed" half of the panel: the tiles above answer "how much in total?", these
+  // rows answer "what did THAT prompt cost, and on which model?".
+  const logWrap = document.createElement('div');
+  logWrap.className = 'team-telemetry-log';
+  const logHeader = document.createElement('div');
+  logHeader.className = 'team-telemetry-log-header';
+  const logTitle = document.createElement('div');
+  logTitle.className = 'team-telemetry-log-title';
+  logTitle.textContent = 'Prompt log';
+  const logCount = document.createElement('div');
+  logCount.className = 'team-telemetry-log-count';
+  logHeader.appendChild(logTitle);
+  logHeader.appendChild(logCount);
+  const logRows = document.createElement('div');
+  logRows.className = 'team-telemetry-log-rows';
+  const logFoot = document.createElement('div');
+  logFoot.className = 'team-telemetry-log-foot';
+  logWrap.appendChild(logHeader);
+  logWrap.appendChild(logRows);
+  logWrap.appendChild(logFoot);
+
+  function logCell(row, cls, text, title) {
+    const cell = document.createElement('span');
+    cell.className = cls;
+    cell.textContent = text;
+    if (title) cell.title = title;
+    row.appendChild(cell);
+    return cell;
+  }
+
+  // `rows` is the project bucket's `recent` array (api_request rows). It may be
+  // null/undefined — a getUsage result or live payload that carries no rows —
+  // which renders the empty state rather than throwing.
+  function renderLog(rows) {
+    const list = Array.isArray(rows) ? rows : [];
+    logRows.textContent = '';
+    logFoot.textContent = '';
+    logCount.textContent = list.length === 0
+      ? ''
+      : (telFmtInt(list.length) + (list.length === 1 ? ' call' : ' calls'));
+
+    if (list.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'team-telemetry-log-empty';
+      empty.textContent = folder
+        ? 'No API calls captured yet.'
+        : '(open a folder to see the prompt log)';
+      logRows.appendChild(empty);
+      return;
+    }
+
+    let upTotal = 0;
+    let downTotal = 0;
+    let costTotal = 0;
+    // Newest first: `recent` is append-ordered, so walk it backwards.
+    for (let i = list.length - 1; i >= 0; i--) {
+      const r = list[i] || {};
+      const up = telUpTokens(r);
+      const down = telDownTokens(r);
+      upTotal += up;
+      downTotal += down;
+      costTotal += telNum(r.costUsd);
+      const row = document.createElement('div');
+      row.className = 'team-telemetry-log-row';
+      row.title = telRowTitle(r);
+      logCell(row, 'team-telemetry-log-time', telFmtTime(r.timestamp));
+      logCell(row, 'team-telemetry-log-model', telShortModel(r.model), String(r.model || ''));
+      logCell(row, 'team-telemetry-log-up', '↑ ' + telFmtInt(up), 'tokens up (input + cache write + cache read)');
+      logCell(row, 'team-telemetry-log-down', '↓ ' + telFmtInt(down), 'tokens down (output)');
+      logCell(row, 'team-telemetry-log-cost', telFmtUsd(r.costUsd), 'cost of this prompt');
+      logRows.appendChild(row);
+    }
+
+    logFoot.textContent = 'Logged: ↑ ' + telFmtInt(upTotal) + ' up · ↓ '
+      + telFmtInt(downTotal) + ' down · ' + telFmtUsd(costTotal);
+  }
+
   const forwardWrap = document.createElement('div');
   forwardWrap.className = 'team-telemetry-forward';
   const forwardTitle = document.createElement('div');
@@ -7210,6 +7468,7 @@ function buildTelemetryControl(tab) {
   section.appendChild(scopeLine);
   section.appendChild(totalsGrid);
   section.appendChild(byModelWrap);
+  section.appendChild(logWrap);
   section.appendChild(forwardWrap);
   section.appendChild(projWrap);
 
@@ -7228,6 +7487,7 @@ function buildTelemetryControl(tab) {
 
     if (!folder) {
       renderUsage(null);
+      renderLog(null);
       projCb.checked = false;
       projCb.disabled = true;
       return;
@@ -7247,8 +7507,12 @@ function buildTelemetryControl(tab) {
       const res = await window.api.telemetry.getUsage(folder);
       const projectUsage = res && res.usage ? res.usage.usage : null;
       renderUsage(projectUsage);
+      // Project-scoped getUsage returns { usage, recent } (TASK-166) — `recent`
+      // is this project's per-call rows for the prompt log.
+      renderLog(res && res.usage ? res.usage.recent : null);
     } catch (_) {
       renderUsage(null);
+      renderLog(null);
     }
   }
 
@@ -7288,6 +7552,10 @@ function buildTelemetryControl(tab) {
   telemetryUnsub = window.api.telemetry.onUpdate((payload) => {
     if (folder && payload.project === folder && payload.projectUsage) {
       renderUsage(payload.projectUsage);
+      // `projectRecent` is the same bucket's per-call rows. A payload that
+      // doesn't carry the array leaves the existing log alone rather than
+      // blanking a good log.
+      if (Array.isArray(payload.projectRecent)) renderLog(payload.projectRecent);
     }
   });
 
@@ -10392,16 +10660,23 @@ function reportTasksActivity() {
 // Window-attention signal (TASK-078). Report the app-wide count of live "needs
 // attention" conditions to the main process so it can request / clear the OS
 // taskbar flash while the window is unfocused. Aggregated across ALL tabs and
-// boards (the flash is one app-wide resource). A condition is: a tab in `waiting`
-// (Claude paused on a TUI menu) or `finished` (idle, awaiting the next prompt), or
-// a board ticket waiting for an answer (isTicketWaitingForAnswer). attentionCount
-// sums all three — the main-side verdict only flashes when count > 0 AND the
-// window is unfocused, and dedupes, so this is cheap to call on every transition.
+// boards (the flash is one app-wide resource).
+//
+// A condition is a genuine CALL TO ACTION — something is asking the user a
+// question and is blocked until they answer:
+//   • a tab in `waiting` (Claude paused on a TUI confirmation / selection menu),
+//   • a board ticket waiting for an answer (isTicketWaitingForAnswer).
+// `finished` is deliberately NOT a condition: a tab that merely went idle after
+// completing a run isn't asking anything, and counting it made the taskbar flash
+// after every single run (a locked user decision — flash only on a question).
+// attentionCount sums both — the main-side verdict only flashes when count > 0
+// AND the window is unfocused, and dedupes, so this is cheap to call on every
+// transition.
 function reportWindowAttention() {
   if (!window.api || !window.api.attention || !window.api.attention.report) return;
   let attentionCount = 0;
   for (const tb of TABS.values()) {
-    if (tb && (tb.status === 'waiting' || tb.status === 'finished')) attentionCount++;
+    if (tb && tb.status === 'waiting') attentionCount++;
     const tickets = tb && tb.tasks && tb.tasks.tickets;
     if (!tickets || typeof tickets.values !== 'function') continue;
     for (const tk of tickets.values()) {

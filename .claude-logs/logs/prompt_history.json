@@ -147,7 +147,7 @@
   {
     "ts": "2026-07-20T03:43:35.127Z",
     "source": "user",
-    "prompt": "https://medium.com/@steven.krizanovic/the-squad-ide-1b583a6320a4?sharedUserId=steven.krizanovic"
+    "prompt": "https://medium.com/@[REDACTED_NAME]/the-squad-ide-1b583a6320a4?sharedUserId=[REDACTED_NAME]"
   },
   {
     "ts": "2026-07-20T20:53:04.150Z",
@@ -357,7 +357,7 @@
   {
     "ts": "2026-07-26T04:07:58.260Z",
     "source": "user",
-    "prompt": "c4uyjYUK2INGNpLMLzBH1DXk7Tr4vaUdd2lrz7ohrnGxFzHVg#Jo7JMr_do1UPhIz6UBCAdNKtiziHYa0YirSWiuIfrzk"
+    "prompt": "[REDACTED_SECRET]"
   },
   {
     "ts": "2026-07-26T04:52:50.634Z",
@@ -543,5 +543,35 @@
     "ts": "2026-07-27T21:00:43.319Z",
     "source": "user",
     "prompt": "stats is blank, values are not showing up as the code is using tokens. this should show tokens used in realt time using otel service"
+  },
+  {
+    "ts": "2026-07-30T04:39:27.416Z",
+    "source": "user",
+    "prompt": "check cached token before using  [claude-cmd-ui] reusing cached SSO session\n[claude-cmd-ui] listing roles for account [REDACTED_AWS_ACCOUNT]...\n[claude-cmd-ui] found roles: DEV_ADMIN, global_admin, RegionalAdmin\n[claude-cmd-ui] reusing cached SSO session\n[claude-cmd-ui] setting role global_admin on the profile for dev...\n[claude-cmd-ui] exporting credentials for [sso-dev]...\n[claude-cmd-ui] ERROR: \nThe SSO session associated with this profile has expired or is otherwise invalid. To refresh this SSO session run aws sso login with the corresponding profile."
+  },
+  {
+    "ts": "2026-07-30T23:05:56.701Z",
+    "source": "user",
+    "prompt": "notification bar is flashing, it should only flash if there is a call to action, a quesiton being asked in one of the windows."
+  },
+  {
+    "ts": "2026-07-30T23:28:07.640Z",
+    "source": "user",
+    "prompt": "add a bar nex to the drop down in the claude command window, show the usage data with a marker showing the week where we should be at and the actually basedon the /usage data"
+  },
+  {
+    "ts": "2026-07-31T00:12:02.304Z",
+    "source": "user",
+    "prompt": "change the stats log so that the log shows all up and down tokens used, model used and cost of the prompt. use the cheapest model to clean up the log that is stored in the .claude-logs folder, clean up any secrets or PII."
+  },
+  {
+    "ts": "2026-07-31T02:02:25.857Z",
+    "source": "user",
+    "prompt": "/usage"
+  },
+  {
+    "ts": "2026-07-31T05:38:44.856Z",
+    "source": "user",
+    "prompt": "check Azure if we have a password lockout after 15 minutes if they try 5 times"
   }
 ]

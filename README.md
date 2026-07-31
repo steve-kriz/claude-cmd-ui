@@ -102,6 +102,9 @@ usage, and API/IPC references.
 - **[Usage & telemetry](docs/telemetry.md)** — turn on Claude Code's built-in
   OpenTelemetry from the Team tab; a loopback receiver shows live tokens & cost
   in-app and can forward a compact JSON summary to a URL you choose.
+- **[Weekly usage bar](docs/usage-bar.md)** — a bar beside the agent dropdown
+  showing how much of your weekly Claude rate limit is gone against where a
+  linear burn through the week would have you, scraped from `/usage`.
 - **[Keep-awake wake-lock](docs/keep-awake.md)** — hold the OS awake while builds
   run.
 - **[Attention when waiting for input](docs/window-attention.md)** — pulse the
@@ -377,6 +380,7 @@ The full per-feature documentation set lives in [`docs/`](docs):
 | [docs/ba-planner-clarifying-questions.md](docs/ba-planner-clarifying-questions.md) | Phase-1 BA clarifying questions and answer-before-planning-completes flow |
 | [docs/ticket-cost.md](docs/ticket-cost.md) | Per-activity ticket cost log (`activities`) and the modal cost view |
 | [docs/telemetry.md](docs/telemetry.md) | Live token/cost telemetry from Claude Code's OpenTelemetry, in-app receiver + optional forward-to-URL |
+| [docs/usage-bar.md](docs/usage-bar.md) | Weekly rate-limit bar with a pace marker, scraped from Claude Code's `/usage` |
 | [docs/keep-awake.md](docs/keep-awake.md) | OS wake-lock while builds run |
 | [docs/window-attention.md](docs/window-attention.md) | Waiting-tab dot pulse and OS taskbar flash when Claude needs input |
 | [docs/configuration.md](docs/configuration.md) | Every env var and state file |
