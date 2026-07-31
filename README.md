@@ -190,7 +190,7 @@ automatically (detached); set `OPEN_DEVTOOLS=0` to suppress that, and use
 - **Left pane:** the `cmd` terminal running `claude`, plus the prompt **Queue**
   and **Logs** panels.
 - **Right pane:** a tabbed surface — Git Bash, File Explorer, Slack, Git, Change
-  Viewer, Tests, and the **Tasks** board.
+  Viewer, Tests, the **Tasks** board, **Team**, and **Stats**.
 - A draggable **splitter** sets the left/right ratio; terminals re-fit on release.
 
 Each workspace tab carries a **status dot** (idle / busy / waiting / finished) and
@@ -298,6 +298,10 @@ that moves it. It has three panels, plus a set of engine changes that make the
 board's statuses configurable and the shell/CLI layer cross-platform. Full details
 are in the linked pages below.
 
+![The Team tab showing the Agents panel with each orchestrate subagent's model and tools, and the Workflow panel's per-phase settings.](images/manage_team.png)
+
+*The Team tab — manage the project's subagents (model, tools, description) and inspect each workflow phase's dispatched agent and model.*
+
 - **Agents panel + Add agent** — list the project's `.claude/agents/*.md`
   subagents (name / model / tools / description), edit a description in place, and
   create a new agent from a form. Backed by the byte-identical round-trip parser
@@ -334,6 +338,18 @@ are in the linked pages below.
   `aws`-from-`PATH` lookup off Windows ([`lib/aws.js`](lib/aws.js)), and a macOS
   GUI-launch `PATH` fix (`augmentDarwinPath` in [`main.js`](main.js)). Windows
   behaviour is unchanged. See [docs/cross-platform.md](docs/cross-platform.md).
+
+### Stats tab — live usage & cost
+
+The **Stats** tab turns on Claude Code's built-in OpenTelemetry export and shows
+what the agent is actually spending, per project: API calls, input/output tokens,
+cache reads & writes, total tokens, and cost — broken down per model. Optionally
+forward a compact JSON summary to a URL of your choice (with a bearer token) or
+store it online for the project. See [docs/telemetry.md](docs/telemetry.md).
+
+![The Stats tab showing live telemetry: API calls, input/output tokens, cache read/write, total tokens and cost, with a per-model breakdown and the store-online settings.](images/otel_running_costs_stats.png)
+
+*Live token & cost telemetry for the open project, with a per-model breakdown and optional forwarding to your own endpoint.*
 
 ## Data and files written
 
