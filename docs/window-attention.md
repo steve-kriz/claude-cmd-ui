@@ -13,11 +13,15 @@ backgrounded window is never silently blocked. This was added in TASK-078.
   button flashes (macOS dock bounce) via Electron `BrowserWindow.flashFrame`. It
   clears the moment the window gains focus or no attention condition remains.
 
-An attention condition holds when any of these is true:
+An attention condition is a genuine **call to action** — something is asking you a
+question and is blocked until you answer. It holds when either of these is true:
 
-- a tab is `waiting` (Claude paused on a TUI confirmation / selection menu),
-- a tab is `finished` (idle, awaiting the next prompt), or
+- a tab is `waiting` (Claude paused on a TUI confirmation / selection menu), or
 - a board ticket is waiting for an answer (`isTicketWaitingForAnswer`).
+
+A `finished` tab is **not** a condition. A run that merely completed and went idle
+isn't asking anything; counting it meant the taskbar flashed after every single
+run. The flash is reserved for questions.
 
 ## How it works
 
@@ -37,8 +41,8 @@ unit-testable — the same pattern as [keep-awake](keep-awake.md):
   (e.g. a pty data tick while already waiting) never spam the OS.
 - **Reporting** — the renderer owns tab/board state and aggregates the app-wide
   count in `reportWindowAttention()`
-  ([`renderer/renderer.js`](../renderer/renderer.js)): it sums `waiting`/`finished`
-  tabs plus board tickets satisfying `isTicketWaitingForAnswer`, across **all**
+  ([`renderer/renderer.js`](../renderer/renderer.js)): it sums `waiting` tabs plus
+  board tickets satisfying `isTicketWaitingForAnswer`, across **all**
   tabs, and sends the bare number over the fire-and-forget `window:attention`
   channel (`api.attention.report(count)` in [`preload.js`](../preload.js)). It is
   called on every status transition, on each board render, on tab close, and on
@@ -72,6 +76,10 @@ None. The attention conditions and the flash-only-while-unfocused rule are code.
 
 - **Flashes only while unfocused** — a focused window never flashes; the in-app
   dot pulse shows regardless of focus.
+- **A completed run does not flash** — only an unanswered question does (a
+  `waiting` tab or a ticket question). If you want a signal on completion, use the
+  Slack notification ([slack-integration.md](slack-integration.md)) rather than
+  the taskbar flash.
 - **Never spams the OS** — `windowAttentionOn` dedupes, so only real on/off
   transitions reach `flashFrame`.
 - **Junk / zero count → no flash** — `shouldRequestAttention` returns `false` for

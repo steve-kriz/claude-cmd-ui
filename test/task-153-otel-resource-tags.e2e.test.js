@@ -143,6 +143,9 @@ function loadRendererFns(window, document, deps) {
     'const setTabStatus = deps.setTabStatus;',
     'const fitTab = deps.fitTab;',
     'const requestAnimationFrame = deps.requestAnimationFrame;',
+    // activateTab also paints the weekly usage bar and starts its shared poll.
+    'const refreshUsageBar = deps.refreshUsageBar || function () {};',
+    'const startUsagePolling = deps.startUsagePolling || function () {};',
     'let activeTabId = null;',
     extractFn(rendererSrc, 'spawnTerm'),
     extractFn(rendererSrc, 'activateTab'),

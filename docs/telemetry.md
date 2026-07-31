@@ -90,6 +90,43 @@ The receiver reads two OTLP signals:
 - **`claude_code.token.usage` / `claude_code.cost.usage` metrics** — cumulative
   monotonic sums, kept only as a cross-check next to the log-derived totals.
 
+### The prompt log (what did *that* prompt cost?)
+
+Under the totals tiles and the per-model breakdown, the **Prompt log** lists one
+row per captured API call — newest first — so the panel answers both questions:
+the tiles say *how much in total*, the log says *what each prompt cost, and on
+which model*.
+
+```
+Prompt log                                    3 calls
+ 10:07:08  haiku-4-5     ↑ 110      ↓ 5     $0.0001
+ 10:06:07  haiku-4-5     ↑ 1200     ↓ 40    $0.0012
+ 10:05:06  sonnet-5      ↑ 29959    ↓ 222   $0.0098
+                     Logged: ↑ 31269 up · ↓ 267 down · $0.0111
+```
+
+- **↑ Up** is everything sent **to** the model on that call: `input_tokens` +
+  `cache_creation_tokens` + `cache_read_tokens`. Cache reads are counted as
+  up-traffic because they *are* the prompt's context (they are simply billed
+  cheaper) — excluding them would report a 29k-token cached prompt as "30
+  tokens up".
+- **↓ Down** is `output_tokens` — what came back.
+- **Model** is the short label (`claude-haiku-4-5-20251001` → `haiku-4-5`); the
+  row's tooltip carries the full id plus the untruncated breakdown (input, cache
+  write, cache read, output, up, down, cost).
+- **Cost** is that single call's own `cost_usd`, not a running total. The footer
+  sums up-tokens, down-tokens and cost across the logged calls.
+
+The log is **scoped to the tab's project**, like the tiles: it renders the
+project bucket's `recent` rows (last 100). It updates live — the receiver's
+pushed snapshot carries `projectRecent` alongside `projectUsage`, so a new call
+appears at the top of the log without a second `telemetry:getUsage` round-trip.
+A pushed payload that carries no `projectRecent` leaves the existing log alone
+rather than blanking it, and a payload tagged for a different project is ignored.
+
+Rows degrade rather than break: a missing timestamp renders as `—`, an empty
+model as `(unknown)`, and a non-numeric token field as `0`.
+
 ### Storing it online (optional)
 
 Under **Store online**, set a URL and (optionally) a Bearer token, tick **"Forward
@@ -226,7 +263,11 @@ Persisted in `.env` (see [`.env.example`](../.env.example)):
   instead reads the `activeProject` bucket, falling back to the app-wide
   roll-up only when `activeProject` is itself unset — it is **not** always an
   app-wide read (re-verified accurate, TASK-162). A parallel `globalRecent`
-  array and the cumulative metric snapshot stay app-global. Also home to the
+  array and the cumulative metric snapshot stay app-global. `snapshotState`
+  (the payload pushed to the live-update callback) carries that project's
+  `projectUsage` **and** its `projectRecent` — the same capped per-call rows
+  `getUsage`/`getUsageForProject` return as `recent` — so the Stats tab's
+  prompt log renders live off one payload. Also home to the
   live-update callback, the debounced forwarder, and `usageForWindow` (runs
   `lib/telemetry.js`'s helper over every bucket's full de-duplicated store).
   Loopback-only, POST-only, body-capped.
@@ -252,8 +293,10 @@ Persisted in `.env` (see [`.env.example`](../.env.example)):
 - `renderer/renderer.js` — the **Stats** sub-tab (`initStatsTab`), rescoped per
   project (TASK-157): it mounts the **Usage & telemetry** section
   (`buildTelemetryControl`), whose capture toggle and forward URL/token/master
-  switch stay app-global but whose totals grid, per-model breakdown, live feed,
-  and "store online for this project" checkbox are scoped to the tab's `folder`;
+  switch stay app-global but whose totals grid, per-model breakdown, prompt log
+  (`renderLog` + the `telUpTokens`/`telDownTokens`/`telShortModel`/`telFmtTime`/
+  `telRowTitle` display helpers), and "store online for this project" checkbox
+  are scoped to the tab's `folder`;
   plus the task modal's **Cost by activity** section
   (`ticketActivityLines`/`ticketActivityTotalLine`, live-correlated via
   `window.api.telemetry.usageForWindow`), and `activateTab` which reports the

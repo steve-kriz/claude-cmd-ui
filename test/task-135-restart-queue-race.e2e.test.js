@@ -76,6 +76,9 @@ function loadReal(window, document, console, deps) {
     'const slackOnFinished = deps.slackOnFinished;',
     'const maybeContinueBuild = deps.maybeContinueBuild;',
     'const reportWindowAttention = deps.reportWindowAttention;',
+    // The weekly usage bar refreshes when a run finishes (it is the moment quota
+    // has just moved), so setTabStatus now collaborates with it too.
+    'const refreshUsageBar = deps.refreshUsageBar;',
     'const renderQueue = deps.renderQueue;',
     'const logPromptEntry = deps.logPromptEntry;',
     'const buildCommandFor = deps.buildCommandFor;',
@@ -190,6 +193,7 @@ function makeHarness() {
     slackOnFinished() {},
     maybeContinueBuild() {},
     reportWindowAttention() {},
+    refreshUsageBar() {},
     renderQueue() {},
     logPromptEntry() {},
     buildCommandFor() { return BUILD_PAYLOAD; },

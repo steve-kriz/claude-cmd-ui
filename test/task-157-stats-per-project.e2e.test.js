@@ -75,6 +75,14 @@ function loadBuildTelemetryControl(window, document) {
     extractFn(rendererSrc, 'tasksSerializeProjectTelemetryConfig'),
     extractFn(rendererSrc, 'telFmtInt'),
     extractFn(rendererSrc, 'telFmtUsd'),
+    // Prompt-log helpers — renderLog needs them for any `recent` row this
+    // file's mock getUsage returns.
+    extractFn(rendererSrc, 'telNum'),
+    extractFn(rendererSrc, 'telUpTokens'),
+    extractFn(rendererSrc, 'telDownTokens'),
+    extractFn(rendererSrc, 'telShortModel'),
+    extractFn(rendererSrc, 'telFmtTime'),
+    extractFn(rendererSrc, 'telRowTitle'),
     extractFn(rendererSrc, 'buildTelemetryControl'),
     'return { buildTelemetryControl };',
   ].join('\n');

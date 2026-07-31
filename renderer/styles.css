@@ -2194,6 +2194,80 @@ body {
 .agentSelect:hover { background: #4a4a4a; }
 .agentSelect:focus { outline: 1px solid #0e639c; }
 
+/* Weekly usage bar — sits immediately right of .agentSelect in the cmd pane
+   header. Two layers inside one track: the FILL is actual weekly usage scraped
+   from /usage, the PACE notch is where a linear burn through the week would put
+   us. Reading the gap between them is the whole point, so the notch is a hard
+   1px line rather than a second translucent fill that could be mistaken for
+   more usage. A <button> (not a div) so it is keyboard-reachable and can be
+   clicked to force a re-scrape. */
+.usage-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 6px;
+  padding: 2px 5px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+}
+.usage-bar:hover { background: #3c3c3c; border-color: #555; }
+.usage-bar:focus-visible { outline: 1px solid #0e639c; }
+
+.usage-bar-track {
+  position: relative;
+  display: block;
+  width: 86px;
+  height: 6px;
+  background: #3c3c3c;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.usage-bar-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0;                    /* set inline from the scraped percentage */
+  background: #4d9375;         /* comfortably inside the week's allowance */
+  border-radius: 3px 0 0 3px;
+  transition: width 240ms ease-out, background-color 240ms ease-out;
+}
+
+/* Approaching the pace marker, then past it: past the marker means the weekly
+   allowance is being burned faster than the week is elapsing. */
+.usage-bar.state-near .usage-bar-fill { background: #d8a657; }
+.usage-bar.state-over .usage-bar-fill { background: #e05252; }
+
+/* The "where we should be at" notch. Deliberately full-height and light so it
+   reads as a target line over the fill, whichever side of it the fill is on. */
+.usage-bar-pace {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  left: 0;                     /* set inline from the pace percentage */
+  width: 1px;
+  margin-left: -1px;
+  background: #e8e8e8;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+}
+/* Unknown reset time → no meaningful pace, so no marker (never a guessed one). */
+.usage-bar.pace-unknown .usage-bar-pace { display: none; }
+
+.usage-bar-label {
+  color: #b9b9b9;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;   /* the number must not jitter on refresh */
+  min-width: 26px;
+  text-align: right;
+}
+.usage-bar.state-over .usage-bar-label { color: #f3a8a8; }
+.usage-bar.is-loading { opacity: 0.55; }
+
 .pane-subtitle {
   color: #888;
   font-size: 10px;
@@ -3483,6 +3557,75 @@ body {
 }
 .team-telemetry-model-name { color: #9ecbff; }
 .team-telemetry-model-stat { font-variant-numeric: tabular-nums; }
+/* Prompt log: one row per API call — time · model · tokens up ·
+   tokens down · cost. Columns are fixed-width (with the model column taking the
+   slack) so the numbers line up in a scannable column; the rows scroll inside
+   the panel rather than pushing the "Store online" section off-screen. */
+.team-telemetry-log {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-top: 1px solid #262626;
+  padding-top: 8px;
+  margin-top: 2px;
+}
+.team-telemetry-log-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.team-telemetry-log-title { font-size: 12px; color: #ddd; }
+.team-telemetry-log-count { font-size: 10px; color: #8a8a8a; font-variant-numeric: tabular-nums; }
+.team-telemetry-log-rows {
+  display: flex;
+  flex-direction: column;
+  max-height: 220px;
+  overflow-y: auto;
+  background: #1a1a1a;
+  border: 1px solid #2b2b2b;
+  border-radius: 4px;
+}
+.team-telemetry-log-row {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) 76px 76px 68px;
+  gap: 6px;
+  align-items: baseline;
+  padding: 3px 6px;
+  font-size: 11px;
+  color: #b8b8b8;
+  border-bottom: 1px solid #232323;
+}
+.team-telemetry-log-row:last-child { border-bottom: none; }
+.team-telemetry-log-time { color: #8a8a8a; font-variant-numeric: tabular-nums; }
+.team-telemetry-log-model {
+  color: #9ecbff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.team-telemetry-log-up,
+.team-telemetry-log-down,
+.team-telemetry-log-cost {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.team-telemetry-log-up { color: #d19a66; }
+.team-telemetry-log-down { color: #6fbf73; }
+.team-telemetry-log-cost { color: #eee; font-weight: 600; }
+.team-telemetry-log-empty {
+  padding: 6px;
+  font-size: 11px;
+  color: #7a7a7a;
+  font-style: italic;
+}
+.team-telemetry-log-foot {
+  font-size: 11px;
+  color: #9a9a9a;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 .team-telemetry-forward {
   display: flex;
   flex-direction: column;

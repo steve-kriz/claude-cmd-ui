@@ -91,6 +91,16 @@ function loadBuildTelemetryControl(window, document) {
     extractFn(rendererSrc, 'tasksSerializeProjectTelemetryConfig'),
     extractFn(rendererSrc, 'telFmtInt'),
     extractFn(rendererSrc, 'telFmtUsd'),
+    // Prompt-log helpers. buildTelemetryControl's renderLog calls
+    // these for every `recent` row, and this scenario feeds it the REAL
+    // receiver's rows — omitting them makes renderLog throw a ReferenceError
+    // that refresh()'s catch swallows, silently zeroing the tiles below.
+    extractFn(rendererSrc, 'telNum'),
+    extractFn(rendererSrc, 'telUpTokens'),
+    extractFn(rendererSrc, 'telDownTokens'),
+    extractFn(rendererSrc, 'telShortModel'),
+    extractFn(rendererSrc, 'telFmtTime'),
+    extractFn(rendererSrc, 'telRowTitle'),
     extractFn(rendererSrc, 'buildTelemetryControl'),
     'return { buildTelemetryControl };',
   ].join('\n');
