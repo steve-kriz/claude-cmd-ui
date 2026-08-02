@@ -29,7 +29,7 @@ Refresh (it resets only on app restart).
 | Section | What it edits | Backing store | Detailed docs |
 |---------|---------------|---------------|---------------|
 | **Agents** | Subagent definitions — list, edit the full file (description/tools/model/body), **Regenerate with AI**, and **Add agent** | `.claude/agents/*.md` (+ mirrored `assets/agents/*.md`) | [agent-management.md](agent-management.md) |
-| **Workflow** | Read-only phase pipeline + per-phase agent **model** editor + per-phase **enable/reorder** + build-**concurrency** default + guided **"Regenerate this phase's instructions"** AI action | `.claude/skills/orchestrate/SKILL.md` (read only, except the one guided AI-regenerate Save), agent files, `tasks/team-config.json` | [workflow-settings.md](workflow-settings.md) |
+| **Workflow** | Read-only phase pipeline + per-phase agent **model** editor + per-phase **enable/reorder** + build-**concurrency** default + **context optimisation** control + guided **"Regenerate this phase's instructions"** AI action | `.claude/skills/orchestrate/SKILL.md` (read only, except the one guided AI-regenerate Save), agent files, `tasks/team-config.json` | [workflow-settings.md](workflow-settings.md) |
 | **Board** | The board columns/statuses — add, edit label/description/agent/**phase link**, reorder, remove | `tasks/team-config.json` | [dynamic-statuses.md](dynamic-statuses.md) |
 
 `initTeamTab(tab)` (renderer, ~line 6567) is called on tab activation and on
@@ -55,9 +55,10 @@ see [dynamic-statuses.md](dynamic-statuses.md).)
      instruction (requires `ANTHROPIC_API_KEY`); the result is a preview you must
      **Save** to apply.
    - **Workflow** → review the pipeline, **Edit** a phase's agent model, toggle a
-     phase **Enabled**/reorder it, set the **Build concurrency default**, or use
-     **Regenerate this phase's instructions** to propose (and, after review,
-     **Save**) a rewritten phase section.
+     phase **Enabled**/reorder it, set the **Build concurrency default**, adjust
+     **Context optimisation** (Enabled + level), or use **Regenerate this
+     phase's instructions** to propose (and, after review, **Save**) a
+     rewritten phase section.
    - **Board** → add/reorder/remove columns, then **Save** to write
      `tasks/team-config.json`.
 

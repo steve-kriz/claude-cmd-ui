@@ -77,6 +77,11 @@ function loadRendererFactory() {
     extractFn(rendererSrc, 'tasksNormalizeColumnPhase'),
     extractFn(rendererSrc, 'tasksBuildColumn'),
     extractFn(rendererSrc, 'normalizeTasksColumns'),
+    // TASK-200 — tasksSerializeTeamConfig now normalises skill.contextOptimization
+    // via tasksNormalizeContextOptimization, so these must be in scope too.
+    extractConst(rendererSrc, 'TASKS_CONTEXT_OPT_LEVELS'),
+    extractConst(rendererSrc, 'TASKS_CONTEXT_OPT_DEFAULT'),
+    extractFn(rendererSrc, 'tasksNormalizeContextOptimization'),
     extractFn(rendererSrc, 'tasksSerializeTeamConfig'),
     extractFn(rendererSrc, 'buildWorkingConfigFromRaw'),
     extractFn(rendererSrc, 'readTeamAgentNames'),

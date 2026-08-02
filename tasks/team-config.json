@@ -73,7 +73,7 @@
         "order": 3
       },
       "review": {
-        "enabled": true,
+        "enabled": false,
         "order": 4
       }
     },

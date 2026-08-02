@@ -75,6 +75,11 @@ function load(localStorage) {
     extractFn(rendererSrc, 'tasksNormalizeColumnPhase'),
     extractFn(rendererSrc, 'tasksBuildColumn'),
     extractFn(rendererSrc, 'normalizeTasksColumns'),
+    // TASK-200 — tasksSerializeTeamConfig now normalises skill.contextOptimization
+    // via tasksNormalizeContextOptimization, so these must be in scope too.
+    extractConst(rendererSrc, 'TASKS_CONTEXT_OPT_LEVELS'),
+    extractConst(rendererSrc, 'TASKS_CONTEXT_OPT_DEFAULT'),
+    extractFn(rendererSrc, 'tasksNormalizeContextOptimization'),
     extractFn(rendererSrc, 'tasksSerializeTeamConfig'),
     // TASK-128: buildWorkingConfigFromRaw / tasksSerializeTeamConfig now skip
     // prototype-poisoning keys via tasksIsUnsafeKey, so the headless harness must

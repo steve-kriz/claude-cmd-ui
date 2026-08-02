@@ -207,6 +207,53 @@ every agent:
   large, stable part (system prompt + preamble + ticket contract) is served from
   cache. Small volatile tails plus stable prefixes are what make the swarm cheap.
 
+### Context optimisation (trim between phase movements)
+
+`tasks/team-config.json`'s `skill.contextOptimization` (`{ enabled, level }`,
+normalised by `lib/team-config.js`, editable from the Team → Workflow panel's
+Context optimisation control) makes the swarm's existing context-minimisation
+habit a **configurable, persisted setting** instead of unconditional behaviour.
+It does not replace or contradict **Distilled returns** or **Prompt caching**
+above — it is the directive that tells the orchestrator, at every **phase
+movement**, to actually apply them:
+
+- **When to apply it.** At **every phase movement** — every point a ticket
+  advances between orchestrate phases (plan → build → test → review →
+  post-processing), i.e. every hand-off where a sub-agent returns and the next
+  phase's dispatch is about to launch. This is not a hook on a user manually
+  dragging a card between board lanes; it is the agent-dispatch hand-off points
+  described throughout this document.
+- **Enabled check.** Read `skill.contextOptimization.enabled`. Treat it as
+  disabled **only** when the value is the literal boolean `false`; a missing
+  config file, a missing `contextOptimization` key, or any non-boolean value
+  counts as enabled (the config layer normalises it to `true`) — mirroring the
+  "disabled only when explicitly `false`" rule used for `skill.phases.<phase>`
+  above.
+- **What to do when enabled.** At each phase movement: **drop** context that is
+  no longer needed (a completed phase's full working transcript, files read but
+  not touched, exploratory scratch state), **summarise** what must be kept (the
+  distilled per-agent return described in **Distilled returns**, plus any
+  ticket-file state the next phase needs), and **carry forward only that
+  minimum** into the next dispatch. This is the same discipline **Distilled
+  returns** and **Prompt caching** already describe — this setting is what
+  makes applying it at every movement a deliberate, user-visible choice rather
+  than an unstated default.
+- **The `level` dial.** `skill.contextOptimization.level` is one of
+  `conservative`, `standard`, or `aggressive`, tuning how much to trim at each
+  movement: `conservative` carries more surrounding state forward (useful when
+  a user is debugging a run and wants more retained), `standard` is the
+  everyday balance described above, and `aggressive` trims to the smallest
+  viable hand-off — distilled summary and ticket-file pointers only, nothing
+  extra. A missing or invalid `level` (anything other than the three literal
+  strings) is treated as `standard`.
+- **Defaults.** Missing/invalid/unparseable config is treated as
+  `{ enabled: true, level: "standard" }` — the swarm already optimises context
+  unconditionally today, so this default preserves that existing behaviour.
+  `enabled: false` tells the orchestrator to carry fuller context forward
+  between phase movements instead (e.g. while a user is actively debugging a
+  run); the stored `level` is preserved even while disabled, so re-enabling
+  restores the previously chosen aggressiveness.
+
 ### Phase-enabled config and dispatch order (`tasks/team-config.json`)
 
 Before dispatching any phase's subagent, for every ticket that phase would otherwise process,
@@ -325,6 +372,24 @@ ticket, per-ticket **git isolation** stops parallel builds clobbering each other
 tree, and only shared-git steps are serialized. Concurrency is safe **only** under
 those rules; follow them exactly.
 
+**Batching means one message, not one-at-a-time.** "In parallel" is a dispatch
+rule for **you**, the orchestrator, not just a description of what a batch is:
+whenever two or more tickets are simultaneously eligible for the same phase's
+dispatch — a freshly-claimed batch awaiting a build (step 3 below), or multiple
+undefined `todo` tickets awaiting BA-definition (step 1 below) — issue **all** of
+those Task-tool calls **in a single message** (parallel tool calls), never
+dispatching one and awaiting its return before starting the next. This is the
+**default, expected** behavior every pass, not merely an option: maximize
+concurrent dispatches — dispatch everything eligible right now, in parallel,
+every pass — capped **only** by the existing free-slot bound (never more than
+`limit − (in-progress + testing + defining)` at once; anything beyond that bound
+waits in the queue for the next top-up). Batching dispatches into one message
+never changes the **claim-before-build** ordering: each ticket in the batch is
+still claimed individually and atomically (`claimTicket`, a whole-file write,
+re-read fresh, first writer wins) **before** its build starts — only the coder
+Task-tool calls themselves are issued together, after every claim in the batch
+has already landed.
+
 **Run until the board is clear.** `/orchestrate build` does not stop after one
 ticket, or after one batch — it keeps topping up and driving batches until nothing
 is left to drive:
@@ -346,6 +411,21 @@ is left to drive:
    ```gherkin block. A `kind: post-processing` ticket is **never** defined or
    dispatched — skip it (the existing guards in `canRunInParallel`/`claimTicket`
    report `post-processing`).
+
+   **Multiple undefined tickets at once → define them together, in one message.**
+   When this re-scan (or a mid-build burst) surfaces more than one undefined
+   `todo` ticket at the same time, do not define them one-at-a-time: park each
+   one (`status: defining`, per ticket, as described below) and then dispatch
+   **all** of their BA-definition Task-tool calls **together, in a single
+   message**, defining as many of them simultaneously as the slot bound allows.
+   This is the default/expected behavior — maximize concurrent BA dispatches
+   rather than serializing them — subject to the same free-slot bound as any
+   other dispatch (`limit − (in-progress + testing + defining)`; a ticket that
+   does not fit stays parked in `todo`/queued until a slot frees). This applies
+   **only** to this mid-build path — several already-distinct undefined tickets
+   sitting in `todo` at once — and does **not** change Phase 1's
+   `/orchestrate plan`, which stays a **single** BA decomposing one feature
+   request into tickets.
 
    - **Undefined `todo` ticket → define it FIRST (BA before any claim/build).**
      Set `status: defining` (whole-file write, bump `updated`) to park it for the
@@ -420,9 +500,16 @@ is left to drive:
 3. **Claim** each ticket in the batch atomically before starting its build (see
    below), then build the claimed batch **in parallel** and take each ticket
    through Phase 3 (test/fix) to a terminal state (`done`, or `failed-testing`
-   after the cap). Whenever a build finishes and frees a slot, return to step 1 to
-   **top up** the free slots with the next `selectNextBatch` set — keep the swarm
-   full until the board is clear.
+   after the cap). **Claim sequentially** — one whole-file write at a time, first
+   writer wins — and only **once every ticket in the batch is claimed**, dispatch
+   **all** of the batch's coder Task-tool calls **together, in a single message**
+   (parallel tool calls), rather than dispatching and awaiting them one at a
+   time. This is the default/expected behavior: dispatch everything eligible
+   right now, in parallel, every pass, never more than the batch's free slots
+   `limit − (in-progress + testing + defining)` allow — tickets beyond that bound
+   wait in the queue. Whenever a build finishes and frees a slot, return to step 1
+   to **top up** the free slots with the next `selectNextBatch` set — keep the
+   swarm full until the board is clear.
 4. When there are no free-slot candidates left and no builds are still running,
    **stop** — report the final board: how many reached `done`, and list anything
    left in `failed-testing` with a one-line reason so the user can intervene.
@@ -503,7 +590,6 @@ scenarios. The project test runner is `node --test`.
    ask the user how to proceed.
 
 ## Phase 4 — Tech-lead review (reviewer), post-processing, then done
-
 A ticket that has **passed testing** is **not** marked `done` immediately. First
 it goes through a **tech-lead review**, then a **post-processing** step, so the
 ordering is `testing → tech-lead review → post-processing → done`. The review is a
@@ -535,17 +621,29 @@ or a non-boolean value normalised to `true`), run the review as described below.
    - Verify **security concerns are addressed** (input validation, injection,
      path traversal, secrets, unsafe IPC/shell usage, missing authorization,
      unsafe handling of untrusted data).
-   The reviewer is **read/search only**: it reports findings but **never edits the
-   reviewed ticket's status/frontmatter** or any source file.
-2. **When the review finds issues, create a new follow-up fix ticket per issue**
-   with `status: todo`. You (the orchestrator) create these — the reviewer only
-   reports them. Each new id **continues the `TASK-nnn` sequence from the true
-   maximum** id found across all status subfolders (`tasks/*/TASK-*.md`), never
-   reusing an existing id and never skipping ahead of the real maximum: if the
-   current max is `TASK-019` and the review found two issues, the follow-ups are
-   `TASK-020` and `TASK-021`. Creating these follow-ups **does not change the
-   reviewed ticket's status or frontmatter**; the follow-up `todo` tickets are
-   picked up by a later build swarm like any other ticket.
+   For **every** finding, the reviewer must assign a **severity**: `critical`,
+   `high-security`, or lower (e.g. `medium`, `low`, `nit`). A finding is
+   `critical` when it means the ticket's acceptance criteria are not actually
+   met or the implementation is broken/incomplete; it is `high-security` when it
+   is a serious security vulnerability (the security concerns listed above, at a
+   severity that is exploitable or exposes sensitive data/systems). Everything
+   else — style nits, minor test-coverage gaps, non-security code-quality
+   suggestions — is reported but is **not** `critical` or `high-security`. The
+   reviewer is **read/search only**: it reports findings (with severity) but
+   **never edits the reviewed ticket's status/frontmatter** or any source file.
+2. **When the review finds a `critical` or `high-security` issue, create a new
+   follow-up fix ticket for that issue** with `status: todo`. You (the
+   orchestrator) create these — the reviewer only reports them. **Findings at
+   any lower severity (medium/low/nit, and non-`high-security` code-quality or
+   style feedback) do not get a follow-up ticket** — note them only in your own
+   summary to the user, do not create tickets for them. Each new id **continues
+   the `TASK-nnn` sequence from the true maximum** id found across all status
+   subfolders (`tasks/*/TASK-*.md`), never reusing an existing id and never
+   skipping ahead of the real maximum: if the current max is `TASK-019` and the
+   review found two qualifying (`critical`/`high-security`) issues, the
+   follow-ups are `TASK-020` and `TASK-021`. Creating these follow-ups **does
+   not change the reviewed ticket's status or frontmatter**; the follow-up
+   `todo` tickets are picked up by a later build swarm like any other ticket.
 
    Every review follow-up fix ticket you create must additionally:
    - **Contain a `## Impact If Not Fixed` section** in its body, carrying the
@@ -565,11 +663,12 @@ or a non-boolean value normalised to `true`), run the review as described below.
    themselves marked `done` by this flow; you only run their instructions. Then set
    `status: done` on the reviewed ticket. Its own acceptance criteria and tests
    passed, so it reaches `done` regardless of what the review turned up — the
-   review never re-opens it. This `done` transition is the ticket's normal terminal
+   review never re-opens it, and even qualifying `critical`/`high-security`
+   findings only spawn a separate follow-up ticket rather than blocking this
+   `done` transition. This `done` transition is the ticket's normal terminal
    state, written by you (the orchestrator); neither the review nor the
    post-processing step changes the reviewed ticket's status/frontmatter beyond
    letting it proceed to `done`.
-
 ## Concurrency, claims, and isolation
 
 The swarm builds tickets in parallel, in batches, but self-coordinates **only**

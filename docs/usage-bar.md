@@ -66,6 +66,22 @@ Every failure path resolves to a view carrying a **reason** rather than throwing
 | `login-required` | Claude Code needs `/login` |
 | `claude-missing` | the `claude` CLI was not found |
 | `unparsed` | output arrived but the weekly row could not be read |
+| `no-bridge` | (renderer-only) `window.api.usage` isn't available at all |
+
+**`/usage` is a tabbed dialog, and it can open on the wrong tab.** In the
+currently-installed Claude Code, `/usage` no longer prints the weekly row
+directly — it opens an interactive dialog (observed tabs: Settings / Status /
+Config / Session) and the tab it opens *on* is a session cost/duration
+summary, not the one carrying the weekly percentage. The probe recognises the
+dialog is open (every tab shows an "Esc to cancel/close" hint the plain
+composer never does) and, if the weekly row hasn't rendered a beat after
+opening, nudges through the other tabs with the same Left arrow a person would
+press — bounded (`maxTabCycles`, `tabCycleMs` in `DEFAULTS`) so a plan/version
+whose dialog has no such tab at all still falls through to the normal
+`unparsed`/timeout path instead of spinning. This is a no-op for a dialog that
+happens to open straight on the right tab (or for the older flat-frame
+layout): the very first frame already matches and the probe settles before any
+nudge would fire.
 
 **A trust prompt is never auto-answered.** If Claude Code asks "is this a project
 you trust?", the probe aborts and reports `folder-untrusted`. Confirming trust on
@@ -130,9 +146,15 @@ fresh as the last probe, but "where we should be" advances every minute.
 - every 5 minutes on a shared, idempotent poll,
 - immediately on **click**, which forces a real re-scrape past the cache.
 
-The bar is hidden for **openCode** panes (it is a Claude rate limit) and whenever
-a reading is unavailable — a quota bar reading 0% because it *could not be read*
-is worse than no bar, so the reason goes to the tooltip instead.
+The bar is fully **hidden** only for **openCode** panes (it is a Claude rate
+limit, meaningless there). Whenever a `claude` pane's reading is
+*unavailable* — probe failed, not logged in, folder untrusted, no bridge, or
+just not read yet — the bar stays **visible** as a muted/greyed affordance
+(`.usage-bar.is-unavailable`) with the fill and label reset to their empty
+state, rather than either a blank empty track or vanishing outright; the
+reason is in the `title` tooltip. A reading that fails after a previous
+success never keeps showing the old number as current — the reset happens on
+every repaint, success or not.
 
 ## Usage
 
@@ -161,13 +183,17 @@ None. The 7-day window, the 5-minute cache TTL and the amber/red thresholds
 
 ## Edge cases, limitations & troubleshooting
 
-- **Scraping is best-effort.** If Claude Code restyles the `/usage` panel the
-  parse can stop matching; the bar then hides and the tooltip says
-  `the /usage panel could not be read`. It cannot show a wrong number, because
-  an unreadable frame yields `null`, never a default.
-- **The bar is missing.** Hover it if visible, else check in order: the pane is
-  a `claude` pane (not openCode); the folder is trusted by Claude Code; you are
-  logged in; `claude` is on `PATH`.
+- **Scraping is best-effort.** If Claude Code restyles the `/usage` panel (or
+  moves the weekly row to a dialog tab the probe's bounded tab-cycling never
+  reaches) the parse can stop matching; the bar then goes to the muted
+  `is-unavailable` state and the tooltip says `the /usage panel could not be
+  read`. It cannot show a wrong number, because an unreadable frame yields
+  `null`, never a default.
+- **The bar looks greyed out / unavailable.** Hover it for the reason, then
+  check in order: the pane is a `claude` pane (not openCode); the folder is
+  trusted by Claude Code; you are logged in; `claude` is on `PATH`.
+- **The bar is fully missing (not just greyed out).** That only happens for an
+  openCode pane — it is a Claude rate limit and has nothing to show there.
 - **Up to 5 minutes stale.** Click the bar to force a fresh scrape.
 - **Weekly all-models only.** `/usage` also reports a session limit and a
   per-model (e.g. Opus) weekly limit. The session figure is in the tooltip; the

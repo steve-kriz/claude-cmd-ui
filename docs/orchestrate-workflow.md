@@ -250,6 +250,24 @@ node --test test/ticket-queue.test.js test/ticket-lanes.test.js
   of what it depends on — the orchestrator notes any such out-of-order run in its
   end-of-run report rather than refusing. See the skill's "Phase-enabled config
   and dispatch order" section for the full rules.
+- **Context optimisation** (TASK-200) — `skill.contextOptimization` (`{ enabled,
+  level }`) in `tasks/team-config.json`, normalised by `lib/team-config.js`
+  (`normalizeContextOptimization`) and its `renderer/renderer.js` mirror
+  (`tasksNormalizeContextOptimization`). `enabled` (default `true`) gates
+  whether, at every phase movement (plan → build → test → review →
+  post-processing), the orchestrator drops context it no longer needs,
+  summarises what it must keep, and carries the minimum forward — a
+  configurable switch over the behaviour described in the skill's "Distilled
+  returns" / "Prompt caching" / "Context optimisation" sections. `level` is one
+  of `conservative` / `standard` / `aggressive` (default `standard`), tuning how
+  aggressively context is trimmed. Missing/invalid values normalise to the
+  default; context optimisation is treated as disabled only when `enabled` is
+  the literal boolean `false` (mirroring the same rule used for
+  `skill.phases.<phase>.enabled` above). Edited from the Team tab's **Workflow**
+  panel via a new Context optimisation control (Enabled checkbox + level select) that sits
+  alongside the Build concurrency default control, and persists the whole
+  `tasks/team-config.json` file on Save (re-reading fresh first, so a
+  concurrent Board-panel or concurrency-default save is never clobbered).
 - No env vars. Ticket status enum, active statuses, and post-processing kind are
   code (`lib/ticket-lanes.js`).
 

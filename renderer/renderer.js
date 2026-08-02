@@ -1339,35 +1339,60 @@ function setupSplitter(tab) {
 const USAGE_POLL_MS = 5 * 60 * 1000;
 let usagePollTimer = null;
 
-// Paint one tab's bar from a lib/claude-usage view. A view with `ok: false`
-// (probe failed, panel unreadable, not logged in) hides the bar rather than
-// showing a zero — a quota bar reading 0% when it simply could not be read is
-// actively misleading. The reason still lands in the title for the next hover.
+// Paint one tab's bar from a lib/claude-usage view. Two distinct "not a real
+// figure" states, deliberately not conflated:
+//   - openCode has no Claude weekly limit to report at all, so its bar is fully
+//     HIDDEN (`.hidden`, backed by a real CSS rule — see styles.css).
+//   - a `claude` pane whose reading is unavailable (`view.ok === false`, or no
+//     view at all yet) stays VISIBLE as a muted "unavailable" affordance
+//     (`.is-unavailable`) with the reason in `title` — a bar that vanishes
+//     whenever a probe fails is indistinguishable from "nothing to see here",
+//     and a bar reading a stale number from the last successful probe is
+//     actively misleading, so both the fill and the label are reset every time.
 function applyUsageView(tab, view) {
   const els = tab && tab.els;
   if (!els || !els.usageBar) return;
   const bar = els.usageBar;
   bar.classList.remove('is-loading');
+  bar.classList.remove('state-ok', 'state-near', 'state-over', 'state-unknown');
 
-  // openCode panes have no Claude weekly limit to report.
-  if (tab.agent !== 'claude' || !view || !view.ok) {
+  const resetPaint = () => {
+    if (els.usageBarFill) els.usageBarFill.style.width = '0%';
+    if (els.usageBarPace) els.usageBarPace.style.left = '0%';
+    // textContent, never innerHTML: the label is derived from scraped terminal
+    // output, which is untrusted text.
+    if (els.usageBarLabel) els.usageBarLabel.textContent = '—';
+  };
+
+  // openCode panes have no Claude weekly limit to report — the ONE case that is
+  // actually hidden rather than shown-as-unavailable.
+  if (!tab || tab.agent !== 'claude') {
     bar.classList.add('hidden');
-    if (view && view.title) bar.title = view.title;
+    bar.classList.remove('is-unavailable', 'pace-unknown');
+    resetPaint();
+    bar.title = '';
     return;
   }
 
+  bar.classList.remove('hidden');
+
+  if (!view || !view.ok) {
+    bar.classList.add('is-unavailable');
+    bar.classList.add('pace-unknown');
+    resetPaint();
+    bar.title = (view && view.title) || 'Weekly usage unavailable.';
+    return;
+  }
+
+  bar.classList.remove('is-unavailable');
   const pct = Math.min(100, Math.max(0, Number(view.percent) || 0));
   const pace = view.pacePercent == null ? null : Math.min(100, Math.max(0, Number(view.pacePercent)));
 
-  bar.classList.remove('hidden');
-  bar.classList.remove('state-ok', 'state-near', 'state-over', 'state-unknown');
   bar.classList.add('state-' + (view.state || 'ok'));
   bar.classList.toggle('pace-unknown', pace == null);
   bar.title = view.title || '';
   if (els.usageBarFill) els.usageBarFill.style.width = pct + '%';
   if (els.usageBarPace) els.usageBarPace.style.left = (pace == null ? 0 : pace) + '%';
-  // textContent, never innerHTML: the label is derived from scraped terminal
-  // output, which is untrusted text.
   if (els.usageBarLabel) els.usageBarLabel.textContent = view.label || '—';
 }
 
@@ -1378,14 +1403,23 @@ async function refreshUsageBar(tab, opts = {}) {
   const els = tab && tab.els;
   if (!els || !els.usageBar) return;
   if (tab.agent !== 'claude') { applyUsageView(tab, null); return; }
-  if (!window.api || !window.api.usage || !window.api.usage.get) return;
+  // No bridge (older preload, or the API surface missing entirely): leave the
+  // bar in the visible-unavailable state rather than a half-painted one — it
+  // must not go on showing whatever it happened to be painted with before.
+  if (!window.api || !window.api.usage || !window.api.usage.get) {
+    applyUsageView(tab, { ok: false, reason: 'no-bridge', title: 'Weekly usage unavailable — the app bridge is missing.' });
+    return;
+  }
   // A forced scrape takes seconds; dim the bar so the click visibly registers.
   if (opts.force) els.usageBar.classList.add('is-loading');
   try {
     const res = await window.api.usage.get({ cwd: tab.folder || '', force: !!opts.force });
     applyUsageView(tab, res && res.view);
   } catch (_) {
-    els.usageBar.classList.remove('is-loading');
+    // A rejected/throwing invoke is still a failed reading: fall through to the
+    // same visible-unavailable state (and clear a stale prior figure) rather
+    // than just clearing the loading dim and leaving whatever was painted before.
+    applyUsageView(tab, { ok: false, reason: 'unparsed', title: 'Weekly usage unavailable — the request failed.' });
   }
 }
 
@@ -3529,6 +3563,36 @@ function fmtTokens(n) {
   return v.toLocaleString();
 }
 
+// TASK-195: correlate ONE top-level prompt entry's real token/cost totals off
+// the captured telemetry for the whole `claude_code.api_request` sequence it
+// triggered. The window is [entry.ts, nextEntry.ts) — or, for the newest
+// entry (no `nextEntry`), [entry.ts, now) — and is scoped to THIS project's
+// own telemetry bucket only (usageForWindowInProject), so a different,
+// concurrently-running project's calls are never folded in. The model filter
+// is left empty so a sequence spanning multiple models is summed in full.
+// Returns null (no change) when correlation is unavailable/inapplicable
+// (missing api, missing entry.ts, or nothing matched the window) rather than
+// ever throwing — callers keep whatever value they already had.
+async function correlatePromptEntryUsage(folder, entry, nextEntry) {
+  try {
+    if (!entry || !entry.ts) return null;
+    if (!window.api || !window.api.telemetry || typeof window.api.telemetry.usageForWindowInProject !== 'function') return null;
+    const startedAt = entry.ts;
+    const finishedAt = (nextEntry && nextEntry.ts) ? nextEntry.ts : new Date().toISOString();
+    const res = await window.api.telemetry.usageForWindowInProject(folder, { startedAt, finishedAt, model: '' });
+    const usage = res && res.usage;
+    if (!usage || !(Number(usage.requests) > 0)) return null;
+    return {
+      inputTokens: Number.isFinite(usage.inputTokens) ? usage.inputTokens : 0,
+      outputTokens: Number.isFinite(usage.outputTokens) ? usage.outputTokens : 0,
+      costUsd: Number.isFinite(usage.costUsd) ? usage.costUsd : 0,
+    };
+  } catch (err) {
+    console.warn('[telemetry.usageForWindowInProject]', err);
+    return null;
+  }
+}
+
 async function loadPromptLog(tab, showOnLoad) {
   if (!tab.folder) return;
   try {
@@ -3545,13 +3609,46 @@ async function loadPromptLog(tab, showOnLoad) {
     const res = await window.api.prompts.read(tab.folder);
     if (res && res.ok) {
       const raw = Array.isArray(res.entries) ? res.entries : [];
-      tab.promptLog = raw.map((e) => {
+      const updatedRaw = raw.slice();
+      let dirty = false;
+      const mapped = [];
+      for (let i = 0; i < raw.length; i++) {
+        const e = raw[i];
         const prompt = e && typeof e.prompt === 'string' ? e.prompt : '';
         const response = e && typeof e.response === 'string' ? e.response : '';
-        const inputTokens = Number.isFinite(e && e.inputTokens) ? e.inputTokens : estimateTokens(prompt);
-        const outputTokens = Number.isFinite(e && e.outputTokens) ? e.outputTokens : estimateTokens(response);
-        const costUsd = Number.isFinite(e && e.costUsd) ? e.costUsd : estimateCostUsd(inputTokens, outputTokens);
-        return {
+        let inputTokens = Number.isFinite(e && e.inputTokens) ? e.inputTokens : null;
+        let outputTokens = Number.isFinite(e && e.outputTokens) ? e.outputTokens : null;
+        let costUsd = Number.isFinite(e && e.costUsd) ? e.costUsd : null;
+        let real = inputTokens != null && outputTokens != null && costUsd != null;
+
+        if (!real) {
+          // Only a BOUNDED window (a next entry already exists) is persisted —
+          // the newest entry's window is still open-ended (extends to "now")
+          // and may be mid-sequence, so its correlation is recomputed fresh on
+          // every load rather than frozen into the file prematurely.
+          const nextEntry = raw[i + 1];
+          const correlated = await correlatePromptEntryUsage(tab.folder, e, nextEntry);
+          if (correlated) {
+            inputTokens = correlated.inputTokens;
+            outputTokens = correlated.outputTokens;
+            costUsd = correlated.costUsd;
+            real = true;
+            if (nextEntry) {
+              updatedRaw[i] = Object.assign({}, e, {
+                inputTokens: correlated.inputTokens,
+                outputTokens: correlated.outputTokens,
+                costUsd: correlated.costUsd,
+              });
+              dirty = true;
+            }
+          }
+        }
+
+        if (inputTokens == null) inputTokens = estimateTokens(prompt);
+        if (outputTokens == null) outputTokens = estimateTokens(response);
+        if (costUsd == null) costUsd = estimateCostUsd(inputTokens, outputTokens);
+
+        mapped.push({
           ts: (e && e.ts) || null,
           source: (e && e.source) || 'user',
           prompt,
@@ -3559,11 +3656,25 @@ async function loadPromptLog(tab, showOnLoad) {
           inputTokens,
           outputTokens,
           costUsd,
+          real,
           modelAssumed: (e && e.modelAssumed) || COST_MODEL_LABEL
-        };
-      });
+        });
+      }
+      tab.promptLog = mapped;
       tab.pendingPromptIndex = -1;
       tab.responseBuffer = '';
+      // Persist the newly-correlated totals so a reload reads them straight
+      // from the file instead of re-correlating (TASK-195). Goes through the
+      // existing fsRoots-confined, atomic write path; preserves every
+      // pre-existing field and the file's order — only bounded entries that
+      // lacked real numbers are touched.
+      if (dirty) {
+        try {
+          await window.api.prompts.write(tab.folder, updatedRaw);
+        } catch (err) {
+          console.error('[prompts.write]', err);
+        }
+      }
     }
   } catch (err) {
     console.error('[prompts.read]', err);
@@ -3588,15 +3699,17 @@ function renderLogsList(tab) {
   const items = tab.promptLog.slice().reverse();
   const totalIn = tab.promptLog.reduce((acc, e) => acc + (Number(e.inputTokens) || 0), 0);
   const totalOut = tab.promptLog.reduce((acc, e) => acc + (Number(e.outputTokens) || 0), 0);
-  const totalQueryCost = estimateCostUsd(totalIn, 0);
-  const totalResultCost = estimateCostUsd(0, totalOut);
-  const totalCost = totalQueryCost + totalResultCost;
+  // TASK-195: sum each entry's OWN costUsd — real (telemetry-correlated) where
+  // available, the length/4 estimate otherwise — rather than recomputing a
+  // flat-rate estimate from the pooled token totals, so a real per-model cost
+  // (which may differ a lot from the Sonnet estimate rates) is actually used.
+  const totalCost = tab.promptLog.reduce((acc, e) => acc + (Number(e.costUsd) || 0), 0);
+  const anyEstimated = tab.promptLog.some((e) => !e.real);
 
   const totalsLi = document.createElement('li');
   totalsLi.className = 'logs-totals';
-  totalsLi.textContent =
-    `Σ query ${fmtCostUsd(totalQueryCost)} + results ${fmtCostUsd(totalResultCost)} = ${fmtCostUsd(totalCost)} · `
-    + `${fmtTokens(totalIn)}↑ / ${fmtTokens(totalOut)}↓ tok · ${COST_MODEL_LABEL}`;
+  totalsLi.textContent = `Σ cost ${fmtCostUsd(totalCost)} · ${fmtTokens(totalIn)}↑ / ${fmtTokens(totalOut)}↓ tok`
+    + (anyEstimated ? ` (some ${COST_MODEL_LABEL})` : '');
   list.appendChild(totalsLi);
 
   items.forEach((entry, idx) => {
@@ -3622,20 +3735,35 @@ function renderLogsList(tab) {
     cost.className = 'logs-item-cost';
     const inTok = Number(entry.inputTokens) || 0;
     const outTok = Number(entry.outputTokens) || 0;
-    const queryCost = estimateCostUsd(inTok, 0);
-    const resultCost = estimateCostUsd(0, outTok);
-    const totalLine = queryCost + resultCost;
     if (isPending) {
+      // Still awaiting a response: no completed sequence to correlate against
+      // yet, so this stays the length/4 query-side estimate.
+      const queryCost = estimateCostUsd(inTok, 0);
       cost.textContent = `query ${fmtCostUsd(queryCost)} · results pending · ${fmtTokens(inTok)}↑ tok`;
+      cost.title = `Estimated cost — ${COST_MODEL_LABEL}\n`
+        + `query cost (input ${fmtTokens(inTok)} tok × $${COST_PER_M_INPUT}/M): ${fmtCostUsd(queryCost)}`;
+    } else if (entry.real) {
+      // TASK-195: the REAL total tokens/cost of the whole api_request sequence
+      // this prompt triggered (correlated by time window, scoped to this
+      // project), not the flat-rate estimate.
+      const total = Number(entry.costUsd) || 0;
+      cost.textContent = `${fmtCostUsd(total)} · ${fmtTokens(inTok)}↑ / ${fmtTokens(outTok)}↓ tok`;
+      cost.title = `Actual cost (captured telemetry)\n`
+        + `tokens up (input + cache write + cache read): ${fmtTokens(inTok)}\n`
+        + `tokens down (output): ${fmtTokens(outTok)}\n`
+        + `cost: ${fmtCostUsd(total)}`;
     } else {
+      const queryCost = estimateCostUsd(inTok, 0);
+      const resultCost = estimateCostUsd(0, outTok);
+      const totalLine = queryCost + resultCost;
       cost.textContent =
         `query ${fmtCostUsd(queryCost)} + results ${fmtCostUsd(resultCost)} = ${fmtCostUsd(totalLine)} · `
         + `${fmtTokens(inTok)}↑ / ${fmtTokens(outTok)}↓ tok`;
+      cost.title =
+        `Estimated cost — ${COST_MODEL_LABEL}\n`
+        + `query cost (input ${fmtTokens(inTok)} tok × $${COST_PER_M_INPUT}/M): ${fmtCostUsd(queryCost)}\n`
+        + `results cost (output ${fmtTokens(outTok)} tok × $${COST_PER_M_OUTPUT}/M): ${fmtCostUsd(resultCost)}`;
     }
-    cost.title =
-      `Estimated cost — ${COST_MODEL_LABEL}\n`
-      + `query cost (input ${fmtTokens(inTok)} tok × $${COST_PER_M_INPUT}/M): ${fmtCostUsd(queryCost)}\n`
-      + `results cost (output ${fmtTokens(outTok)} tok × $${COST_PER_M_OUTPUT}/M): ${fmtCostUsd(resultCost)}`;
 
     meta.appendChild(idxSpan);
     meta.appendChild(ts);
@@ -5537,6 +5665,29 @@ function tasksNormalizeColumnPhase(rawPhase) {
   return (typeof rawPhase === 'string' && TASKS_PHASE_KEYS.includes(rawPhase)) ? rawPhase : null;
 }
 
+// The three valid skill.contextOptimization.level values, and the default
+// { enabled, level } (TASK-200). Mirror of CONTEXT_OPT_LEVELS /
+// CONTEXT_OPT_DEFAULT in lib/team-config.js — KEEP IN LOCKSTEP. Backs the
+// Workflow panel's context-optimisation control (buildWorkflowContextOptimizationControl).
+const TASKS_CONTEXT_OPT_LEVELS = ['conservative', 'standard', 'aggressive'];
+const TASKS_CONTEXT_OPT_DEFAULT = { enabled: true, level: 'standard' };
+
+// Normalise skill.contextOptimization into `{ enabled, level }` (mirror of
+// normalizeContextOptimization in lib/team-config.js — KEEP IN LOCKSTEP, byte-
+// for-behaviour): the whole value missing/not-an-object → the default;
+// `enabled` a strict boolean kept, else → true; `level` a string equal to one
+// of TASKS_CONTEXT_OPT_LEVELS kept, else → "standard". Unknown/unsafe keys are
+// simply not read (the renderer mirror carries no warnings channel). Never throws.
+function tasksNormalizeContextOptimization(raw) {
+  const src = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : null;
+  if (!src) return { enabled: TASKS_CONTEXT_OPT_DEFAULT.enabled, level: TASKS_CONTEXT_OPT_DEFAULT.level };
+  const enabled = typeof src.enabled === 'boolean' ? src.enabled : TASKS_CONTEXT_OPT_DEFAULT.enabled;
+  const level = (typeof src.level === 'string' && TASKS_CONTEXT_OPT_LEVELS.includes(src.level))
+    ? src.level
+    : TASKS_CONTEXT_OPT_DEFAULT.level;
+  return { enabled, level };
+}
+
 // Count how many columns are currently linked to each phase. Snapshotted at
 // load time (refreshTeamBoard's `baselinePhaseLinks`) so Save can detect a
 // genuine zero-to-one transition for the one-time auto-enable flip below.
@@ -5804,6 +5955,9 @@ function tasksSerializeTeamConfig(working) {
   if (rawSkill.concurrencyDefault != null && rawSkill.concurrencyDefault !== '') {
     skill.concurrencyDefault = resolveTasksConcurrency(rawSkill.concurrencyDefault);
   }
+  // Normalise skill.contextOptimization (TASK-200) so a Save can never persist
+  // an invalid enabled/level, mirroring lib serializeConfig/normalizeConfig.
+  skill.contextOptimization = tasksNormalizeContextOptimization(rawSkill.contextOptimization);
   const out = { version, columns, skill };
   if (w.extra && typeof w.extra === 'object') {
     for (const k of Object.keys(w.extra)) {
@@ -7341,6 +7495,339 @@ function buildTelemetryControl(tab) {
     }
   }
 
+  // ── Session totals (all projects) ──────────────────────────────────────────
+  // TASK-195: unlike the project-scoped byModelWrap above (fed by
+  // getUsage(folder)'s project-scoped `usage.byModel`), this section covers
+  // the WHOLE captured session — every project bucket combined — driven by the
+  // app-wide `usage.byModel` (aggregateUsage over allRows()). It never issues
+  // its own IPC call: it starts zeroed and is kept live purely off the SAME
+  // pushed telemetry:update payload the project view already subscribes to
+  // (payload.usage, present on every push regardless of which project's ingest
+  // triggered it), so no extra IPC round-trip is added.
+  const sessionWrap = document.createElement('div');
+  sessionWrap.className = 'team-telemetry-session';
+  const sessionTitle = document.createElement('div');
+  sessionTitle.className = 'team-telemetry-session-title';
+  sessionTitle.textContent = 'Session totals (all projects)';
+  const sessionByModelWrap = document.createElement('div');
+  sessionByModelWrap.className = 'team-telemetry-bymodel team-telemetry-session-bymodel';
+  sessionWrap.appendChild(sessionTitle);
+  sessionWrap.appendChild(sessionByModelWrap);
+
+  function renderSessionUsage(usage) {
+    sessionByModelWrap.textContent = '';
+    const byModel = (usage && usage.byModel) || {};
+    const names = Object.keys(byModel).sort();
+    if (names.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'team-telemetry-session-empty';
+      empty.textContent = 'No session usage captured yet.';
+      sessionByModelWrap.appendChild(empty);
+      return;
+    }
+    for (const name of names) {
+      const m = byModel[name] || {};
+      const row = document.createElement('div');
+      row.className = 'team-telemetry-model-row';
+      const nameEl = document.createElement('span');
+      nameEl.className = 'team-telemetry-model-name';
+      nameEl.textContent = telShortModel(name);
+      const statEl = document.createElement('span');
+      statEl.className = 'team-telemetry-model-stat';
+      statEl.textContent = telFmtInt(m.requests) + ' calls · ' + telFmtInt(m.totalTokens) + ' tok · ' + telFmtUsd(m.costUsd);
+      row.appendChild(nameEl);
+      row.appendChild(statEl);
+      sessionByModelWrap.appendChild(row);
+    }
+  }
+  renderSessionUsage(null);
+
+  // ── Cost-over-time graph (TASK-199) ────────────────────────────────────────
+  // Scoped to the CURRENT project's per-call rows (same stream that feeds the
+  // prompt log below), per A1 — there is no app-wide per-row timeline to plot
+  // (payload.usage / usage(allRows()) are aggregate totals only). Each model
+  // present in the rows gets its own smoothed, cumulative-running-total series
+  // over the same shared axes (A2-A4); a metric toggle switches what is
+  // plotted without any new IPC call (A5), re-rendering from the cached rows.
+  //
+  // Declared LOCAL to buildTelemetryControl (rather than module-scope) so the
+  // existing test convention of extracting just this one function's source
+  // text (extractFn(rendererSrc, 'buildTelemetryControl')) keeps working
+  // without needing every test file updated to also extract new collaborators.
+  const TEL_SVG_NS = 'http://www.w3.org/2000/svg';
+
+  // Selectable metrics (A5): Cost is the default on mount. Each `value(r)`
+  // coerces via telNum so a malformed/non-numeric field never contributes NaN.
+  const TEL_GRAPH_METRICS = [
+    { key: 'cost', label: 'Cost', value: (r) => telNum(r && r.costUsd), fmt: telFmtUsd },
+    { key: 'input', label: 'Input tokens', value: (r) => telNum(r && r.inputTokens), fmt: telFmtInt },
+    { key: 'output', label: 'Output tokens', value: (r) => telNum(r && r.outputTokens), fmt: telFmtInt },
+    {
+      key: 'cache',
+      label: 'Cache tokens',
+      value: (r) => telNum(r && r.cacheReadTokens) + telNum(r && r.cacheCreationTokens),
+      fmt: telFmtInt
+    }
+  ];
+
+  // Distinct, dark-theme-friendly colours, cycled if there are more models
+  // than colours. Order is stable across renders because callers always
+  // iterate `Array.from(seriesMap.keys()).sort()`.
+  const TEL_GRAPH_COLORS = ['#61afef', '#e5c07b', '#98c379', '#e06c75', '#c678dd', '#56b6c2', '#d19a66', '#abb2bf'];
+
+  // Catmull-Rom -> cubic-Bezier smoothed path `d` for an array of {x,y} points,
+  // already in SVG coordinate space. Never throws and never emits NaN: a 0- or
+  // 1-point series returns '' (nothing to draw — caller still renders a marker
+  // circle so a lone point stays visible), a 2-point series is a straight line
+  // (a spline needs >=3 points to have a meaningful tangent), and missing
+  // neighbours at the ends of the array fall back to the nearest known point
+  // rather than reading `undefined` (which would otherwise produce NaN control
+  // points).
+  function telSmoothPathD(points) {
+    if (!Array.isArray(points) || points.length < 2) return '';
+    if (points.length === 2) {
+      return 'M ' + points[0].x + ' ' + points[0].y + ' L ' + points[1].x + ' ' + points[1].y;
+    }
+    let d = 'M ' + points[0].x + ' ' + points[0].y;
+    for (let i = 0; i < points.length - 1; i++) {
+      const p0 = points[i - 1] || points[i];
+      const p1 = points[i];
+      const p2 = points[i + 1];
+      const p3 = points[i + 2] || p2;
+      const c1x = p1.x + (p2.x - p0.x) / 6;
+      const c1y = p1.y + (p2.y - p0.y) / 6;
+      const c2x = p2.x - (p3.x - p1.x) / 6;
+      const c2y = p2.y - (p3.y - p1.y) / 6;
+      d += ' C ' + c1x + ' ' + c1y + ' ' + c2x + ' ' + c2y + ' ' + p2.x + ' ' + p2.y;
+    }
+    return d;
+  }
+
+  const graphWrap = document.createElement('div');
+  graphWrap.className = 'team-telemetry-graph';
+
+  const graphHeader = document.createElement('div');
+  graphHeader.className = 'team-telemetry-graph-header';
+  const graphTitle = document.createElement('div');
+  graphTitle.className = 'team-telemetry-graph-title';
+  graphTitle.textContent = 'Cost over time';
+  const metricToggleWrap = document.createElement('div');
+  metricToggleWrap.className = 'team-telemetry-metric-toggle';
+  graphHeader.appendChild(graphTitle);
+  graphHeader.appendChild(metricToggleWrap);
+
+  const graphBody = document.createElement('div');
+  graphBody.className = 'team-telemetry-graph-body';
+  const graphSvgWrap = document.createElement('div');
+  graphSvgWrap.className = 'team-telemetry-graph-svgwrap';
+  const graphEmpty = document.createElement('div');
+  graphEmpty.className = 'team-telemetry-graph-empty';
+  graphBody.appendChild(graphSvgWrap);
+  graphBody.appendChild(graphEmpty);
+
+  const graphLegend = document.createElement('div');
+  graphLegend.className = 'team-telemetry-graph-legend';
+
+  graphWrap.appendChild(graphHeader);
+  graphWrap.appendChild(graphBody);
+  graphWrap.appendChild(graphLegend);
+
+  // Small guarded DOM helpers so this graph degrades to a silent no-op (never
+  // a throw) against the panel's existing test-suite DOM mocks, which predate
+  // this feature and only implement the subset of the Element/Document API
+  // buildTelemetryControl previously needed (createElement, classList
+  // add/remove/contains, textContent, plain property assignment) — no
+  // setAttribute, no `.style`, no createElementNS. A real browser `document`
+  // has all of these, so real rendering is unaffected.
+  function telSetAttr(el, name, value) {
+    if (el && typeof el.setAttribute === 'function') el.setAttribute(name, value);
+  }
+  function telCreateSvgEl(tag) {
+    if (typeof document.createElementNS === 'function') return document.createElementNS(TEL_SVG_NS, tag);
+    return document.createElement(tag);
+  }
+
+  // Default metric on mount = Cost (per A5 / acceptance criteria). Preserved
+  // across live re-renders — only the toggle click handler changes it.
+  let graphMetric = TEL_GRAPH_METRICS[0].key;
+  // Cache of the last rows passed to renderGraph so the metric toggle can
+  // re-plot instantly from the same data, with no new telemetry IPC call.
+  let graphRows = [];
+
+  const metricBtns = {};
+  function updateMetricBtnActive() {
+    for (const m of TEL_GRAPH_METRICS) {
+      const active = m.key === graphMetric;
+      // add/remove (not classList.toggle) — some of this panel's DOM mocks in
+      // existing tests only implement add/remove/contains.
+      if (active) metricBtns[m.key].classList.add('active');
+      else metricBtns[m.key].classList.remove('active');
+      telSetAttr(metricBtns[m.key], 'aria-pressed', active ? 'true' : 'false');
+    }
+  }
+  for (const m of TEL_GRAPH_METRICS) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'team-telemetry-metric-btn';
+    btn.textContent = m.label;
+    btn.disabled = !folder;
+    btn.addEventListener('click', () => {
+      if (graphMetric === m.key) return;
+      graphMetric = m.key;
+      updateMetricBtnActive();
+      renderGraph(graphRows);
+    });
+    metricBtns[m.key] = btn;
+    metricToggleWrap.appendChild(btn);
+  }
+  updateMetricBtnActive();
+
+  // `rows` is the project bucket's `recent` array (same shape/source as
+  // renderLog's argument). May be null/undefined (no folder, or a payload
+  // that carries no rows) — rendered as a graceful empty state, never a throw.
+  function renderGraph(rows) {
+    graphRows = Array.isArray(rows) ? rows : [];
+    // Clear + rebuild every call (idempotent — a rapid run of live pushes
+    // never accumulates stale SVG/legend nodes). Which of graphSvgWrap /
+    // graphLegend / graphEmpty ends up with children (rather than a `.style`
+    // visibility toggle) is what shows/hides each state, mirroring renderLog's
+    // "clear then conditionally append an empty-state child" convention.
+    graphSvgWrap.textContent = '';
+    graphLegend.textContent = '';
+    graphEmpty.textContent = '';
+
+    if (!folder) {
+      graphEmpty.textContent = '(open a folder to see the cost graph)';
+      return;
+    }
+
+    const metric = TEL_GRAPH_METRICS.find((m) => m.key === graphMetric) || TEL_GRAPH_METRICS[0];
+
+    // Only rows with a parseable timestamp can be placed on the x-axis; a bad
+    // timestamp makes the row unplaceable so it is skipped entirely (its
+    // metric value — which would otherwise coerce to 0 anyway — contributes
+    // nothing). Sorted ascending so cumulative sums accumulate left-to-right
+    // even if the source array were ever out of order.
+    const valid = [];
+    for (const r0 of graphRows) {
+      const r = r0 || {};
+      const t = new Date(String(r.timestamp == null ? '' : r.timestamp)).getTime();
+      if (!Number.isFinite(t)) continue;
+      valid.push({ t, model: telShortModel(r.model), value: metric.value(r) });
+    }
+    valid.sort((a, b) => a.t - b.t);
+
+    if (valid.length === 0) {
+      graphEmpty.textContent = 'No usage data yet.';
+      return;
+    }
+
+    const tMin = valid[0].t;
+    const tMax = valid[valid.length - 1].t;
+    const tSpan = tMax - tMin;
+
+    // Cumulative running total per model (A2), in first-seen-then-sorted order.
+    const seriesMap = new Map();
+    const running = new Map();
+    for (const pt of valid) {
+      const prev = running.get(pt.model) || 0;
+      const cum = prev + (Number.isFinite(pt.value) ? pt.value : 0);
+      running.set(pt.model, cum);
+      if (!seriesMap.has(pt.model)) seriesMap.set(pt.model, []);
+      seriesMap.get(pt.model).push({ t: pt.t, v: cum });
+    }
+
+    const modelNames = Array.from(seriesMap.keys()).sort();
+    // Shared y-axis across every series (so overlaid curves are comparable):
+    // since each series is non-decreasing, its own max is always its last point.
+    let yMax = 0;
+    for (const name of modelNames) {
+      const arr = seriesMap.get(name);
+      const last = arr[arr.length - 1].v;
+      if (Number.isFinite(last) && last > yMax) yMax = last;
+    }
+    if (!Number.isFinite(yMax) || yMax <= 0) yMax = 1; // avoid divide-by-zero; renders a flat baseline
+
+    const W = 600, H = 220, padL = 46, padR = 12, padT = 12, padB = 20;
+    const plotW = W - padL - padR;
+    const plotH = H - padT - padB;
+
+    function xFor(t) {
+      if (tSpan <= 0) return padL + plotW / 2; // identical/zero time span (A single row, or all rows share one timestamp)
+      return padL + ((t - tMin) / tSpan) * plotW;
+    }
+    function yFor(v) {
+      return padT + plotH - (v / yMax) * plotH;
+    }
+
+    const svg = telCreateSvgEl('svg');
+    telSetAttr(svg, 'viewBox', '0 0 ' + W + ' ' + H);
+    telSetAttr(svg, 'preserveAspectRatio', 'none');
+    telSetAttr(svg, 'class', 'team-telemetry-graph-svg');
+
+    const baseline = telCreateSvgEl('line');
+    telSetAttr(baseline, 'x1', String(padL));
+    telSetAttr(baseline, 'y1', String(padT + plotH));
+    telSetAttr(baseline, 'x2', String(padL + plotW));
+    telSetAttr(baseline, 'y2', String(padT + plotH));
+    telSetAttr(baseline, 'class', 'team-telemetry-graph-axis');
+    svg.appendChild(baseline);
+
+    const yMaxLabel = telCreateSvgEl('text');
+    telSetAttr(yMaxLabel, 'x', '2');
+    telSetAttr(yMaxLabel, 'y', String(padT + 6));
+    telSetAttr(yMaxLabel, 'class', 'team-telemetry-graph-axislabel');
+    yMaxLabel.textContent = metric.fmt(yMax);
+    svg.appendChild(yMaxLabel);
+
+    const yMinLabel = telCreateSvgEl('text');
+    telSetAttr(yMinLabel, 'x', '2');
+    telSetAttr(yMinLabel, 'y', String(padT + plotH));
+    telSetAttr(yMinLabel, 'class', 'team-telemetry-graph-axislabel');
+    yMinLabel.textContent = metric.fmt(0);
+    svg.appendChild(yMinLabel);
+
+    modelNames.forEach((name, idx) => {
+      const color = TEL_GRAPH_COLORS[idx % TEL_GRAPH_COLORS.length];
+      const pts = seriesMap.get(name).map((p) => ({ x: xFor(p.t), y: yFor(p.v) }));
+
+      const d = telSmoothPathD(pts);
+      if (d) {
+        const path = telCreateSvgEl('path');
+        telSetAttr(path, 'd', d);
+        telSetAttr(path, 'class', 'team-telemetry-graph-line');
+        telSetAttr(path, 'stroke', color);
+        svg.appendChild(path);
+      }
+      // Marker circles: keep a single-point series visible (a lone point has
+      // no path to draw) and mark every plotted call for the other series too.
+      for (const p of pts) {
+        const c = telCreateSvgEl('circle');
+        telSetAttr(c, 'cx', String(p.x));
+        telSetAttr(c, 'cy', String(p.y));
+        telSetAttr(c, 'r', '2.5');
+        telSetAttr(c, 'class', 'team-telemetry-graph-point');
+        telSetAttr(c, 'fill', color);
+        svg.appendChild(c);
+      }
+
+      const legendItem = document.createElement('div');
+      legendItem.className = 'team-telemetry-graph-legend-item';
+      const swatch = document.createElement('span');
+      swatch.className = 'team-telemetry-graph-legend-swatch';
+      if (swatch.style) swatch.style.backgroundColor = color;
+      const label = document.createElement('span');
+      label.className = 'team-telemetry-graph-legend-label';
+      label.textContent = name; // telShortModel'd already — textContent only (XSS-safe)
+      legendItem.appendChild(swatch);
+      legendItem.appendChild(label);
+      graphLegend.appendChild(legendItem);
+    });
+
+    graphSvgWrap.appendChild(svg);
+  }
+  renderGraph(null);
+
   // ── Prompt log ────────────────────────────────────────────────────────────
   // One row per captured API call — time, model, tokens up, tokens down, cost —
   // newest first, plus a footer summing the logged calls. This is the "live
@@ -7468,6 +7955,8 @@ function buildTelemetryControl(tab) {
   section.appendChild(scopeLine);
   section.appendChild(totalsGrid);
   section.appendChild(byModelWrap);
+  section.appendChild(sessionWrap);
+  section.appendChild(graphWrap);
   section.appendChild(logWrap);
   section.appendChild(forwardWrap);
   section.appendChild(projWrap);
@@ -7488,6 +7977,7 @@ function buildTelemetryControl(tab) {
     if (!folder) {
       renderUsage(null);
       renderLog(null);
+      renderGraph(null);
       projCb.checked = false;
       projCb.disabled = true;
       return;
@@ -7508,11 +7998,15 @@ function buildTelemetryControl(tab) {
       const projectUsage = res && res.usage ? res.usage.usage : null;
       renderUsage(projectUsage);
       // Project-scoped getUsage returns { usage, recent } (TASK-166) — `recent`
-      // is this project's per-call rows for the prompt log.
-      renderLog(res && res.usage ? res.usage.recent : null);
+      // is this project's per-call rows for the prompt log and the graph
+      // (TASK-199), seeded here so both show already-captured data on mount.
+      const recent = res && res.usage ? res.usage.recent : null;
+      renderLog(recent);
+      renderGraph(recent);
     } catch (_) {
       renderUsage(null);
       renderLog(null);
+      renderGraph(null);
     }
   }
 
@@ -7550,12 +8044,22 @@ function buildTelemetryControl(tab) {
 
   if (typeof telemetryUnsub === 'function') telemetryUnsub();
   telemetryUnsub = window.api.telemetry.onUpdate((payload) => {
+    // The app-wide `usage` field is carried on EVERY push regardless of which
+    // project's ingest triggered it, so the session view always reflects the
+    // current combined total across every open project — including one that
+    // isn't the tab currently focused (TASK-195).
+    if (payload && payload.usage) renderSessionUsage(payload.usage);
     if (folder && payload.project === folder && payload.projectUsage) {
       renderUsage(payload.projectUsage);
       // `projectRecent` is the same bucket's per-call rows. A payload that
-      // doesn't carry the array leaves the existing log alone rather than
-      // blanking a good log.
-      if (Array.isArray(payload.projectRecent)) renderLog(payload.projectRecent);
+      // doesn't carry the array leaves the existing log (and graph) alone
+      // rather than blanking a good one. The graph's own selected-metric
+      // state (`graphMetric`) is untouched by a re-render, so it survives
+      // every live push (TASK-199).
+      if (Array.isArray(payload.projectRecent)) {
+        renderLog(payload.projectRecent);
+        renderGraph(payload.projectRecent);
+      }
     }
   });
 
@@ -8271,6 +8775,10 @@ function buildWorkflowView(tab, model, agentNames, agentFiles, rawConfig, skillM
   // into tasks/team-config.json. Independent of the phase cards, so it renders
   // even when SKILL.md parses to no phases.
   wrap.appendChild(buildWorkflowConcurrencyControl(tab, rawConfig));
+  // Context optimisation (TASK-200): writes skill.contextOptimization into
+  // tasks/team-config.json. Independent of the phase cards, so it renders even
+  // when SKILL.md parses to no phases.
+  wrap.appendChild(buildWorkflowContextOptimizationControl(tab, rawConfig));
   return wrap;
 }
 
@@ -8394,6 +8902,121 @@ function buildWorkflowConcurrencyControl(tab, rawConfig) {
     // toolbar (only when no per-folder override) and re-read the panel so it
     // mirrors the persisted config.
     syncTasksConcurrencyOption(tab);
+    refreshTeamWorkflow(tab);
+  });
+
+  return section;
+}
+
+// The context-optimisation control (TASK-200): an Enabled checkbox + level
+// <select> seeded from skill.contextOptimization (resolved/clamped via
+// tasksNormalizeContextOptimization) that persists
+// skill.contextOptimization into tasks/team-config.json. Mirrors
+// buildWorkflowConcurrencyControl's structure/Save pattern (re-read fresh with
+// keep-last-good fallback, whole-file write, inline error, refresh on
+// success) and renders independently of the phase cards, so it is present
+// even when SKILL.md parses to no phases. The orchestrate skill itself reads
+// this setting from tasks/team-config.json (see SKILL.md's "Context
+// optimisation" directive) — this control only persists it.
+function buildWorkflowContextOptimizationControl(tab, rawConfig) {
+  const section = document.createElement('div');
+  section.className = 'team-workflow-context-opt';
+
+  const title = document.createElement('div');
+  title.className = 'team-workflow-phase-title';
+  title.textContent = 'Context optimisation';
+  section.appendChild(title);
+
+  const help = document.createElement('div');
+  help.className = 'team-workflow-rule';
+  help.textContent = 'When enabled, /orchestrate drops context it no longer needs at every '
+    + 'phase movement, summarises what it must keep, and carries the minimum forward. '
+    + 'Level tunes how aggressively.';
+  section.appendChild(help);
+
+  const rawSkill = rawConfig && typeof rawConfig.skill === 'object' && rawConfig.skill ? rawConfig.skill : {};
+  const resolved = tasksNormalizeContextOptimization(rawSkill.contextOptimization);
+
+  const row = document.createElement('div');
+  row.className = 'team-workflow-context-opt-row team-workflow-phase-meta';
+
+  const enabledLabel = document.createElement('label');
+  enabledLabel.className = 'team-workflow-context-opt-enabled-label';
+  const enabledCheckbox = document.createElement('input');
+  enabledCheckbox.type = 'checkbox';
+  enabledCheckbox.className = 'team-workflow-context-opt-enabled';
+  enabledCheckbox.checked = resolved.enabled;
+  const enabledText = document.createElement('span');
+  enabledText.textContent = 'Enabled';
+  enabledLabel.appendChild(enabledCheckbox);
+  enabledLabel.appendChild(enabledText);
+  row.appendChild(enabledLabel);
+
+  const levelSelect = document.createElement('select');
+  levelSelect.className = 'team-workflow-context-opt-level';
+  const LEVEL_LABELS = { conservative: 'Conservative', standard: 'Standard', aggressive: 'Aggressive' };
+  for (const key of TASKS_CONTEXT_OPT_LEVELS) {
+    const opt = document.createElement('option');
+    opt.value = key;
+    opt.textContent = LEVEL_LABELS[key] || key;
+    levelSelect.appendChild(opt);
+  }
+  levelSelect.value = resolved.level;
+
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'small-btn primary-btn';
+  saveBtn.textContent = 'Save';
+  row.appendChild(levelSelect);
+  row.appendChild(saveBtn);
+  section.appendChild(row);
+
+  const err = document.createElement('div');
+  err.className = 'team-agent-desc-error hidden';
+  section.appendChild(err);
+  const showErr = (m) => { err.textContent = m; err.classList.remove('hidden'); };
+  const clearErr = () => { err.textContent = ''; err.classList.add('hidden'); };
+
+  saveBtn.addEventListener('click', async () => {
+    clearErr();
+    const next = tasksNormalizeContextOptimization({
+      enabled: enabledCheckbox.checked,
+      level: levelSelect.value,
+    });
+    enabledCheckbox.checked = next.enabled;
+    levelSelect.value = next.level;
+    saveBtn.disabled = true;
+    try {
+      const cfgPath = tasksJoin(tab.folder, 'tasks', 'team-config.json');
+      // Re-read for the freshest columns/unknown fields (avoid clobbering a
+      // concurrent Board-panel or concurrency-control save). A missing/
+      // unreadable/corrupt config at Save time falls back to the render-time
+      // rawConfig (keep-last-good) rather than null, so a momentary read/parse
+      // failure can't wipe the user's columns/version/other skill fields.
+      let fresh = rawConfig;
+      try {
+        const r = await window.api.fs.readFile(cfgPath);
+        if (r && r.ok && !r.binary && typeof r.content === 'string' && r.content.trim() !== '') {
+          try { fresh = JSON.parse(r.content); } catch (_) { fresh = rawConfig; }
+        }
+      } catch (_) { fresh = rawConfig; }
+      const working = buildWorkingConfigFromRaw(fresh);
+      working.skill = { ...working.skill, contextOptimization: next };
+      const content = tasksSerializeTeamConfig(working);
+      const tasksDir = tasksJoin(tab.folder, 'tasks');
+      try { await window.api.fs.mkdir(tasksDir); } catch (_) {}
+      const res = await window.api.fs.writeFile(cfgPath, content);
+      if (!res || !res.ok) {
+        showErr('Save failed: ' + ((res && res.error) || 'unknown error') + '. Try again.');
+        saveBtn.disabled = false;
+        return;
+      }
+      if (tab.tasks) { try { tab.tasks.config = JSON.parse(content); } catch (_) {} }
+    } catch (e) {
+      showErr('Save failed: ' + ((e && e.message) || String(e)) + '. Try again.');
+      saveBtn.disabled = false;
+      return;
+    }
+    saveBtn.disabled = false;
     refreshTeamWorkflow(tab);
   });
 

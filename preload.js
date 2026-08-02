@@ -201,6 +201,13 @@ contextBridge.exposeInMainWorld('api', {
     // { ok: true, usage: <totals>|null }. usage is null when telemetry is off/no
     // receiver; never throws.
     usageForWindow: (w) => ipcRenderer.invoke('telemetry:usageForWindow', w),
+    // Per-prompt cost correlation (TASK-195): like usageForWindow above, but
+    // scoped to ONE project's own telemetry bucket, so a different,
+    // concurrently-running project's calls are never folded into a prompt's
+    // total even if their timestamps fall inside the same window. `w` is
+    // { startedAt, finishedAt, model? }; leave `model` empty/omitted to sum a
+    // sequence that spans multiple models. -> { ok: true, usage: <totals>|null }.
+    usageForWindowInProject: (project, w) => ipcRenderer.invoke('telemetry:usageForWindowInProject', { project, window: w }),
     // Tag forwarded summaries with the folder the user is currently focused on;
     // the renderer calls this as tabs are switched. Fire-and-forget.
     setActiveProject: (name) => ipcRenderer.invoke('telemetry:setActiveProject', name),

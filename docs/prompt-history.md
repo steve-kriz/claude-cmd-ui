@@ -15,10 +15,26 @@ cloud sync can repopulate that log from an AWS Lambda-backed store.
   `writePromptHistory` (atomic `.tmp`-then-rename). Each entry is normalized to
   `{ ts, source, prompt }`, where `source` is `user` / `queue` / `slack` and `ts`
   defaults to `new Date().toISOString()`.
-- **Cost/token estimate (renderer)** — the **Logs** panel in
-  [`renderer/renderer.js`](../renderer/renderer.js) shows an estimated token
-  count and an approximate cost. Tokens are estimated as
-  `ceil(length / 4)` (`estimateTokens`), and cost as
+- **Cost/token: real when captured, estimate otherwise (renderer, TASK-195)** —
+  the **Logs** panel in [`renderer/renderer.js`](../renderer/renderer.js)
+  correlates each stored prompt against the app's OTEL telemetry (see
+  [`telemetry.md`](telemetry.md)): a prompt's sequence window is
+  `[entry.ts, nextEntry.ts)` (the newest entry's window extends to "now"),
+  scoped to that prompt's OWN project bucket only (a different,
+  concurrently-running project's calls are never folded in), and summed
+  across every model that sequence used
+  (`window.api.telemetry.usageForWindowInProject`, backed by
+  `lib/telemetry-receiver.js#usageForWindowInProject` →
+  `lib/telemetry.js#usageForWindow`). When telemetry rows exist for that
+  window, the row shows the REAL total tokens up/down and cost of the whole
+  `claude_code.api_request` sequence the prompt triggered; the computed totals
+  (`inputTokens`, `outputTokens`, `costUsd`) are written back onto that entry
+  in `prompt_history.json` via `writePromptHistory`/`prompts:write` (only once
+  the window is bounded by a following entry, so an in-flight prompt is not
+  frozen prematurely), so a reload re-displays them without re-correlating.
+  When no telemetry rows fall in the window (telemetry was off, or the prompt
+  is from an earlier app run), the entry falls back to the old estimate:
+  tokens as `ceil(length / 4)` (`estimateTokens`), cost as
   `input * $3/M + output * $15/M` (`estimateCostUsd`, constants
   `COST_PER_M_INPUT = 3.00`, `COST_PER_M_OUTPUT = 15.00` — Claude Sonnet rates).
   Entries awaiting a reply show "awaiting response."
@@ -98,5 +114,12 @@ project, entry }`) is unchanged.
   pull, not a merge.
 - **Cloud disabled** — with `CLOUD_LOG_ENDPOINT` unset, `syncFromCloud` returns
   `{ ok: false, error: 'cloud logs disabled' }`.
-- **Cost is an estimate** — the `length/4` token heuristic and Sonnet pricing are
-  approximate, for at-a-glance budgeting only.
+- **Cost is an estimate ONLY as a fallback** — when no telemetry rows fall
+  inside a prompt's window (telemetry off, or the prompt predates the current
+  app run), the `length/4` token heuristic and Sonnet pricing are used and are
+  approximate, for at-a-glance budgeting only; otherwise the row shows the
+  real captured tokens/cost (see above).
+- **Malformed/partial telemetry rows** — a row with a missing/NaN `cost_usd`
+  or token field contributes 0 to a prompt's real total rather than producing
+  `NaN` (the underlying `usageForWindow` is tolerant by design); the panel
+  never throws.

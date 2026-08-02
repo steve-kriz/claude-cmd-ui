@@ -2268,6 +2268,20 @@ body {
 .usage-bar.state-over .usage-bar-label { color: #f3a8a8; }
 .usage-bar.is-loading { opacity: 0.55; }
 
+/* The class JS toggles to fully hide the bar for a non-`claude` (openCode)
+   pane — the ONE case that is actually hidden rather than shown-as-unavailable
+   below. `.hidden` is a plain CSS class, not the `[hidden]` attribute, so it
+   needs its own rule to do anything at all. */
+.usage-bar.hidden { display: none; }
+
+/* A reading that is unavailable (probe failed, not logged in, folder not
+   trusted, no bridge, no /usage output yet) stays VISIBLE as a muted
+   affordance rather than either an empty track or fully hidden — the reason
+   is still reachable via the bar's `title` tooltip. */
+.usage-bar.is-unavailable { opacity: 0.5; }
+.usage-bar.is-unavailable .usage-bar-fill { background: #6b6b6b; }
+.usage-bar.is-unavailable .usage-bar-label { color: #808080; }
+
 .pane-subtitle {
   color: #888;
   font-size: 10px;
@@ -3506,6 +3520,38 @@ body {
   font-size: 12px;
 }
 
+/* Team tab · Workflow panel — context optimisation (TASK-200) */
+.team-workflow-context-opt {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid #262626;
+  border-radius: 5px;
+  padding: 8px;
+}
+.team-workflow-context-opt-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.team-workflow-context-opt-enabled-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #ddd;
+  cursor: pointer;
+}
+.team-workflow-context-opt-level {
+  background: #1a1a1a;
+  color: #ddd;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
 /* Team tab · Usage & telemetry (token/cost visibility) */
 .team-telemetry { gap: 8px; }
 .team-telemetry-toggle {
@@ -3557,6 +3603,106 @@ body {
 }
 .team-telemetry-model-name { color: #9ecbff; }
 .team-telemetry-model-stat { font-variant-numeric: tabular-nums; }
+/* Session totals (TASK-195): per-model breakdown covering the WHOLE captured
+   session (every open project's bucket combined), distinct from the
+   project-scoped .team-telemetry-bymodel above it. */
+.team-telemetry-session {
+  border-top: 1px solid #262626;
+  padding-top: 8px;
+  margin-top: 2px;
+}
+.team-telemetry-session-title { font-size: 12px; color: #ddd; margin-bottom: 4px; }
+.team-telemetry-session-empty { font-size: 11px; color: #8a8a8a; }
+/* Cost-over-time graph (TASK-199): a smoothed, cumulative-per-model line chart
+   scoped to the current project's captured rows, with a Cost/Input/Output/
+   Cache metric toggle. Hand-rolled inline SVG (no charting library exists in
+   this project) — see buildTelemetryControl's renderGraph in renderer.js. */
+.team-telemetry-graph {
+  border-top: 1px solid #262626;
+  padding-top: 8px;
+  margin-top: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.team-telemetry-graph-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.team-telemetry-graph-title { font-size: 12px; color: #ddd; }
+.team-telemetry-metric-toggle {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.team-telemetry-metric-btn {
+  background: #1a1a1a;
+  color: #9a9a9a;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 10px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.team-telemetry-metric-btn:hover:not(:disabled) { color: #ddd; border-color: #4a4a4a; }
+.team-telemetry-metric-btn:disabled { cursor: default; opacity: 0.5; }
+.team-telemetry-metric-btn.active {
+  background: #2a3a4a;
+  color: #9ecbff;
+  border-color: #3d5a75;
+}
+.team-telemetry-graph-body {
+  background: #1a1a1a;
+  border: 1px solid #2b2b2b;
+  border-radius: 4px;
+  padding: 4px;
+}
+.team-telemetry-graph-svgwrap { width: 100%; }
+.team-telemetry-graph-svg {
+  width: 100%;
+  height: 180px;
+  display: block;
+}
+.team-telemetry-graph-axis { stroke: #333; stroke-width: 1; }
+.team-telemetry-graph-axislabel {
+  fill: #8a8a8a;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+.team-telemetry-graph-line {
+  fill: none;
+  stroke-width: 1.75;
+}
+.team-telemetry-graph-point { opacity: 0.9; }
+.team-telemetry-graph-empty {
+  padding: 12px 6px;
+  font-size: 11px;
+  color: #7a7a7a;
+  font-style: italic;
+  text-align: center;
+}
+.team-telemetry-graph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.team-telemetry-graph-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: #b8b8b8;
+}
+.team-telemetry-graph-legend-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  display: inline-block;
+}
 /* Prompt log: one row per API call — time · model · tokens up ·
    tokens down · cost. Columns are fixed-width (with the model column taking the
    slack) so the numbers line up in a scannable column; the rows scroll inside

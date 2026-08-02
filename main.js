@@ -120,6 +120,7 @@ function createWindow() {
     height: 860,
     backgroundColor: '#1e1e1e',
     title: 'Claude CMD UI',
+    icon: path.join(__dirname, 'images', 'code_squad.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -621,6 +622,31 @@ function createUsageForWindowHandler(telemetryReceiverArg) {
 
 ipcMain.handle('telemetry:usageForWindow', (_evt, windowArg) =>
   createUsageForWindowHandler(telemetryReceiver)(_evt, windowArg));
+
+// Per-prompt cost correlation (TASK-195): like createUsageForWindowHandler
+// above, but scoped to ONE project's own telemetry bucket, so a different,
+// concurrently-running project's api_request rows are never folded into a
+// prompt's total even when their timestamps fall inside the same window.
+// `arg` is `{ project, window: { startedAt, finishedAt, model? } }`. Extracted
+// to a requireable factory (TASK-158/164 precedent) so tests exercise this
+// EXACT logic instead of a hand-rolled mirror. Best-effort — no receiver
+// (telemetry off/never started) or a thrown lookup yields `usage: null`,
+// never a thrown error or a fabricated figure.
+function createUsageForWindowInProjectHandler(telemetryReceiverArg) {
+  return async (_evt, arg) => {
+    if (!telemetryReceiverArg) return { ok: true, usage: null };
+    const a = arg && typeof arg === 'object' ? arg : {};
+    const project = typeof a.project === 'string' ? a.project : '';
+    try {
+      return { ok: true, usage: telemetryReceiverArg.usageForWindowInProject(project, a.window) };
+    } catch (_) {
+      return { ok: true, usage: null };
+    }
+  };
+}
+
+ipcMain.handle('telemetry:usageForWindowInProject', (_evt, arg) =>
+  createUsageForWindowInProjectHandler(telemetryReceiver)(_evt, arg));
 
 ipcMain.handle('telemetry:clear', async () => {
   if (telemetryReceiver) telemetryReceiver.clear();
@@ -2315,4 +2341,5 @@ ipcMain.handle('git:abortMerge', async (_evt, { cwd }) => {
 module.exports = {
   augmentDarwinPath, createUsageForWindowHandler, buildOtelProjectEnv,
   createGetUsageHandler, createSetProjectConfigHandler,
+  createUsageForWindowInProjectHandler,
 };

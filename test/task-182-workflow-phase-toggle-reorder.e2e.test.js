@@ -93,7 +93,15 @@ function loadWorkflow(window, document, console) {
     extractFn(rendererSrc, 'sanitizeAgentModelField'),
     extractFn(rendererSrc, 'serializeAgentModel'),
     extractFn(rendererSrc, 'buildWorkingConfigFromRaw'),
+    // TASK-200 — tasksSerializeTeamConfig now normalises skill.contextOptimization
+    // via tasksNormalizeContextOptimization, and buildWorkflowView now also
+    // appends buildWorkflowContextOptimizationControl. These must be extracted
+    // or buildWorkflowView()/tasksSerializeTeamConfig() will fail.
+    extractConst(rendererSrc, 'TASKS_CONTEXT_OPT_LEVELS'),
+    extractConst(rendererSrc, 'TASKS_CONTEXT_OPT_DEFAULT'),
+    extractFn(rendererSrc, 'tasksNormalizeContextOptimization'),
     extractFn(rendererSrc, 'tasksSerializeTeamConfig'),
+    extractFn(rendererSrc, 'buildWorkflowContextOptimizationControl'),
     // TASK-185 — buildWorkflowPhase now calls buildWorkflowPhaseRegenerator,
     // which uses wfExtractPhaseBody, wfReplacePhaseBody, validateRegeneratedPhaseSection
     // and their helpers. These must be extracted or buildWorkflowPhase() will fail.

@@ -108,6 +108,16 @@ function loadWorkflow(window, document, console) {
     extractFn(rendererSrc, 'wfParseWorkflow'),
     extractFn(rendererSrc, 'buildWorkflowModelEditor'),
     extractFn(rendererSrc, 'buildWorkflowConcurrencyControl'),
+    // TASK-200 — buildWorkflowView now also appends
+    // buildWorkflowContextOptimizationControl, which reads
+    // tasksNormalizeContextOptimization (+ its level constants) to seed the
+    // control at render time. The Save click handler's tasksSerializeTeamConfig
+    // / buildWorkingConfigFromRaw collaborators stay free (uncalled) per the
+    // comment above — these read-only scenarios never click Save.
+    extractConst(rendererSrc, 'TASKS_CONTEXT_OPT_LEVELS'),
+    extractConst(rendererSrc, 'TASKS_CONTEXT_OPT_DEFAULT'),
+    extractFn(rendererSrc, 'tasksNormalizeContextOptimization'),
+    extractFn(rendererSrc, 'buildWorkflowContextOptimizationControl'),
     // TASK-185 — buildWorkflowPhase now calls buildWorkflowPhaseRegenerator,
     // which uses wfExtractPhaseBody, wfReplacePhaseBody, validateRegeneratedPhaseSection
     // and their helpers. These must be extracted or buildWorkflowPhase() will fail.
