@@ -16,6 +16,7 @@ const slackOAuth = require('./lib/slack-oauth');
 const slackSummarize = require('./lib/slack-summarize');
 const agentRegenerate = require('./lib/agent-regenerate');
 const skillRegenerate = require('./lib/skill-regenerate');
+const teamColumnRegenerate = require('./lib/team-column-regenerate');
 const { redactSecrets } = require('./lib/slack-proxy');
 const { createTelemetryReceiver } = require('./lib/telemetry-receiver');
 const claudeUsage = require('./lib/claude-usage');
@@ -2261,6 +2262,53 @@ ipcMain.handle('skill:regeneratePhase', async (_evt, { content, instruction } = 
     const res = await skillRegenerate.regeneratePhaseSection({
       apiKey,
       content: clampedContent,
+      instruction: clampedInstruction
+    });
+    return { ok: res.ok, content: res.content, reason: res.reason };
+  } catch (err) {
+    // Belt-and-braces: the lib swallows its own errors, but a thrown error here
+    // must still degrade to a structured failure, never crash the renderer.
+    return { ok: false, content: '', reason: 'error', error: err && err.message };
+  }
+});
+
+// Upper bounds on the text handed to the Board column instructions
+// regenerator, mirroring AGENT_REGEN_MAX_*/SKILL_REGEN_MAX_*. `instructions`
+// may legitimately be empty (a brand-new column has none yet); the context
+// fields (label/description/agent) are short by construction but still
+// clamped defensively.
+const COLUMN_REGEN_MAX_CONTENT_CHARS = 8000;
+const COLUMN_REGEN_MAX_INSTRUCTION_CHARS = 4000;
+const COLUMN_REGEN_MAX_CONTEXT_CHARS = 500;
+
+// Draft/rewrite one Board column's "instructions" text from its current text
+// (possibly empty) plus label/description/agent context and a user
+// instruction. Reads ANTHROPIC_API_KEY from the .env store (never logged,
+// never returned), clamps all inputs, and delegates to the Electron-free lib
+// module, which never throws and returns a structured { ok, content, reason }.
+// This handler likewise never throws into the renderer and never returns the
+// key. The renderer previews `content` in the instructions textarea and only
+// persists it via the normal Board Save — this handler performs no write.
+ipcMain.handle('team:regenerateColumnInstructions', async (_evt, {
+  instructions, label, description, agent, instruction
+} = {}) => {
+  const clamp = (v, max) => {
+    const s = typeof v === 'string' ? v : '';
+    return s.length > max ? s.slice(0, max) : s;
+  };
+  const clampedInstructions = clamp(instructions, COLUMN_REGEN_MAX_CONTENT_CHARS);
+  const clampedLabel = clamp(label, COLUMN_REGEN_MAX_CONTEXT_CHARS);
+  const clampedDescription = clamp(description, COLUMN_REGEN_MAX_CONTEXT_CHARS);
+  const clampedAgent = clamp(agent, COLUMN_REGEN_MAX_CONTEXT_CHARS);
+  const clampedInstruction = clamp(instruction, COLUMN_REGEN_MAX_INSTRUCTION_CHARS);
+  try {
+    const apiKey = (envStore.get('ANTHROPIC_API_KEY') || '').trim();
+    const res = await teamColumnRegenerate.regenerateColumnInstructions({
+      apiKey,
+      instructions: clampedInstructions,
+      label: clampedLabel,
+      description: clampedDescription,
+      agent: clampedAgent,
       instruction: clampedInstruction
     });
     return { ok: res.ok, content: res.content, reason: res.reason };

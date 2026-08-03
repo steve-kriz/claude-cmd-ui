@@ -6212,6 +6212,37 @@ function buildTeamColumnRow(tab, col, idx) {
   descField.appendChild(descInput);
   fields.appendChild(descField);
 
+  // Display agent + Instructions: gated behind an Edit button (view shows the
+  // current values as read-only text; Edit reveals the agent <select>, the
+  // instructions <textarea>, and an AI-assist box that can draft/rewrite the
+  // instructions text). Both fields are still written into the model live
+  // (matching label/description above) as soon as they change — the
+  // board-level Save button is what persists everything to
+  // tasks/team-config.json; clicking Done just collapses back to the read
+  // view, it does not discard or write anything on its own.
+  const agentInstrField = document.createElement('div');
+  agentInstrField.className = 'team-column-field team-column-field-full team-column-agentinstr';
+
+  const view = document.createElement('div');
+  view.className = 'team-column-agentinstr-view';
+  const agentLine = document.createElement('div');
+  agentLine.className = 'team-column-agentinstr-agentline';
+  const agentWarnView = document.createElement('span');
+  agentWarnView.className = 'team-column-agent-warning hidden';
+  agentWarnView.textContent = 'This agent no longer exists in .claude/agents/.';
+  const instrPreview = document.createElement('div');
+  instrPreview.className = 'team-column-agentinstr-instrtext';
+  const editBtn = document.createElement('button');
+  editBtn.className = 'team-column-agentinstr-edit small-btn';
+  editBtn.textContent = 'Edit';
+  view.appendChild(agentLine);
+  view.appendChild(agentWarnView);
+  view.appendChild(instrPreview);
+  view.appendChild(editBtn);
+
+  const editor = document.createElement('div');
+  editor.className = 'team-column-agentinstr-editor hidden';
+
   const agentField = document.createElement('label');
   agentField.className = 'team-column-field';
   const agentCap = document.createElement('span');
@@ -6233,35 +6264,42 @@ function buildTeamColumnRow(tab, col, idx) {
   }
   // A saved agent no longer present in .claude/agents/ is kept as a selected
   // "(missing)" option so the value is never silently lost.
-  let missing = false;
   if (current !== '' && !names.includes(current)) {
-    missing = true;
     const opt = document.createElement('option');
     opt.value = current;
     opt.textContent = current + ' (missing)';
     agentSel.appendChild(opt);
   }
   agentSel.value = current;
+  const agentWarnEdit = document.createElement('span');
+  agentWarnEdit.className = 'team-column-agent-warning hidden';
+  agentWarnEdit.textContent = 'This agent no longer exists in .claude/agents/.';
+
+  // Recompute the missing-agent warning (view + editor copies) from the
+  // select's LIVE value, without a full board re-render — a re-render would
+  // rebuild every column row and silently close this editor.
+  const updateAgentWarning = () => {
+    const val = agentSel.value;
+    const nowMissing = val !== '' && !names.includes(val);
+    agentWarnEdit.classList.toggle('hidden', !nowMissing);
+    agentWarnView.classList.toggle('hidden', !nowMissing);
+  };
+  updateAgentWarning();
+
   agentSel.addEventListener('change', () => {
     col.agent = agentSel.value === '' ? null : agentSel.value;
     markTeamBoardDirty(tab);
-    renderTeamBoard(tab); // refresh the missing-warning state
+    updateAgentWarning();
   });
   agentField.appendChild(agentCap);
   agentField.appendChild(agentSel);
-  if (missing) {
-    const warn = document.createElement('span');
-    warn.className = 'team-column-agent-warning';
-    warn.textContent = 'This agent no longer exists in .claude/agents/.';
-    agentField.appendChild(warn);
-  }
-  fields.appendChild(agentField);
+  agentField.appendChild(agentWarnEdit);
+  editor.appendChild(agentField);
 
   // Instructions (TASK-202): the free-text brief the orchestrator dispatches
   // for tickets sitting in this column. Rendered via `.value` only (never
   // innerHTML), so a tampered on-disk value can never inject markup — it
-  // always shows as literal text. Edited in place (no full re-render) so
-  // focus is preserved, matching the label/description fields above.
+  // always shows as literal text.
   const instructionsField = document.createElement('label');
   instructionsField.className = 'team-column-field team-column-field-full';
   const instructionsCap = document.createElement('span');
@@ -6277,7 +6315,140 @@ function buildTeamColumnRow(tab, col, idx) {
   });
   instructionsField.appendChild(instructionsCap);
   instructionsField.appendChild(instructionsInput);
-  fields.appendChild(instructionsField);
+  editor.appendChild(instructionsField);
+
+  // AI-assist box: draft/rewrite the instructions text from a natural-language
+  // request. Nothing is written to disk here — the result is only loaded into
+  // the textarea as a preview; the board-level Save persists it like any
+  // other field edit.
+  const ai = document.createElement('div');
+  ai.className = 'team-column-ai';
+  const aiLbl = document.createElement('label');
+  aiLbl.className = 'team-column-field-label';
+  aiLbl.textContent = 'Generate with AI';
+  const aiInput = document.createElement('textarea');
+  aiInput.className = 'team-column-ai-input';
+  aiInput.rows = 2;
+  aiInput.spellcheck = false;
+  aiInput.placeholder = 'Describe what the instructions should say (e.g. "tell the agent to run the '
+    + 'test suite before marking a ticket done")…';
+  const aiActions = document.createElement('div');
+  aiActions.className = 'team-column-ai-actions';
+  const regenBtn = document.createElement('button');
+  regenBtn.className = 'small-btn';
+  regenBtn.textContent = 'Generate with AI';
+  aiActions.appendChild(regenBtn);
+  const aiNote = document.createElement('div');
+  aiNote.className = 'team-column-ai-note hidden';
+  aiNote.textContent = 'AI proposal loaded into Instructions — review it, then click Save to apply. Nothing has '
+    + 'been written yet.';
+  const aiMsg = document.createElement('div');
+  aiMsg.className = 'team-column-ai-msg hidden';
+  ai.appendChild(aiLbl);
+  ai.appendChild(aiInput);
+  ai.appendChild(aiActions);
+  ai.appendChild(aiNote);
+  ai.appendChild(aiMsg);
+  editor.appendChild(ai);
+
+  const editorActions = document.createElement('div');
+  editorActions.className = 'team-column-agentinstr-editor-actions';
+  const doneBtn = document.createElement('button');
+  doneBtn.className = 'small-btn';
+  doneBtn.textContent = 'Done';
+  editorActions.appendChild(doneBtn);
+  editor.appendChild(editorActions);
+
+  const showAiMsg = (msg) => { aiMsg.textContent = msg; aiMsg.classList.remove('hidden'); };
+  const clearAiMsg = () => { aiMsg.textContent = ''; aiMsg.classList.add('hidden'); };
+  const hideAiNote = () => { aiNote.classList.add('hidden'); };
+
+  // Refresh the read view's text from the current model values. Called on
+  // build and whenever Done collapses the editor.
+  const refreshView = () => {
+    const agentVal = col.agent != null ? String(col.agent).trim() : '';
+    agentLine.textContent = 'Display agent: ' + (agentVal || '(none)');
+    const instrVal = col.instructions != null ? String(col.instructions).trim() : '';
+    instrPreview.textContent = instrVal || '(no instructions set)';
+    instrPreview.classList.toggle('team-column-agentinstr-instr-empty', !instrVal);
+  };
+
+  editBtn.addEventListener('click', () => {
+    view.classList.add('hidden');
+    editor.classList.remove('hidden');
+    agentSel.focus();
+  });
+  doneBtn.addEventListener('click', () => {
+    clearAiMsg();
+    hideAiNote();
+    aiInput.value = '';
+    editor.classList.add('hidden');
+    view.classList.remove('hidden');
+    refreshView();
+  });
+
+  regenBtn.addEventListener('click', async () => {
+    clearAiMsg();
+    hideAiNote();
+    const instruction = aiInput.value.trim();
+    // Empty instruction → inline error, NO API call.
+    if (instruction === '') {
+      showAiMsg('Enter an instruction describing what the instructions should say.');
+      return;
+    }
+    const bodyAtRequest = tab.els.teamBoardBody;
+    const prevLabel = regenBtn.textContent;
+    regenBtn.disabled = true;
+    regenBtn.textContent = 'Generating…';
+
+    let res;
+    try {
+      res = await window.api.team.regenerateColumnInstructions({
+        instructions: instructionsInput.value,
+        label: col.label,
+        description: col.description,
+        agent: col.agent,
+        instruction
+      });
+    } catch (e) {
+      res = { ok: false, reason: 'error' };
+    }
+
+    // Stale-guard: if the tab/folder changed or this row closed while the
+    // request was in flight, discard the response — no DOM update, no write.
+    if (tab.els.teamBoardBody !== bodyAtRequest || !editor.isConnected) return;
+
+    regenBtn.disabled = false;
+    regenBtn.textContent = prevLabel;
+
+    if (!res || !res.ok) {
+      const reason = res && res.reason;
+      if (reason === 'no-key') {
+        showAiMsg('Set ANTHROPIC_API_KEY (Settings) to use AI generation — no request was sent.');
+      } else if (reason === 'empty-instruction') {
+        showAiMsg('Enter an instruction describing what the instructions should say.');
+      } else {
+        showAiMsg('AI generation failed (' + (reason || 'error') + '). Your text was kept.');
+      }
+      return;
+    }
+
+    // Preview: load the proposal into the textarea AND the model (matching
+    // the Agents panel's pattern would leave it un-saved; here Instructions
+    // has no separate Save, so this write goes straight into `col` like a
+    // normal keystroke would, gated behind the board-level Save same as any
+    // other field).
+    instructionsInput.value = res.content;
+    col.instructions = res.content;
+    markTeamBoardDirty(tab);
+    aiNote.classList.remove('hidden');
+  });
+
+  refreshView();
+
+  agentInstrField.appendChild(view);
+  agentInstrField.appendChild(editor);
+  fields.appendChild(agentInstrField);
 
   row.appendChild(fields);
   return row;

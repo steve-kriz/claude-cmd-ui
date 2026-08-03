@@ -723,5 +723,10 @@
     "ts": "2026-08-02T23:12:53.054Z",
     "source": "user",
     "prompt": "remove post processing column and the pre-configured functionality"
+  },
+  {
+    "ts": "2026-08-03T11:36:59.555Z",
+    "source": "user",
+    "prompt": "add generate with AI to update the instruction, add an edit button to update agent and instruction"
   }
 ]

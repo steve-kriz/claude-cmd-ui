@@ -165,6 +165,16 @@ contextBridge.exposeInMainWorld('api', {
     regeneratePhase: (content, instruction) => ipcRenderer.invoke('skill:regeneratePhase', { content, instruction })
   },
 
+  team: {
+    // Ask the main process to draft/rewrite one Board column's "instructions"
+    // text from its current text (may be empty) plus label/description/agent
+    // context and a natural-language instruction. Main reads
+    // ANTHROPIC_API_KEY (never returned) and clamps the inputs; the returned
+    // { ok, content, reason } is previewed by the renderer in the
+    // instructions textarea and only persisted via the normal Board Save.
+    regenerateColumnInstructions: (payload) => ipcRenderer.invoke('team:regenerateColumnInstructions', payload)
+  },
+
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', { url }),
 
   gitops: {
