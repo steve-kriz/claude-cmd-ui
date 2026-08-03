@@ -1,0 +1,39 @@
+✔ Scenario: instructions round-trips on a system column (5.4344ms)
+✔ Scenario: non-string instructions collapse to empty (0.6106ms)
+✔ Scenario: a legacy column phase link is dropped with a warning (0.903ms)
+✔ Scenario: skill.phases is removed entirely (0.516ms)
+✔ Scenario: fresh config seeds default agents and instructions (1.1076ms)
+✔ Scenario: a user-set null agent on a system column is preserved (0.6152ms)
+✔ Scenario: serialize is idempotent and phase-free (1.8354ms)
+✔ Scenario: unknown skill keys still round-trip but phases never does (edge) (1.2143ms)
+✔ Scenario: junk input never throws (failure path) (1.0925ms)
+C:\projects\claude-cmd-ui2\test\task-201-board-config-schema.unit.test.js:409
+test('buildUserColumn seeds instructions:'' when absent', () => {
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+SyntaxError: missing ) after argument list
+    at wrapSafe (node:internal/modules/cjs/loader:1787:18)
+    at Module._compile (node:internal/modules/cjs/loader:1828:20)
+    at Object..js (node:internal/modules/cjs/loader:1985:10)
+    at Module.load (node:internal/modules/cjs/loader:1577:32)
+    at Module._load (node:internal/modules/cjs/loader:1379:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47
+
+Node.js v24.16.0
+✖ test\task-201-board-config-schema.unit.test.js (183.1441ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 9
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 404.427
+
+✖ failing tests:
+
+test at test\task-201-board-config-schema.unit.test.js:1:1
+✖ test\task-201-board-config-schema.unit.test.js (183.1441ms)
+  'test failed'

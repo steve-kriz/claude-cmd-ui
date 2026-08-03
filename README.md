@@ -101,7 +101,8 @@ usage, and API/IPC references.
   tokens, and cost — surfaced as a cost view in the ticket modal.
 - **[Usage & telemetry](docs/telemetry.md)** — turn on Claude Code's built-in
   OpenTelemetry from the Team tab; a loopback receiver shows live tokens & cost
-  in-app and can forward a compact JSON summary to a URL you choose.
+  in-app, including a per-model cost-over-time graph, and can forward a
+  compact JSON summary to a URL you choose.
 - **[Weekly usage bar](docs/usage-bar.md)** — a bar beside the agent dropdown
   showing how much of your weekly Claude rate limit is gone against where a
   linear burn through the week would have you, scraped from `/usage`.
@@ -312,8 +313,10 @@ are in the linked pages below.
   (plan → build → test → review) parsed from `SKILL.md`
   ([`lib/skill-workflow.js`](lib/skill-workflow.js)), with per-phase dispatched
   agent, missing-agent fallback warnings, the planning-model directive, a guided
-  per-phase **agent model** editor, and the **build concurrency default**
-  (`skill.concurrencyDefault`). It never writes `SKILL.md`. See
+  per-phase **agent model** editor, the **build concurrency default**
+  (`skill.concurrencyDefault`), and a **context optimisation** control
+  (`skill.contextOptimization`, TASK-200) tuning whether/how aggressively
+  `/orchestrate` trims context between phases. It never writes `SKILL.md`. See
   [docs/workflow-settings.md](docs/workflow-settings.md).
 - **Board panel + dynamic statuses** — a column manager over
   `tasks/team-config.json` ([`lib/team-config.js`](lib/team-config.js)): add,
@@ -343,9 +346,11 @@ are in the linked pages below.
 
 The **Stats** tab turns on Claude Code's built-in OpenTelemetry export and shows
 what the agent is actually spending, per project: API calls, input/output tokens,
-cache reads & writes, total tokens, and cost — broken down per model. Optionally
-forward a compact JSON summary to a URL of your choice (with a bearer token) or
-store it online for the project. See [docs/telemetry.md](docs/telemetry.md).
+cache reads & writes, total tokens, and cost — broken down per model, plus a
+smoothed, cumulative cost-over-time graph per model with a Cost/Input/Output/
+Cache tokens metric toggle. Optionally forward a compact JSON summary to a URL
+of your choice (with a bearer token) or store it online for the project. See
+[docs/telemetry.md](docs/telemetry.md).
 
 ![The Stats tab showing live telemetry: API calls, input/output tokens, cache read/write, total tokens and cost, with a per-model breakdown and the store-online settings.](images/otel_running_costs_stats.png)
 

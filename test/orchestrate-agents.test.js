@@ -318,36 +318,39 @@ test('both SKILL.md copies reference all three orchestrate-* agent type names', 
   }
 });
 
-test('the SKILL dispatches each phase to its dedicated agent (BA->plan, coder->build, tester->test)', () => {
+// TASK-204: the fixed Phase 1->2->3 pipeline was replaced by a generic,
+// column-driven dispatch loop (every board column names an `agent`, looked up
+// from tasks/team-config.json — see "The generic dispatch loop" / "Forward
+// movement model" in SKILL.md). There is no more per-phase "Task tool,
+// `orchestrate-ba`" launch-line wording; instead each SYSTEM column's default
+// agent is named once, in its Forward-movement-model bullet.
+test('the SKILL dispatches each system column to its dedicated default agent (defining->ba, in-progress->coder, testing->tester)', () => {
   for (const src of [skillAssetsSrc, skillProjectSrc]) {
-    // Phase 1 plan -> orchestrate-ba, Phase 2 build -> orchestrate-coder,
-    // Phase 3 test -> orchestrate-tester (ordered appearance in the doc).
     const baIdx = src.indexOf('orchestrate-ba');
     const coderIdx = src.indexOf('orchestrate-coder');
     const testerIdx = src.indexOf('orchestrate-tester');
     assert.ok(baIdx !== -1 && coderIdx !== -1 && testerIdx !== -1, 'all three named');
-    // The dispatch instructions name each agent in the Task-tool launch lines.
-    assert.match(src, /Task tool,\s*`orchestrate-ba`/);
-    assert.match(src, /Task tool,\s*`orchestrate-coder`/);
-    assert.match(src, /Task tool,\s*`orchestrate-tester`/);
+    // Each system column's Forward-movement-model bullet names its default agent.
+    assert.match(src, /\*\*`defining`\*\*\s*\(agent:\s*`orchestrate-ba`/);
+    assert.match(src, /\*\*`in-progress`\*\*\s*\(agent:\s*`orchestrate-coder`/);
+    assert.match(src, /\*\*`testing`\*\*\s*\(agent:\s*`orchestrate-tester`/);
   }
 });
 
-test('no phase dispatches a generic general-purpose AS the phase agent, but the fallback wording remains', () => {
+test('no system column names general-purpose as its own default agent, but the fallback-and-report wording remains generic', () => {
   for (const [label, src] of [['assets', skillAssetsSrc], ['.claude', skillProjectSrc]]) {
-    // The phase agent is never `general-purpose` — it is always named in a
-    // "Task tool, `general-purpose`" launch line. Assert that pattern is absent.
-    assert.ok(!/Task tool,\s*`general-purpose`/.test(src),
-      `${label}/SKILL.md never dispatches a phase to Task tool general-purpose`);
+    // No system column's OWN default agent is general-purpose.
+    assert.ok(!/\(agent:\s*`general-purpose`/.test(src),
+      `${label}/SKILL.md never names general-purpose as a column's own default agent`);
     // The documented graceful fallback sentence still exists (general-purpose may
     // legitimately appear there).
     assert.match(src, /fall back to\s*[`]?general-purpose[`]?/i,
       `${label}/SKILL.md keeps the graceful general-purpose fallback wording`);
-    // The three phases each carry the "fall back to general-purpose and report"
-    // instruction next to their dedicated agent name.
-    assert.match(src, /`orchestrate-ba`;\s*fall back to[\s\S]*?`general-purpose`/);
-    assert.match(src, /`orchestrate-coder`;\s*fall back to[\s\S]*?`general-purpose`/);
-    assert.match(src, /`orchestrate-tester`;\s*fall back to[\s\S]*?`general-purpose`/);
+    // The generic dispatch loop states ONE fallback-and-report rule that covers
+    // every column's resolved agent uniformly (no per-agent special-casing
+    // anymore) — including reporting which named agent was missing.
+    assert.match(src, /fall back to\s*`general-purpose`\s*and continue[\s\S]{0,200}report[\s\S]{0,80}named agent was missing/i,
+      `${label}/SKILL.md states the fallback-and-report rule generically for every column's agent`);
   }
 });
 
@@ -486,13 +489,17 @@ test('Scenario: The agents\' tools match their roles', () => {
   }
 });
 
-test('Scenario: The skill dispatches each phase to its agent', () => {
-  // Given the orchestrate skill
-  // Then Phase 1 -> orchestrate-ba, Phase 2 -> orchestrate-coder, Phase 3 -> orchestrate-tester.
+test('Scenario: The skill dispatches each column to its agent', () => {
+  // Given the orchestrate skill (TASK-204: column-driven dispatch, not phases)
+  // Then `defining` -> orchestrate-ba, `in-progress` -> orchestrate-coder,
+  // `testing` -> orchestrate-tester, in that left-to-right column order.
   for (const src of [skillAssetsSrc, skillProjectSrc]) {
-    assert.match(src, /Phase 1[\s\S]*?orchestrate-ba/);
-    assert.match(src, /Phase 2[\s\S]*?orchestrate-coder/);
-    assert.match(src, /Phase 3[\s\S]*?orchestrate-tester/);
+    const definingIdx = src.indexOf('`defining`');
+    const inProgressIdx = src.indexOf('`in-progress`');
+    const testingIdx = src.indexOf('`testing`');
+    assert.match(src.slice(definingIdx), /`defining`[\s\S]*?orchestrate-ba/);
+    assert.match(src.slice(inProgressIdx), /`in-progress`[\s\S]*?orchestrate-coder/);
+    assert.match(src.slice(testingIdx), /`testing`[\s\S]*?orchestrate-tester/);
   }
 });
 

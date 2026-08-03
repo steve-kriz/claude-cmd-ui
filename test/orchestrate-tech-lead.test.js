@@ -6,15 +6,19 @@
 //
 // Like TASK-014 (test/orchestrate-testing-step.test.js), this is primarily an
 // INSTRUCTION/DEFINITION ticket: the coder added a new agent definition
-// (.claude/agents/tech-lead.md == assets/agents/tech-lead.md), documented a
-// "Phase 4 — Tech-lead review" step in both SKILL.md copies, and registered the
-// agent in lib/orchestrate-agents.js. The testable contract is therefore:
+// (.claude/agents/tech-lead.md == assets/agents/tech-lead.md), and registered
+// the agent in lib/orchestrate-agents.js. SKILL.md itself was later rewritten
+// by TASK-204/TASK-205 into the generic column-driven model — there is no
+// fixed "Phase 4 — Tech-lead review" step anymore; pr-review/orchestrate-
+// tech-lead is documented only as the worked EXAMPLE of a review-type user
+// column. The testable contract is therefore:
 //   * the new definition file exists, is correctly scoped, and is byte-identical
 //     across the .claude/ and assets/ copies (drift guard);
-//   * both SKILL.md copies document the testing -> tech-lead review -> done step,
-//     the Task-tool dispatch + general-purpose fallback, the follow-up todo
+//   * both SKILL.md copies document a review-type column positioned after
+//     testing (generic dispatch loop, general-purpose fallback), naming
+//     pr-review -> orchestrate-tech-lead as the example, the follow-up todo
 //     ticket rule, and stay byte-identical;
-//   * the six-status enum is UNCHANGED (no review lane) in SKILL.md,
+//   * the status enum is UNCHANGED (no review lane) in SKILL.md,
 //     lib/ticket-lanes.js and lib/ticket-folders.js;
 //   * lib/orchestrate-agents.js registers orchestrate-tech-lead (frozen,
 //     resolveAgentType/isFallback correct);
@@ -56,10 +60,13 @@ const FOLDERS = path.join(ROOT, 'lib', 'ticket-folders.js');
 const readLower = (p) => fs.readFileSync(p, 'utf8').toLowerCase();
 const readRaw = (p) => fs.readFileSync(p);
 
-// The canonical six-lane enum — no review lane may ever be added. (TASK-028
+// The canonical five-lane enum — no review lane may ever be added. (TASK-028
 // replaced the failed-testing lane with post-processing; failed-testing remains
-// a valid status without its own lane.)
-const SIX_STATUSES = ['todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done'];
+// a valid status without its own lane. TASK-206 later removed post-processing
+// entirely, and TASK-204/TASK-205 rewrote SKILL.md into the generic
+// column-driven model — SKILL.md no longer documents a fixed tech-lead-review
+// pipeline step or the post-processing concept anywhere.)
+const FIVE_STATUSES = ['todo', 'defining', 'in-progress', 'testing', 'done'];
 
 // --- Minimal flat-YAML frontmatter parser (matches the shape the agent files
 // use: inline scalars + a `>-` folded description block). ---------------------
@@ -167,8 +174,8 @@ test('UNIT: resolveAgentType/isFallback for the reviewer — present vs missing'
   assert.equal(isFallback('orchestrate-tech-lead', withoutIt), true);
 });
 
-test('UNIT: the six-status enum is unchanged (lib/ticket-lanes.js LANE_STATUSES)', () => {
-  assert.deepEqual(LANE_STATUSES, SIX_STATUSES, 'no new status value added to the enum');
+test('UNIT: the status enum is unchanged (lib/ticket-lanes.js LANE_STATUSES)', () => {
+  assert.deepEqual(LANE_STATUSES, FIVE_STATUSES, 'no new status value added to the enum');
 });
 
 test('UNIT: no review lane leaks into ticket-lanes.js / ticket-folders.js source', () => {
@@ -275,32 +282,40 @@ test('E2E cucumber: the persona routes discovered issues to new follow-up ticket
   );
 });
 
-test('E2E cucumber: both SKILL.md copies place the review between testing and done', async (t) => {
+test('E2E cucumber: both SKILL.md copies place the review after testing, generically (column model)', async (t) => {
   await t.test(
-    'Given both copies of SKILL.md, Then each documents a tech-lead review after testing and before done ' +
-    'with the ordering testing -> tech-lead review -> post-processing -> done',
+    'Given both copies of SKILL.md, Then each documents a review-type user column positioned after testing ' +
+    'and before done, naming pr-review -> orchestrate-tech-lead as the worked example (no fixed pipeline, ' +
+    'no post-processing step)',
     () => {
       for (const [label, p] of [['.claude', PROJECT_SKILL], ['assets', ASSETS_SKILL]]) {
         const md = readLower(p);
-        assert.match(md, /tech-lead review/, `${label}/SKILL.md documents a tech-lead review step`);
-        assert.match(md, /testing\s*→\s*tech-lead review\s*→\s*post-processing\s*→\s*done/,
-          `${label}/SKILL.md shows the testing -> tech-lead review -> post-processing -> done ordering`);
+        assert.match(md, /review-type column[\s\S]{0,80}user column positioned\s+\*{0,2}after\*{0,2}\s+`?testing`?/,
+          `${label}/SKILL.md documents a review-type column positioned after testing`);
+        assert.match(md, /pr-review[\s\S]{0,10}→[\s\S]{0,10}orchestrate-tech-lead/,
+          `${label}/SKILL.md names pr-review -> orchestrate-tech-lead as the worked review example`);
+        // The old fixed "testing -> tech-lead review -> post-processing -> done"
+        // pipeline is gone entirely: no post-processing step is ever named.
+        assert.ok(!/testing\s*→\s*tech-lead review\s*→\s*post-processing\s*→\s*done/.test(md),
+          `${label}/SKILL.md must not resurrect the old fixed post-processing ordering`);
       }
     },
   );
 });
 
-test('E2E cucumber: both SKILL.md copies dispatch to orchestrate-tech-lead with the fallback wording', async (t) => {
+test('E2E cucumber: both SKILL.md copies dispatch review columns the same way as any column (generic fallback)', async (t) => {
   await t.test(
-    'Given both copies of SKILL.md, Then each launches orchestrate-tech-lead via the Task tool ' +
-    'and keeps the "fall back to general-purpose and report it" wording',
+    'Given both copies of SKILL.md, Then each dispatches a review column\'s agent via the generic dispatch loop ' +
+    '(task tool) and keeps the "fall back to general-purpose and report it" wording, uniformly for every column',
     () => {
       for (const [label, p] of [['.claude', PROJECT_SKILL], ['assets', ASSETS_SKILL]]) {
         const md = readLower(p);
-        assert.match(md, /task tool,\s*`orchestrate-tech-lead`/,
-          `${label}/SKILL.md dispatches the review to orchestrate-tech-lead via the Task tool`);
-        assert.match(md, /`orchestrate-tech-lead`;\s*fall back to[\s\S]{0,40}`general-purpose`[\s\S]{0,40}report it/,
-          `${label}/SKILL.md keeps the fall-back-to-general-purpose-and-report-it wording for the review`);
+        assert.match(md, /dispatch it \(task tool\)/,
+          `${label}/SKILL.md dispatches every column's agent (including a review column's) via the Task tool`);
+        assert.match(md, /fall back to\s*`general-purpose`\s*and continue[\s\S]{0,200}report[\s\S]{0,80}named agent was missing/,
+          `${label}/SKILL.md keeps the fall-back-to-general-purpose-and-report-it wording, generically for every column`);
+        assert.match(md, /pr-review[\s\S]{0,10}→[\s\S]{0,10}orchestrate-tech-lead/,
+          `${label}/SKILL.md names orchestrate-tech-lead as the pr-review column's agent example`);
       }
     },
   );
@@ -308,17 +323,17 @@ test('E2E cucumber: both SKILL.md copies dispatch to orchestrate-tech-lead with 
 
 test('E2E cucumber: both SKILL.md copies document follow-up ticket creation on findings', async (t) => {
   await t.test(
-    'Given both copies of SKILL.md, Then each states follow-up fix tickets are status:todo continuing the max ' +
-    'TASK-nnn sequence, and the review step does not change the reviewed ticket status/frontmatter',
+    'Given both copies of SKILL.md, Then each states non-blocking follow-up tickets are status:todo continuing ' +
+    'the max TASK-nnn sequence, and that path does not change the reviewed ticket status/frontmatter',
     () => {
       for (const [label, p] of [['.claude', PROJECT_SKILL], ['assets', ASSETS_SKILL]]) {
         const md = readLower(p);
-        assert.match(md, /follow-up fix ticket/, `${label}/SKILL.md documents follow-up fix tickets`);
-        assert.match(md, /status:\s*todo/, `${label}/SKILL.md creates them as status: todo`);
-        assert.match(md, /continues? the `?task-nnn`? sequence from the true[\s\S]{0,20}maximum|continues the `?task-nnn`? sequence/,
-          `${label}/SKILL.md continues the max TASK-nnn sequence`);
-        assert.match(md, /does\s*\*?\*?not\*?\*?\s+change the[\s\S]{0,40}reviewed ticket'?s status\s*(or|\/)\s*frontmatter|not change the reviewed ticket'?s status/,
-          `${label}/SKILL.md states the review does not change the reviewed ticket status/frontmatter`);
+        assert.match(md, /follow-up\s*`?todo`?\s*ticket/, `${label}/SKILL.md documents follow-up todo tickets`);
+        assert.match(md, /status:\s*todo|new\s+\*{0,2}follow-up `todo` ticket/, `${label}/SKILL.md creates them as status: todo`);
+        assert.match(md, /continuing the `?task-nnn`? sequence[\s\S]{0,40}true\s*\*{0,2}maximum\*{0,2}/,
+          `${label}/SKILL.md continues the TASK-nnn sequence from the true maximum`);
+        assert.match(md, /never changes the\s*\r?\n?\s*reviewed ticket'?s status\s+or\s+frontmatter|not\s*\*{0,2}\s+touched by this path/,
+          `${label}/SKILL.md states the non-blocking follow-up path does not change the reviewed ticket status/frontmatter`);
       }
     },
   );
@@ -337,15 +352,15 @@ test('E2E cucumber: both SKILL.md copies remain byte-identical (drift guard)', a
 test('E2E cucumber: the status enum is unchanged — no review lane anywhere', async (t) => {
   await t.test(
     'Given SKILL.md, lib/ticket-lanes.js and lib/ticket-folders.js, ' +
-    'Then the allowed statuses are exactly the six and no review status was introduced',
+    'Then the allowed statuses are exactly the five and no review status was introduced',
     () => {
-      // The lib enum is exactly the six.
-      assert.deepEqual(LANE_STATUSES, SIX_STATUSES);
+      // The lib enum is exactly the five (TASK-206 removed post-processing).
+      assert.deepEqual(LANE_STATUSES, FIVE_STATUSES);
       // SKILL.md explicitly frames the review as a flow step, not a new status.
       for (const p of [PROJECT_SKILL, ASSETS_SKILL]) {
         const md = readLower(p);
-        assert.match(md, /not a new board\s+status|no new value into the six-status enum|not a new board status/,
-          'SKILL.md states the review is a flow step, not a new status');
+        assert.match(md, /no status outside the enum|no new status is introduced by the column model/,
+          'SKILL.md states a review column is a flow step, not a new status');
       }
       // No source file smuggles in a review lane value.
       for (const p of [LANES, FOLDERS]) {

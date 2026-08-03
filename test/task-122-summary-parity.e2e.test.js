@@ -5,7 +5,7 @@
 //
 // TASK-104 made the tasks-board summary config-aware. The lib formatTasksSummary
 // (lib/slack-commands.js) derives its lane order via laneStatusesFor(columns),
-// which RE-INJECTS the six system lanes and interleaves user columns; the renderer
+// which RE-INJECTS the five system lanes and interleaves user columns; the renderer
 // mirror previously used `cols.map(c => c.status)` verbatim, so for a PARTIAL /
 // hand-built / reordered columns array the two silently diverged. TASK-122 aligned
 // the renderer to the lib by adding the mirror helpers tasksUserSlugSetFor /
@@ -68,24 +68,24 @@ test('Scenario: null and undefined columns → identical no-config output on bot
   // Then the two produce byte-identical output for each
   const outNull = assertParity(BOARD, null, 'null columns must match');
   const outUndef = assertParity(BOARD, undefined, 'undefined columns must match');
-  // And both degrade to the six fixed system lanes in canonical order
+  // And both degrade to the five fixed system lanes in canonical order
   assert.ok(
-    outNull.includes('todo 1 · defining 0 · in-progress 1 · testing 2 · post-processing 0 · done 1'),
-    `null → six system lanes, got:\n${outNull}`,
+    outNull.includes('todo 1 · defining 0 · in-progress 1 · testing 2 · done 1'),
+    `null → five system lanes, got:\n${outNull}`,
   );
   assert.equal(outNull, outUndef, 'null and undefined columns are equivalent');
 });
 
-test('Scenario: an empty columns array degrades to the six system lanes, identically', () => {
+test('Scenario: an empty columns array degrades to the five system lanes, identically', () => {
   // Given a board and an empty columns array
   // When both formatters run
   const out = assertParity(BOARD, [], 'empty [] columns must match');
-  // Then the counts line is the six fixed system lanes
-  assert.ok(out.includes('todo 1 · defining 0 · in-progress 1 · testing 2 · post-processing 0 · done 1'));
+  // Then the counts line is the five fixed system lanes
+  assert.ok(out.includes('todo 1 · defining 0 · in-progress 1 · testing 2 · done 1'));
 });
 
 test('Scenario: a PARTIAL system-columns array re-injects the missing lanes (identical)', () => {
-  // Given a hand-built columns array MISSING `defining` and `post-processing`
+  // Given a hand-built columns array MISSING `defining`
   const partial = [
     { status: 'todo', system: true },
     { status: 'in-progress', system: true },
@@ -93,12 +93,12 @@ test('Scenario: a PARTIAL system-columns array re-injects the missing lanes (ide
     { status: 'done', system: true },
   ];
   // When both formatters run (this is the exact renderer/lib skew TASK-122 fixes:
-  // the old renderer would emit only the four supplied lanes, the lib all six)
+  // the old renderer would emit only the four supplied lanes, the lib all five)
   const out = assertParity(BOARD, partial, 'partial system columns must re-inject identically');
-  // Then BOTH re-inject the missing lanes in canonical order
+  // Then BOTH re-inject the missing lane in canonical order
   assert.ok(
-    out.includes('todo 1 · defining 0 · in-progress 1 · testing 2 · post-processing 0 · done 1'),
-    `partial re-injects all six lanes, got:\n${out}`,
+    out.includes('todo 1 · defining 0 · in-progress 1 · testing 2 · done 1'),
+    `partial re-injects all five lanes, got:\n${out}`,
   );
 });
 
@@ -115,7 +115,7 @@ test('Scenario: partial system columns PLUS a user column interleave identically
   // Then the user column is inserted after in-progress and the missing system lanes
   // are still re-injected, using the configured LABEL for the user column
   assert.ok(
-    out.includes('todo 1 · defining 0 · in-progress 1 · Review 1 · testing 2 · post-processing 0 · done 1'),
+    out.includes('todo 1 · defining 0 · in-progress 1 · Review 1 · testing 2 · done 1'),
     `user column interleaved with its label, got:\n${out}`,
   );
 });
@@ -129,10 +129,10 @@ test('Scenario: reordered partial system columns still canonicalise identically'
   ];
   // When both formatters run
   const out = assertParity(BOARD, reordered, 'reordered partial columns must match');
-  // Then both emit the six lanes in the canonical LANE_STATUSES order (system lanes
+  // Then both emit the five lanes in the canonical LANE_STATUSES order (system lanes
   // are re-injected in fixed order regardless of the supplied order)
   assert.ok(
-    out.includes('todo 1 · defining 0 · in-progress 1 · testing 2 · post-processing 0 · done 1'),
+    out.includes('todo 1 · defining 0 · in-progress 1 · testing 2 · done 1'),
     `reordered still canonicalises, got:\n${out}`,
   );
 });
@@ -147,7 +147,7 @@ test('Scenario: a user column declared before todo sorts ahead of todo, identica
   const out = assertParity(BOARD, cols, 'user-before-todo must match');
   // Then the user lane sorts ahead of todo (anchor = null)
   assert.ok(
-    out.includes('Review 1 · todo 1 · defining 0 · in-progress 1 · testing 2 · post-processing 0 · done 1'),
+    out.includes('Review 1 · todo 1 · defining 0 · in-progress 1 · testing 2 · done 1'),
     `user column sorts before todo, got:\n${out}`,
   );
 });
@@ -179,18 +179,18 @@ test('Scenario (edge): junk columns never throw and match the no-config output',
   // When both formatters run they must not throw
   let out;
   assert.doesNotThrow(() => { out = assertParity(BOARD, junk, 'junk columns must match'); });
-  // Then the output equals the no-config six-lane summary
+  // Then the output equals the no-config five-lane summary
   assert.equal(out, rendererFormat(BOARD, null), 'junk degrades to no-config output');
 });
 
 test('Scenario: normalized columns output is BYTE-UNCHANGED vs the pre-change fixed-lane format', () => {
-  // Given the fully-normalized six default system columns (today's only real input)
+  // Given the fully-normalized five default system columns (today's only real input,
+  // post TASK-206's removal of the post-processing column)
   const normalized = [
     { status: 'todo', label: 'To Do', system: true },
     { status: 'defining', label: 'Defining', system: true },
     { status: 'in-progress', label: 'In Progress', system: true },
     { status: 'testing', label: 'Testing', system: true },
-    { status: 'post-processing', label: 'Post-processing', system: true },
     { status: 'done', label: 'Done', system: true },
   ];
   const tickets = [
@@ -200,7 +200,8 @@ test('Scenario: normalized columns output is BYTE-UNCHANGED vs the pre-change fi
     { fm: { id: 'TASK-204', title: 'Delta', status: 'failed-testing' } },
     { fm: { id: 'TASK-205', title: 'Echo', status: 'done' } },
   ];
-  // The historic (pre-TASK-122) fixed-lane summary — raw slugs for system lanes.
+  // The historic (pre-TASK-122, post-TASK-206) fixed-lane summary — raw slugs for
+  // system lanes, no post-processing piece.
   const EXPECTED = [
     '*Currently working on:*',
     'TASK-202 — Bravo (in-progress)',
@@ -209,7 +210,7 @@ test('Scenario: normalized columns output is BYTE-UNCHANGED vs the pre-change fi
     '*Failed testing:*',
     'TASK-204 — Delta (failed-testing)',
     '',
-    'todo 1 · defining 0 · in-progress 1 · testing 2 · post-processing 0 · done 1',
+    'todo 1 · defining 0 · in-progress 1 · testing 2 · done 1',
   ].join('\n');
   // When both formatters run
   const out = assertParity(tickets, normalized, 'normalized columns must match lib');

@@ -7,10 +7,13 @@
 //
 // Feature: A new "Team" sub-tab scaffold. It adds a tab button (data-tab="team")
 // after Tasks, a hidden tab-view panel (data-view="team") with a .view-toolbar
-// ("Team") and three placeholder sections (.teamAgentsSection /
-// .teamWorkflowSection / .teamBoardSection), els-map entries, a switchSubTab
-// branch routing "team" -> initTeamTab, and styles. initTeamTab shows
+// ("Team") and section containers, els-map entries, a switchSubTab branch
+// routing "team" -> initTeamTab, and styles. initTeamTab shows
 // "(open a folder)" with no folder and blanks the sections with a folder.
+//
+// TASK-203: the Team tab's Workflow section/panel was removed (phase system
+// retired); the scaffold now hosts only the Agents and Board sections. Every
+// Workflow-specific assertion below has been removed accordingly.
 //
 // NO DATABASE, DISK WRITE, ELECTRON RUNTIME, OR NETWORK CALL IS MADE. The
 // browser files (renderer/renderer.js, index.html, styles.css) cannot be
@@ -74,16 +77,15 @@ function activateSubTab(btns, views, name) {
   for (const view of views) view.classList.toggle('active', view.dataset.view === name);
 }
 
-// Replica of initTeamTab (renderer.js ~5692): with no folder, set the status +
-// all three section bodies to "(open a folder)" and return early; with a folder,
-// blank ONLY the status and delegate the three section bodies to their refresh
+// Replica of initTeamTab (renderer.js ~7208): with no folder, set the status +
+// both section bodies to "(open a folder)" and return early; with a folder,
+// blank ONLY the status and delegate the two section bodies to their refresh
 // functions (they are NOT blanked). Uses a mock `tab.els` recording textContent.
 const EMPTY = '(open a folder)';
 function makeTeamEls() {
   return {
     teamStatus: { textContent: 'INIT' },
     teamAgentsBody: { textContent: 'INIT' },
-    teamWorkflowBody: { textContent: 'INIT' },
     teamBoardBody: { textContent: 'INIT' }
   };
 }
@@ -91,15 +93,14 @@ function initTeamTabReplica(tab) {
   if (!tab.folder) {
     tab.els.teamStatus.textContent = EMPTY;
     tab.els.teamAgentsBody.textContent = EMPTY;
-    tab.els.teamWorkflowBody.textContent = EMPTY;
     tab.els.teamBoardBody.textContent = EMPTY;
     return;
   }
   tab.els.teamStatus.textContent = '';
-  // With a folder the three section bodies are DELEGATED to their refresh
-  // functions (refreshTeamAgents/refreshTeamWorkflow/refreshTeamBoard) and are
-  // NOT blanked by initTeamTab itself. Delegation is recorded on tab.delegated.
-  tab.delegated = ['refreshTeamAgents', 'refreshTeamWorkflow', 'refreshTeamBoard'];
+  // With a folder the two section bodies are DELEGATED to their refresh
+  // functions (refreshTeamAgents/refreshTeamBoard) and are NOT blanked by
+  // initTeamTab itself. Delegation is recorded on tab.delegated.
+  tab.delegated = ['refreshTeamAgents', 'refreshTeamBoard'];
 }
 
 // The seven pre-existing sub-tab names + team, mirroring the tab bar order.
@@ -140,11 +141,10 @@ test('Scenario: the Team tab-btn appears after Tasks and a data-view="team" pane
 });
 
 // ===========================================================================
-// Scenario: The Team panel hosts a toolbar + three section containers
-//   AC: a .view-toolbar ("Team") and three section containers with stable class
-//   hooks and visible headings.
+// Scenario: The Team panel hosts a toolbar + the Agents and Board sections
+//   AC (TASK-203): only the Agents and Board sections remain (Workflow gone).
 // ===========================================================================
-test('Scenario: the Team panel has a "Team" .view-toolbar and the three placeholder sections with headings', () => {
+test('Scenario: the Team panel has a "Team" .view-toolbar and only the Agents + Board sections, with headings', () => {
   // Given the Team tab-view region only (bounded so we assert against IT).
   // The Team panel is the LAST tab-view in the workspace <template>, so bound the
   // slice at that template's close instead of a fixed +1800 window; this covers
@@ -158,17 +158,17 @@ test('Scenario: the Team panel has a "Team" .view-toolbar and the three placehol
   // Then it has a .view-toolbar whose title reads "Team"
   assert.match(panel, /class="view-toolbar"/, 'the Team panel has a .view-toolbar');
   assert.match(panel, /Team<\/span>/, 'the toolbar shows the "Team" title');
-  // And the three placeholder section containers exist with stable class hooks
+  // And the two surviving section containers exist with stable class hooks
   assert.match(panel, /class="teamAgentsSection[^"]*"/, '.teamAgentsSection exists');
-  assert.match(panel, /class="teamWorkflowSection[^"]*"/, '.teamWorkflowSection exists');
   assert.match(panel, /class="teamBoardSection[^"]*"/, '.teamBoardSection exists');
-  // And each section has a visible heading
+  // And the Workflow section is gone entirely (TASK-203)
+  assert.ok(!/teamWorkflowSection/.test(panel), '.teamWorkflowSection no longer exists');
+  assert.ok(!/teamWorkflowBody/.test(panel), '.teamWorkflowBody no longer exists');
+  // And each surviving section has a visible heading
   assert.match(panel, />Agents<\/span>/, 'Agents section heading is visible');
-  assert.match(panel, />Workflow<\/span>/, 'Workflow section heading is visible');
   assert.match(panel, />Board<\/span>/, 'Board section heading is visible');
-  // And each section ships an "(open a folder)" empty-state body
+  // And each surviving section ships an "(open a folder)" empty-state body
   assert.match(panel, /class="teamAgentsBody[^"]*">\(open a folder\)/, 'Agents body empty state');
-  assert.match(panel, /class="teamWorkflowBody[^"]*">\(open a folder\)/, 'Workflow body empty state');
   assert.match(panel, /class="teamBoardBody[^"]*">\(open a folder\)/, 'Board body empty state');
 });
 
@@ -199,11 +199,12 @@ test('Scenario: renderer registers Team els and switchSubTab routes "team" -> in
   assert.match(rendererSrc, /teamView:\s*ws\.querySelector\('\.tab-view\[data-view="team"\]'\)/, 'els.teamView registered');
   assert.match(rendererSrc, /teamStatus:\s*ws\.querySelector\('\.teamStatus'\)/, 'els.teamStatus registered');
   assert.match(rendererSrc, /teamAgentsSection:\s*ws\.querySelector\('\.teamAgentsSection'\)/, 'els.teamAgentsSection registered');
-  assert.match(rendererSrc, /teamWorkflowSection:\s*ws\.querySelector\('\.teamWorkflowSection'\)/, 'els.teamWorkflowSection registered');
   assert.match(rendererSrc, /teamBoardSection:\s*ws\.querySelector\('\.teamBoardSection'\)/, 'els.teamBoardSection registered');
   assert.match(rendererSrc, /teamAgentsBody:\s*ws\.querySelector\('\.teamAgentsBody'\)/, 'els.teamAgentsBody registered');
-  assert.match(rendererSrc, /teamWorkflowBody:\s*ws\.querySelector\('\.teamWorkflowBody'\)/, 'els.teamWorkflowBody registered');
   assert.match(rendererSrc, /teamBoardBody:\s*ws\.querySelector\('\.teamBoardBody'\)/, 'els.teamBoardBody registered');
+  // And the Workflow els bindings are gone (TASK-203)
+  assert.ok(!/teamWorkflowSection:\s*ws\.querySelector/.test(rendererSrc), 'els.teamWorkflowSection removed');
+  assert.ok(!/teamWorkflowBody:\s*ws\.querySelector/.test(rendererSrc), 'els.teamWorkflowBody removed');
   // And switchSubTab gains the team branch calling initTeamTab
   const sw = rendererSrc.slice(rendererSrc.indexOf('function switchSubTab(tab, name)'),
     rendererSrc.indexOf('// ─────', rendererSrc.indexOf('function switchSubTab(tab, name)') + 1));
@@ -246,23 +247,23 @@ test('Scenario: activating the Team tab makes only the team button/view active (
 });
 
 // ===========================================================================
-// Scenario: Team tab with an open folder shows the three (blank) sections
-//   AC: with a folder, initTeamTab blanks the status + the three section bodies.
+// Scenario: Team tab with an open folder shows the two (blank) sections
+//   AC: with a folder, initTeamTab blanks the status + delegates the two
+//   section bodies.
 // ===========================================================================
-test('Scenario: activating Team with an open folder blanks status and delegates the three sections to their refresh functions', () => {
+test('Scenario: activating Team with an open folder blanks status and delegates the two sections to their refresh functions', () => {
   // Given a workspace with an open folder
   const tab = { folder: '/proj', els: makeTeamEls() };
   // When the Team tab is activated
   initTeamTabReplica(tab);
-  // Then the status is blanked, and the three section bodies are NOT blanked —
+  // Then the status is blanked, and the two section bodies are NOT blanked —
   // each is delegated to its refresh function (refreshTeamAgents/
-  // refreshTeamWorkflow/refreshTeamBoard), which owns and renders its own body.
+  // refreshTeamBoard), which owns and renders its own body.
   assert.equal(tab.els.teamStatus.textContent, '', 'status cleared when a folder is open');
   assert.deepEqual(tab.delegated,
-    ['refreshTeamAgents', 'refreshTeamWorkflow', 'refreshTeamBoard'], 'bodies delegated to their refresh fns');
+    ['refreshTeamAgents', 'refreshTeamBoard'], 'bodies delegated to their refresh fns');
   // makeTeamEls seeds 'INIT'; delegation leaves the bodies untouched by initTeamTab.
   assert.equal(tab.els.teamAgentsBody.textContent, 'INIT', 'Agents body NOT blanked by initTeamTab');
-  assert.equal(tab.els.teamWorkflowBody.textContent, 'INIT', 'Workflow body NOT blanked by initTeamTab');
   assert.equal(tab.els.teamBoardBody.textContent, 'INIT', 'Board body NOT blanked by initTeamTab');
 });
 
@@ -280,7 +281,6 @@ test('Scenario (edge): activating Team with NO folder shows "(open a folder)" ev
   // Then "(open a folder)" is shown in the status and every section body
   assert.equal(tab.els.teamStatus.textContent, EMPTY, 'status shows the empty state');
   assert.equal(tab.els.teamAgentsBody.textContent, EMPTY, 'Agents shows the empty state');
-  assert.equal(tab.els.teamWorkflowBody.textContent, EMPTY, 'Workflow shows the empty state');
   assert.equal(tab.els.teamBoardBody.textContent, EMPTY, 'Board shows the empty state');
   // And with no folder no per-agent controls render — the interactive controls the
   // static scaffold ships are the Agents "Add agent" (TASK-095) and "Refresh"
@@ -294,23 +294,22 @@ test('Scenario (edge): activating Team with NO folder shows "(open a folder)" ev
   assert.match(panel, /class="teamAgentsBody[^"]*">\(open a folder\)/, 'Agents body ships the empty state (no cards without a folder)');
   const buttons = panel.match(/<button[^>]*>/g) || [];
   // TASK-095 added the Agents "Add agent" button; TASK-103 added the Board panel's
-  // "Save" and "Refresh" header controls; TASK-105 added the Workflow panel's
-  // "Refresh" header control; TASK-144 added a per-section accordion toggle
-  // button (".team-section-toggle") to EACH of the three "team-section-header"
-  // blocks (Agents, Workflow, Board). The scaffold now ships exactly EIGHT
-  // header buttons (and nothing else): Agents Add + Refresh, Workflow Refresh,
-  // Board Save + Refresh, and the three TASK-144 accordion toggles.
-  assert.equal(buttons.length, 8, 'the scaffold ships exactly eight header buttons (Agents Add/Refresh + Workflow Refresh + Board Save/Refresh + 3 accordion toggles)');
+  // "Save" and "Refresh" header controls; TASK-144 added a per-section accordion
+  // toggle button (".team-section-toggle") to EACH "team-section-header" block.
+  // TASK-203 removed the Workflow section entirely (and its "Refresh" control with
+  // it), so the scaffold now ships exactly SIX header buttons: Agents Add +
+  // Refresh, Board Save + Refresh, and the two remaining accordion toggles.
+  assert.equal(buttons.length, 6, 'the scaffold ships exactly six header buttons (Agents Add/Refresh + Board Save/Refresh + 2 accordion toggles)');
   assert.ok(buttons.some((b) => /class="teamAgentsAddBtn/.test(b)), 'ships the Agents "Add agent" control (TASK-095)');
   assert.ok(buttons.some((b) => /class="teamAgentsRefresh/.test(b)), 'ships the Agents "Refresh" control (TASK-094)');
-  assert.ok(buttons.some((b) => /class="teamWorkflowRefresh/.test(b)), 'ships the Workflow "Refresh" control (TASK-105)');
   assert.ok(buttons.some((b) => /class="teamBoardSaveBtn/.test(b)), 'ships the Board "Save" control (TASK-103)');
   assert.ok(buttons.some((b) => /class="teamBoardRefresh/.test(b)), 'ships the Board "Refresh" control (TASK-103)');
-  // TASK-144: exactly 3 accordion toggle buttons ship (one per section), each
-  // expanded by default (aria-expanded="true") and typed to avoid form-submit
-  // side effects (type="button").
+  assert.ok(!buttons.some((b) => /class="teamWorkflowRefresh/.test(b)), 'the Workflow "Refresh" control no longer exists (TASK-203)');
+  // TASK-144: exactly 2 accordion toggle buttons ship now (one per surviving
+  // section), each expanded by default (aria-expanded="true") and typed to
+  // avoid form-submit side effects (type="button").
   const toggleButtons = buttons.filter((b) => /class="team-section-toggle"/.test(b));
-  assert.equal(toggleButtons.length, 3, 'ships exactly 3 accordion toggle buttons, one per section (TASK-144)');
+  assert.equal(toggleButtons.length, 2, 'ships exactly 2 accordion toggle buttons, one per surviving section (TASK-144/203)');
   assert.ok(toggleButtons.every((b) => /type="button"/.test(b)), 'each accordion toggle is type="button" (TASK-144)');
   assert.ok(toggleButtons.every((b) => /aria-expanded="true"/.test(b)), 'each accordion toggle starts expanded (TASK-144)');
   // The Add-agent FORM lives in a separate #addAgentModal (not this panel), so the
@@ -360,29 +359,24 @@ test('Scenario: Team styles are appended following the .view-toolbar/.git-sectio
 // ===========================================================================
 test('DRIFT GUARD: the real initTeamTab guards on tab.folder, uses the "(open a folder)" literal, and blanks with a folder', () => {
   const fn = extractInitTeamTabBody(rendererSrc);
-  // The tightly-bounded slice covers the whole body but stops at the function's
-  // closing brace — it must NOT reach the trailing top-level WF_* constants.
-  assert.ok(!/WF_FALLBACK_AGENT/.test(fn), 'slice ends at initTeamTab and excludes the trailing WF_* consts');
+  // TASK-203: no Workflow reference remains anywhere in initTeamTab.
+  assert.ok(!/teamWorkflow/.test(fn), 'no teamWorkflow* reference remains in initTeamTab');
   // Guards on an open folder and returns early for the empty state.
   assert.match(fn, /if \(!tab\.folder\) \{/, 'guards on tab.folder');
   assert.match(fn, /return;/, 'returns early in the no-folder branch');
-  // No-folder branch sets the "(open a folder)" literal on status + all three bodies.
+  // No-folder branch sets the "(open a folder)" literal on status + both bodies.
   const noFolder = fn.slice(fn.indexOf('if (!tab.folder) {'), fn.indexOf('return;'));
   assert.match(noFolder, /tab\.els\.teamStatus\.textContent = '\(open a folder\)'/, 'status -> (open a folder)');
   assert.match(noFolder, /tab\.els\.teamAgentsBody\.textContent = '\(open a folder\)'/, 'agents -> (open a folder)');
-  assert.match(noFolder, /tab\.els\.teamWorkflowBody\.textContent = '\(open a folder\)'/, 'workflow -> (open a folder)');
   assert.match(noFolder, /tab\.els\.teamBoardBody\.textContent = '\(open a folder\)'/, 'board -> (open a folder)');
   // With-folder branch blanks ONLY the status; it DELEGATES the Agents body to
-  // refreshTeamAgents(tab) (TASK-094), the Workflow body to refreshTeamWorkflow(tab)
-  // (TASK-105), and the Board body to refreshTeamBoard(tab) (TASK-103) instead of
-  // blanking any of them.
+  // refreshTeamAgents(tab) (TASK-094) and the Board body to refreshTeamBoard(tab)
+  // (TASK-103) instead of blanking either.
   const withFolder = fn.slice(fn.indexOf('return;'));
   assert.match(withFolder, /tab\.els\.teamStatus\.textContent = ''/, 'status blanked with a folder');
   assert.match(withFolder, /refreshTeamAgents\(tab\)/, 'agents body delegated to refreshTeamAgents with a folder (TASK-094)');
-  assert.match(withFolder, /refreshTeamWorkflow\(tab\)/, 'workflow body delegated to refreshTeamWorkflow with a folder (TASK-105)');
   assert.match(withFolder, /refreshTeamBoard\(tab\)/, 'board body delegated to refreshTeamBoard with a folder (TASK-103)');
   assert.ok(!/tab\.els\.teamAgentsBody\.textContent = ''/.test(withFolder), 'agents body NOT blanked — refreshTeamAgents owns it');
-  assert.ok(!/tab\.els\.teamWorkflowBody\.textContent = ''/.test(withFolder), 'workflow body NOT blanked — refreshTeamWorkflow owns it (TASK-105)');
   assert.ok(!/tab\.els\.teamBoardBody\.textContent = ''/.test(withFolder), 'board body NOT blanked — refreshTeamBoard owns it (TASK-103)');
   // And the replica's literal matches the shipped one.
   assert.equal(EMPTY, '(open a folder)');

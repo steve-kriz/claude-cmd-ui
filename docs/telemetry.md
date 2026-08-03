@@ -90,6 +90,22 @@ The receiver reads two OTLP signals:
 - **`claude_code.token.usage` / `claude_code.cost.usage` metrics** — cumulative
   monotonic sums, kept only as a cross-check next to the log-derived totals.
 
+### Session totals (all projects, TASK-195)
+
+Below the project-scoped per-model breakdown, a separate **Session totals (all
+projects)** section shows a per-model breakdown (calls, total tokens, total
+cost) for the **whole captured session** — every open project's bucket
+combined — driven by the app-wide `usage.byModel` (`aggregateUsage` over
+`allRows()`, i.e. `telemetry:getUsage('')`/`receiver.usage()`), NOT the
+focused tab's project-scoped `projectUsage.byModel`. It never issues its own
+IPC call: it starts zeroed and updates purely off the SAME pushed
+`telemetry:update` payload the project view already subscribes to
+(`payload.usage`, present on every push regardless of which project's ingest
+triggered it) — so opening two different projects and capturing usage in
+each shows both projects' models here, with a model used by both summed
+across them. Model labels use the same `telShortModel` helper as the
+per-call prompt log (`(unknown)` for an empty/absent model).
+
 ### The prompt log (what did *that* prompt cost?)
 
 Under the totals tiles and the per-model breakdown, the **Prompt log** lists one
@@ -126,6 +142,31 @@ rather than blanking it, and a payload tagged for a different project is ignored
 
 Rows degrade rather than break: a missing timestamp renders as `—`, an empty
 model as `(unknown)`, and a non-numeric token field as `0`.
+
+### The cost-over-time graph (TASK-199)
+
+Above the prompt log, **Cost over time** plots the same per-call rows
+(`getUsage(folder)`'s `recent`, seeded on mount, then kept live from
+`projectRecent` on every `telemetry:update` push) as a smoothed, cumulative
+line chart — one line per model, each the running total of the selected
+metric across the call's own timestamp-ordered history. A **metric toggle**
+(**Cost** / **Input tokens** / **Output tokens** / **Cache tokens** — cache
+is `cacheReadTokens + cacheCreationTokens`) switches what is plotted; Cost is
+the default on mount, switching re-renders instantly from the last rows the
+graph already has (no extra IPC round-trip), and the chosen metric survives
+live re-renders. Like the tiles and the prompt log, the graph is **scoped to
+the tab's project only** — there is no app-wide/all-projects timeline. Rows
+with an unparseable timestamp are skipped (unplaceable on the x-axis); a
+project with no usage yet shows an empty-state message instead of an empty
+chart.
+
+Implementation lives entirely inside `buildTelemetryControl` in
+[`renderer/renderer.js`](../renderer/renderer.js): `renderGraph(rows)` builds
+one cumulative series per model (`telShortModel`-labelled, colour-cycled),
+draws each as an SVG path smoothed with a Catmull-Rom-to-cubic-Bezier spline
+(`telSmoothPathD`), and renders point markers plus a legend — all hand-built
+DOM/SVG, no charting library. It is pure UI on top of already-captured data;
+no new receiver/IPC surface was added for it.
 
 ### Storing it online (optional)
 
@@ -235,6 +276,35 @@ and `main.js` exposes it as the `telemetry:usageForWindow` IPC channel
 - A row with a missing/unparseable `timestamp`, or a window with a missing/
   reversed `startedAt`/`finishedAt`, never matches.
 
+### Per-prompt correlation, scoped to ONE project (TASK-195)
+
+The `.claude-logs` **prompt history** (see [`prompt-history.md`](prompt-history.md))
+uses the SAME time-window correlation as the per-ticket cost log above, but
+with one important difference: it must never fold in a **different**,
+concurrently-running project's calls just because their timestamps happen to
+land inside the same window. `lib/telemetry-receiver.js#usageForWindowInProject(project, window)`
+mirrors `usageForProject`'s bucket-scoping pattern applied to
+`usageForWindow`'s time-window logic: it looks up ONE project's bucket (by the
+exact `tab.folder` string, the same key every other per-project telemetry read
+uses) and delegates to `lib/telemetry.js#usageForWindow` over just that
+bucket's full de-duplicated store — never the app-wide `allRows()` the plain
+`usageForWindow` receiver method scans. `main.js` exposes it as the
+`telemetry:usageForWindowInProject` IPC channel (`preload.js`'s
+`window.api.telemetry.usageForWindowInProject(project, { startedAt, finishedAt,
+model? })`), returning `{ ok: true, usage: <totals>|null }` — `null` when
+telemetry is off/no receiver, never a thrown error.
+
+The renderer's `loadPromptLog` calls this once per stored prompt lacking
+persisted real numbers: the window is `[entry.ts, nextEntry.ts)`, or
+`[entry.ts, now)` for the most recent entry (open-ended, so it is recomputed
+fresh on every load rather than persisted, since it may still be mid-sequence).
+The model filter is left empty so a sequence spanning multiple models sums in
+full. A bounded window's real totals (`inputTokens`, `outputTokens`, `costUsd`)
+are written back onto that entry via the existing `writePromptHistory`/
+`prompts:write` path so a reload re-displays them without re-correlating; when
+nothing matches the window (telemetry off, or an older app run), the entry
+falls back to the existing `length/4` estimate.
+
 ## Configuration
 
 Persisted in `.env` (see [`.env.example`](../.env.example)):
@@ -270,6 +340,9 @@ Persisted in `.env` (see [`.env.example`](../.env.example)):
   prompt log renders live off one payload. Also home to the
   live-update callback, the debounced forwarder, and `usageForWindow` (runs
   `lib/telemetry.js`'s helper over every bucket's full de-duplicated store).
+  `usageForWindowInProject(project, window)` (TASK-195) is the project-scoped
+  sibling used for per-prompt correlation — same helper, but over just ONE
+  bucket's store, so a different project's calls are never folded in.
   Loopback-only, POST-only, body-capped.
 - [`lib/ticket-cost.js`](../lib/ticket-cost.js) — the per-ticket, per-activity
   cost log (`appendActivity`/`totalActivities`), extended with
@@ -282,7 +355,9 @@ Persisted in `.env` (see [`.env.example`](../.env.example)):
   "This project" checkbox (TASK-157).
 - `main.js` — boots the receiver from `.env` (injecting `host`/`username`),
   injects/clears the OTEL env, and exposes the `telemetry:*` IPC channels,
-  including `telemetry:usageForWindow` and `telemetry:setActiveProject`. The
+  including `telemetry:usageForWindow`, `telemetry:usageForWindowInProject`
+  (TASK-195, per-prompt correlation scoped to one project) and
+  `telemetry:setActiveProject`. The
   `telemetry:getUsage` channel's response `usage` payload SHAPE intentionally
   differs by argument (TASK-166): a no-arg/falsy call returns
   `{ usage, metricTotals, running, recent }` (`receiver.getUsage()`), while a
@@ -295,12 +370,19 @@ Persisted in `.env` (see [`.env.example`](../.env.example)):
   (`buildTelemetryControl`), whose capture toggle and forward URL/token/master
   switch stay app-global but whose totals grid, per-model breakdown, prompt log
   (`renderLog` + the `telUpTokens`/`telDownTokens`/`telShortModel`/`telFmtTime`/
-  `telRowTitle` display helpers), and "store online for this project" checkbox
-  are scoped to the tab's `folder`;
+  `telRowTitle` display helpers), cost-over-time graph (`renderGraph`,
+  `telSmoothPathD`, TASK-199), and "store online for this project" checkbox
+  are scoped to the tab's `folder`; a separate **Session totals** section
+  (`renderSessionUsage`, TASK-195) is driven by the app-wide `payload.usage`
+  off the same live subscription, covering every open project combined;
   plus the task modal's **Cost by activity** section
   (`ticketActivityLines`/`ticketActivityTotalLine`, live-correlated via
-  `window.api.telemetry.usageForWindow`), and `activateTab` which reports the
-  focused folder to the receiver via `window.api.telemetry.setActiveProject`.
+  `window.api.telemetry.usageForWindow`), the **Logs** panel's prompt history
+  (`loadPromptLog`/`renderLogsList`/`correlatePromptEntryUsage`, TASK-195,
+  live-correlated per prompt via `window.api.telemetry.usageForWindowInProject`
+  and persisted back through `window.api.prompts.write`), and `activateTab`
+  which reports the focused folder to the receiver via
+  `window.api.telemetry.setActiveProject`.
 
 ## Security & privacy notes
 

@@ -26,7 +26,10 @@ const {
   canRunInParallel,
 } = require('../lib/ticket-queue');
 
-const { POST_PROCESSING_KIND } = require('../lib/ticket-lanes');
+// TASK-206 removed the kind:post-processing concept and its POST_PROCESSING_KIND
+// export entirely. A leftover `kind: post-processing` frontmatter key from before
+// the removal is now just an arbitrary, ignored string.
+const LEGACY_POST_PROCESSING_KIND = 'post-processing';
 
 // Tiny Given/When/Then scaffolding so scenario bodies read as Gherkin steps
 // without any external cucumber runtime.
@@ -154,17 +157,18 @@ for (const status of ['todo', 'failed-testing']) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-scenario('post-processing precedence still wins over the user-status guard', () => {
+scenario('a leftover kind:post-processing key does not change the user-status guard verdict (TASK-206)', () => {
   let res;
-  Given('a ticket with kind "post-processing", status "ux-review", and agent "agent-1"', () => {});
+  Given('a ticket with a leftover kind "post-processing", status "ux-review", and agent "agent-1"', () => {});
   When('claimTicket runs for agent "agent-1"', () => {
     res = claimTicket(
-      { id: 'TASK-1', status: 'ux-review', agent: 'agent-1', kind: POST_PROCESSING_KIND },
+      { id: 'TASK-1', status: 'ux-review', agent: 'agent-1', kind: LEGACY_POST_PROCESSING_KIND },
       'agent-1',
     );
   });
-  Then('the result is ok:false with reason "post-processing"', () => {
+  Then('the result is ok:false with reason "not-claimable", never "post-processing"', () => {
     assert.equal(res.ok, false);
-    assert.equal(res.reason, 'post-processing');
+    assert.equal(res.reason, 'not-claimable');
+    assert.notEqual(res.reason, 'post-processing');
   });
 });

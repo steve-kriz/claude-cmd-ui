@@ -38,7 +38,7 @@ const CONFIG_UX = {
   columns: [
     { status: 'todo' }, { status: 'defining' }, { status: 'in-progress' },
     { status: 'testing' }, { status: 'ux-review', label: 'UX Review' },
-    { status: 'post-processing' }, { status: 'done' },
+    { status: 'done' },
   ],
 };
 
@@ -55,7 +55,7 @@ test('isSafeTasksSlug: accepts a well-formed user slug', () => {
 });
 
 test('isSafeTasksSlug: every system status is also fs-safe', () => {
-  for (const s of ['todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done', 'failed-testing']) {
+  for (const s of ['todo', 'defining', 'in-progress', 'testing', 'done', 'failed-testing']) {
     assert.equal(mod.isSafeTasksSlug(s), true, `${s} is fs-safe`);
   }
 });
@@ -93,7 +93,7 @@ test('isSafeTasksSlug: non-strings never throw and are unsafe', () => {
 
 test('ticketFolderForStatusWith: a system status owns tasks/<status>/ regardless of userStatuses', () => {
   const us = userSet(CONFIG_UX);
-  for (const s of ['todo', 'in-progress', 'testing', 'done', 'post-processing', 'failed-testing']) {
+  for (const s of ['todo', 'in-progress', 'testing', 'done', 'failed-testing']) {
     assert.equal(mod.ticketFolderForStatusWith(s, us), s, `${s} owns tasks/${s}/`);
   }
 });
@@ -130,22 +130,22 @@ test('ticketFolderForStatusWith: with no/empty userStatuses it is exactly the sy
 // populateTaskStatusOptions — the config-driven modal <select> builder
 // ===========================================================================
 
-test('populateTaskStatusOptions: null config → the six system options in board order + "Won\'t do"', () => {
+test('populateTaskStatusOptions: null config → the five system options in board order + "Won\'t do"', () => {
   const sel = document.createElement('select');
   mod.populateTaskStatusOptions(sel, mod.normalizeTasksColumns(null));
   assert.deepEqual(sel.children.map((o) => o.value),
-    ['todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done', '__wont-do__']);
+    ['todo', 'defining', 'in-progress', 'testing', 'done', '__wont-do__']);
   // Labels are the fixed system headers (values remain the slugs).
   assert.deepEqual(sel.children.map((o) => o.textContent),
-    ['To Do', 'Defining', 'In Progress', 'Testing', 'Post-processing', 'Done', "Won't do"]);
+    ['To Do', 'Defining', 'In Progress', 'Testing', 'Done', "Won't do"]);
 });
 
 test('populateTaskStatusOptions: a user column is inserted at its board position (in order)', () => {
   const sel = document.createElement('select');
   mod.populateTaskStatusOptions(sel, mod.normalizeTasksColumns(CONFIG_UX));
-  // ux-review is anchored to `testing`, so it sits between testing and post-processing.
+  // ux-review is anchored to `testing`, so it sits between testing and done.
   assert.deepEqual(sel.children.map((o) => o.value),
-    ['todo', 'defining', 'in-progress', 'testing', 'ux-review', 'post-processing', 'done', '__wont-do__']);
+    ['todo', 'defining', 'in-progress', 'testing', 'ux-review', 'done', '__wont-do__']);
   // The user column's configured label is used (value stays the slug).
   const ux = sel.children.find((o) => o.value === 'ux-review');
   assert.equal(ux.textContent, 'UX Review');
@@ -159,7 +159,7 @@ test('populateTaskStatusOptions: rebuilds from scratch (clears any prior options
   sel.appendChild(stale);
   mod.populateTaskStatusOptions(sel, mod.normalizeTasksColumns(null));
   assert.ok(!sel.children.some((o) => o.value === 'stale'), 'prior options wiped before rebuild');
-  assert.equal(sel.children.length, 7, 'six system options + "Won\'t do"');
+  assert.equal(sel.children.length, 6, 'five system options + "Won\'t do"');
 });
 
 test('populateTaskStatusOptions: a label with markup is written as literal text (textContent, XSS-safe)', () => {

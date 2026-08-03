@@ -61,22 +61,22 @@ function loadRendererFactory() {
     extractConst(rendererSrc, 'TASKS_RESERVED_SLUGS'),
     extractConst(rendererSrc, 'TASKS_MAX_SLUG_LENGTH'),
     extractConst(rendererSrc, 'TASKS_SLUG_RE'),
-    // TASK-180 - tasksBuildColumn normalises a column's optional `phase` link
-    // via tasksNormalizeColumnPhase, which reads TASKS_PHASE_KEYS.
-    extractConst(rendererSrc, 'TASKS_PHASE_KEYS'),
-    // TASK-183 - refreshTeamBoard's baseline phase-link snapshot uses
-    // tasksPhaseLinkCounts (which reads TASKS_PHASE_KEYS above).
-    extractConst(rendererSrc, 'TASKS_PHASE_ENABLED_DEFAULTS'),
-    extractFn(rendererSrc, 'tasksPhaseLinkCounts'),
+    // TASK-180's `phase` link and TASK-183's phase-link machinery
+    // (TASKS_PHASE_KEYS/TASKS_PHASE_ENABLED_DEFAULTS/tasksPhaseLinkCounts/
+    // tasksNormalizeColumnPhase) were fully removed by TASK-201/203.
     extractConst(rendererSrc, 'TASKS_UNSAFE_KEYS'),
     extractConst(rendererSrc, 'TASKS_MAX_CONCURRENCY'),
     extractConst(rendererSrc, 'TASKS_DEFAULT_CONCURRENCY'),
     extractFn(rendererSrc, 'tasksIsUnsafeKey'),
     extractFn(rendererSrc, 'resolveTasksConcurrency'),
     extractFn(rendererSrc, 'tasksPrettifyLabel'),
-    extractFn(rendererSrc, 'tasksNormalizeColumnPhase'),
     extractFn(rendererSrc, 'tasksBuildColumn'),
     extractFn(rendererSrc, 'normalizeTasksColumns'),
+    // TASK-200 — tasksSerializeTeamConfig now normalises skill.contextOptimization
+    // via tasksNormalizeContextOptimization, so these must be in scope too.
+    extractConst(rendererSrc, 'TASKS_CONTEXT_OPT_LEVELS'),
+    extractConst(rendererSrc, 'TASKS_CONTEXT_OPT_DEFAULT'),
+    extractFn(rendererSrc, 'tasksNormalizeContextOptimization'),
     extractFn(rendererSrc, 'tasksSerializeTeamConfig'),
     extractFn(rendererSrc, 'buildWorkingConfigFromRaw'),
     extractFn(rendererSrc, 'readTeamAgentNames'),

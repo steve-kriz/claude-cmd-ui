@@ -20,7 +20,10 @@ const {
   canRunInParallel,
 } = require('../lib/ticket-queue');
 
-const { POST_PROCESSING_KIND } = require('../lib/ticket-lanes');
+// TASK-206 removed the kind:post-processing concept and its POST_PROCESSING_KIND
+// export entirely. A leftover `kind: post-processing` frontmatter key from before
+// the removal is now just an arbitrary, ignored string.
+const LEGACY_POST_PROCESSING_KIND = 'post-processing';
 
 // ── The reported bug: same-agent re-entry on a user status is refused ─────────
 
@@ -75,13 +78,14 @@ test('foreign-agent user-status ticket still reports claimed (precedence over no
   assert.equal(res.reason, 'claimed');
 });
 
-test('post-processing precedence wins over the user-status guard even same-agent', () => {
+test('a leftover kind:post-processing key does not change the user-status guard verdict (kind is inert, TASK-206)', () => {
   const res = claimTicket(
-    { id: 'TASK-1', status: 'ux-review', agent: 'agent-1', kind: POST_PROCESSING_KIND },
+    { id: 'TASK-1', status: 'ux-review', agent: 'agent-1', kind: LEGACY_POST_PROCESSING_KIND },
     'agent-1',
   );
   assert.equal(res.ok, false);
-  assert.equal(res.reason, 'post-processing');
+  assert.equal(res.reason, 'not-claimable', 'still refused purely by the user status, not the kind');
+  assert.notEqual(res.reason, 'post-processing', 'no post-processing reason is ever returned');
 });
 
 test('blank agent id refuses no-agent-id first, regardless of user status', () => {

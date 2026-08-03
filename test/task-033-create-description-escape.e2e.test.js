@@ -192,11 +192,13 @@ test('Scenario: the real openNewTaskModal create path routes the description thr
     !/const\s+description\s*=\s*bodyArea\.value\.trim\(\)\s*\|\|/.test(rendererSrc),
     'the raw bodyArea.value.trim() composition must not reappear',
   );
-  // And both create-from-board affordances funnel through openNewTaskModal:
-  //  - the toolbar "New ticket" button
+  // And the toolbar "New ticket" button funnels through openNewTaskModal (TASK-206
+  // removed the only other caller — the post-processing lane's Add button — along
+  // with the opts/mode parameter entirely; openNewTaskModal now takes only `tab`).
   assert.match(rendererSrc, /tasksNewBtn\.addEventListener\('click',\s*\(\)\s*=>\s*openNewTaskModal\(tab\)\)/);
-  //  - the post-processing lane Add button (opens with status+kind)
-  assert.match(rendererSrc, /openNewTaskModal\(tab,\s*\{[\s\S]*?status:\s*TASKS_POST_PROCESSING_STATUS[\s\S]*?kind:\s*TASKS_POST_PROCESSING_KIND/);
+  assert.match(rendererSrc, /function openNewTaskModal\(tab\)\s*\{/, 'openNewTaskModal takes no opts/mode parameter');
+  assert.ok(!rendererSrc.includes('TASKS_POST_PROCESSING_STATUS'), 'the post-processing status constant is gone');
+  assert.ok(!rendererSrc.includes('TASKS_POST_PROCESSING_KIND'), 'the post-processing kind constant is gone');
   // And the renderer's mirror is the same transform as the canonical helper:
   // /^(\s*)(#+)(\s)/ with replacement '$1\\$2$3'.
   assert.match(rendererSrc, /line\.replace\(\/\^\(\\s\*\)\(#\+\)\(\\s\)\/,\s*'\$1\\\\\$2\$3'\)/);

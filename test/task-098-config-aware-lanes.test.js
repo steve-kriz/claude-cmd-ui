@@ -26,13 +26,10 @@ const {
   VALID_STATUSES,
   ACTIVE_STATUSES,
   FAILED_STATUS,
-  POST_PROCESSING_STATUS,
-  POST_PROCESSING_KIND,
   UNKNOWN_STATUS,
   isKnownStatus,
   isActiveStatus,
   isFailedStatus,
-  isPostProcessingTicket,
   laneForStatus,
   laneStatusesFor,
   isKnownStatusFor,
@@ -56,7 +53,6 @@ function columnsWithUxReviewAfterTesting() {
     col('in-progress', true),
     col('testing', true),
     col('ux-review', false),
-    col('post-processing', true),
     col('done', true),
   ];
 }
@@ -67,16 +63,18 @@ function columnsWithUxReviewAfterTesting() {
 // ---------------------------------------------------------------------------
 
 test('all pre-existing exports still exist with unchanged names/types', () => {
-  assert.deepEqual(LANE_STATUSES, ['todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done']);
+  assert.deepEqual(LANE_STATUSES, ['todo', 'defining', 'in-progress', 'testing', 'done']);
   assert.deepEqual(VALID_STATUSES, [...LANE_STATUSES, 'failed-testing']);
   assert.deepEqual([...ACTIVE_STATUSES].sort(), ['defining', 'in-progress', 'testing']);
   assert.equal(FAILED_STATUS, 'failed-testing');
-  assert.equal(POST_PROCESSING_STATUS, 'post-processing');
-  assert.equal(POST_PROCESSING_KIND, 'post-processing');
   assert.equal(UNKNOWN_STATUS, 'unknown');
-  for (const fn of [isKnownStatus, isActiveStatus, isFailedStatus, isPostProcessingTicket, laneForStatus]) {
+  for (const fn of [isKnownStatus, isActiveStatus, isFailedStatus, laneForStatus]) {
     assert.equal(typeof fn, 'function');
   }
+  // TASK-206: post-processing was removed from the module and its exports entirely.
+  assert.ok(!('POST_PROCESSING_STATUS' in lanes), 'POST_PROCESSING_STATUS is gone');
+  assert.ok(!('POST_PROCESSING_KIND' in lanes), 'POST_PROCESSING_KIND is gone');
+  assert.ok(!('isPostProcessingTicket' in lanes), 'isPostProcessingTicket is gone');
 });
 
 test('pre-existing predicates/behaviour unchanged (spot-check)', () => {
@@ -103,14 +101,14 @@ test('laneStatusesFor(defaultConfig().columns) equals LANE_STATUSES', () => {
 
 test('laneStatusesFor inserts a user column at its anchored position (after testing)', () => {
   assert.deepEqual(laneStatusesFor(columnsWithUxReviewAfterTesting()), [
-    'todo', 'defining', 'in-progress', 'testing', 'ux-review', 'post-processing', 'done',
+    'todo', 'defining', 'in-progress', 'testing', 'ux-review', 'done',
   ]);
 });
 
 test('laneStatusesFor anchors a user column before the first system column ahead of todo', () => {
   const cols = [col('triage', false), ...defaultConfig().columns];
   assert.deepEqual(laneStatusesFor(cols), [
-    'triage', 'todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done',
+    'triage', 'todo', 'defining', 'in-progress', 'testing', 'done',
   ]);
 });
 
@@ -131,7 +129,7 @@ test('laneStatusesFor drops malformed entries but keeps the valid user column', 
   const out = laneStatusesFor(cols);
   assert.ok(out.includes('ux-review'));
   // ux-review anchors to todo (last system slug before it), lands right after todo.
-  assert.deepEqual(out, ['todo', 'ux-review', 'defining', 'in-progress', 'testing', 'post-processing', 'done']);
+  assert.deepEqual(out, ['todo', 'ux-review', 'defining', 'in-progress', 'testing', 'done']);
 });
 
 // ---------------------------------------------------------------------------

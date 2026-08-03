@@ -418,27 +418,27 @@ test('selectNextBatch skips tickets claimed by another agent and non-claimable l
   assert.deepEqual(batch.map((t) => t.fm.id), ['TASK-004', 'TASK-005']);
 });
 
-// --- TASK-028: post-processing tickets are excluded from the build swarm ----
+// --- TASK-206: post-processing removed; kind:post-processing treated as regular ticket ----
 
-test('claimTicket refuses a kind:post-processing ticket even when status is claimable', () => {
-  // A recipe ticket must never be built, even if its status were tampered to a
-  // claimable value.
-  for (const status of ['todo', 'failed-testing', 'post-processing']) {
+test('claimTicket accepts a kind:post-processing ticket at a claimable status (TASK-206)', () => {
+  // Post-processing tickets are no longer excluded; they're treated as regular tickets by status.
+  for (const status of ['todo', 'failed-testing']) {
     const res = claimTicket({ id: 'PP-1', status, kind: 'post-processing' }, 'a1', { at: '2026-07-18T01:00:00.000Z' });
-    assert.equal(res.ok, false, `post-processing kind not claimable at status ${status}`);
-    assert.equal(res.reason, 'post-processing');
+    assert.equal(res.ok, true, `kind:post-processing now claimable at status ${status}`);
   }
 });
 
-test('selectNextBatch never selects a post-processing ticket (kind guard)', () => {
+test('selectNextBatch includes a kind:post-processing ticket when status is claimable (TASK-206)', () => {
   const tickets = [
     T('TASK-001', 'todo'),                                   // normal work
-    T('PP-1', 'post-processing', { kind: 'post-processing' }), // recipe — excluded
-    T('PP-2', 'todo', { kind: 'post-processing' }),          // tampered status — still excluded
+    T('PP-1', 'post-processing', { kind: 'post-processing' }), // post-processing status (not claimable)
+    T('PP-2', 'todo', { kind: 'post-processing' }),          // claimable by status, despite kind
   ];
   const batch = selectNextBatch(tickets, { limit: 8 });
-  assert.deepEqual(batch.map((t) => t.fm.id), ['TASK-001'],
-    'only the plain todo ticket is dispatched; post-processing tickets excluded');
+  // Both TASK-001 and PP-2 should be included (order is by id); PP-1 is not claimable due to post-processing status
+  const ids = batch.map((t) => t.fm.id).sort();
+  assert.deepEqual(ids, ['PP-2', 'TASK-001'],
+    'normal tickets and claimable kind:post-processing tickets included; post-processing status excluded');
 });
 
 test('CLAIMABLE_STATUSES is unchanged by TASK-028 (todo + failed-testing)', () => {
@@ -638,16 +638,23 @@ test('canRunInParallel: reason precedence — eligibility decided before capacit
   assert.equal(canRunInParallel(full, T('N', 'todo', { agent: 'x' }).fm, { limit: 3, agentId: 'me' }).reason, 'claimed');
   // A missing ticket reports no-ticket, not no-slots.
   assert.equal(canRunInParallel(full, null, { limit: 3 }).reason, 'no-ticket');
-  // A post-processing ticket reports post-processing, not no-slots.
-  assert.equal(canRunInParallel(full, T('N', 'todo', { kind: 'post-processing' }).fm, { limit: 3 }).reason, 'post-processing');
+  // A kind:post-processing ticket with todo status now reports no-slots (or eligible), no special reason (TASK-206).
+  // The key change: post-processing is no longer a special reason.
+  const ppTodo = canRunInParallel(full, T('N', 'todo', { kind: 'post-processing' }).fm, { limit: 3 });
+  assert.equal(ppTodo.reason, 'no-slots', 'post-processing kind no longer special; reports capacity, not kind (TASK-206)');
 });
 
-test('canRunInParallel: kind:post-processing ticket is NEVER eligible (reason post-processing)', () => {
-  for (const status of ['todo', 'failed-testing', 'post-processing']) {
+test('canRunInParallel: kind:post-processing ticket with claimable status is eligible (TASK-206)', () => {
+  // Post-processing tickets are now treated like regular tickets — claimable by status.
+  for (const status of ['todo', 'failed-testing']) {
     const res = canRunInParallel([], T('PP', status, { kind: 'post-processing' }).fm, { limit: 3 });
-    assert.equal(res.ok, false, `post-processing not eligible at status ${status}`);
-    assert.equal(res.reason, 'post-processing');
+    assert.equal(res.ok, true, `post-processing kind with ${status} status now claimable`);
+    assert.equal(res.reason, 'ok');
   }
+  // A post-processing *status* is still not claimable (it's not in CLAIMABLE_STATUSES).
+  const ppStatus = canRunInParallel([], T('PP', 'post-processing').fm, { limit: 3 });
+  assert.equal(ppStatus.ok, false, 'post-processing status is not-claimable');
+  assert.equal(ppStatus.reason, 'not-claimable');
 });
 
 test('canRunInParallel: accepts both bare fm and { fm } wrappers for tickets[] and newTicket (identical verdicts)', () => {

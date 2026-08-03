@@ -6,7 +6,7 @@
 // are scenario-style node:test cases in Given/When/Then form.
 //
 // Feature: Keep the laptop awake while orchestrate tasks run. While >=1 ticket is
-// actively worked (defining / in-progress / testing / post-processing) the app
+// actively worked (defining / in-progress / testing) the app
 // holds ONE OS wake-lock via Electron's powerSaveBlocker; when the board goes
 // idle the lock is released; the lock is never stacked and never leaked past
 // shutdown; and a platform where powerSaveBlocker is unavailable/throwing must
@@ -684,7 +684,7 @@ test('DRIFT GUARD: preload exposes tasks.reportActivity as a fire-and-forget sen
 test('DRIFT GUARD: renderer aggregates keep-awake tickets across all tabs and reports the app-wide count', () => {
   // The renderer's status set mirrors lib/keep-awake KEEP_AWAKE_STATUSES.
   assert.match(rendererSrc,
-    /const TASKS_KEEP_AWAKE_STATUSES = \['defining', 'in-progress', 'testing', 'post-processing'\];/,
+    /const TASKS_KEEP_AWAKE_STATUSES = \['defining', 'in-progress', 'testing'\];/,
     'renderer keep-awake status set matches the lib');
   const fn = rendererSrc.slice(rendererSrc.indexOf('function reportTasksActivity'),
     rendererSrc.indexOf('function reportTasksActivity') + 500);

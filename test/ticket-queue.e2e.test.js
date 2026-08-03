@@ -241,7 +241,7 @@ scenario('The verdict composes with selectNextBatch', () => {
   });
 });
 
-scenario('A kind:post-processing ticket is NEVER eligible (consistent with selectNextBatch)', () => {
+scenario('A kind:post-processing ticket with claimable status IS now eligible (TASK-206)', () => {
   let board; let newTicket; let res; let candidates;
   Given('a board with free slots', () => {
     board = [T('TASK-001', 'in-progress', { agent: 'a1' })]; // 2 free @ limit 3
@@ -253,13 +253,13 @@ scenario('A kind:post-processing ticket is NEVER eligible (consistent with selec
     res = canRunInParallel(board, newTicket, { limit: LIMIT });
     candidates = selectNextBatch([...board, newTicket], { limit: LIMIT }).map((t) => t.fm.id);
   });
-  Then('ok is false and reason is "post-processing"', () => {
-    assert.equal(res.ok, false);
-    assert.equal(res.reason, 'post-processing');
+  Then('ok is true and reason is "ok" (post-processing kind no longer special)', () => {
+    assert.equal(res.ok, true, 'post-processing kind with claimable status is now eligible (TASK-206)');
+    assert.equal(res.reason, 'ok');
   });
-  And('it is excluded from selectNextBatch (TASK-028 guard)', () => {
-    assert.ok(!candidates.includes('PP-1'),
-      `post-processing ticket must not appear in selectNextBatch ${JSON.stringify(candidates)}`);
+  And('it is included in selectNextBatch (no longer excluded)', () => {
+    assert.ok(candidates.includes('PP-1'),
+      `post-processing ticket must appear in selectNextBatch ${JSON.stringify(candidates)}`);
   });
 });
 

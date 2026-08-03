@@ -545,9 +545,6 @@ function createTab() {
       teamAgentsAddBtn: ws.querySelector('.teamAgentsAddBtn'),
       teamAgentsRefresh: ws.querySelector('.teamAgentsRefresh'),
       teamAgentsBody: ws.querySelector('.teamAgentsBody'),
-      teamWorkflowSection: ws.querySelector('.teamWorkflowSection'),
-      teamWorkflowBody: ws.querySelector('.teamWorkflowBody'),
-      teamWorkflowRefresh: ws.querySelector('.teamWorkflowRefresh'),
       teamBoardSection: ws.querySelector('.teamBoardSection'),
       teamBoardSaveBtn: ws.querySelector('.teamBoardSaveBtn'),
       teamBoardRefresh: ws.querySelector('.teamBoardRefresh'),
@@ -598,9 +595,6 @@ function createTab() {
   }
   if (tab.els.teamAgentsAddBtn) {
     tab.els.teamAgentsAddBtn.addEventListener('click', () => openAddAgentModal(tab));
-  }
-  if (tab.els.teamWorkflowRefresh) {
-    tab.els.teamWorkflowRefresh.addEventListener('click', () => refreshTeamWorkflow(tab));
   }
   if (tab.els.teamBoardRefresh) {
     tab.els.teamBoardRefresh.addEventListener('click', () => refreshTeamBoard(tab));
@@ -1339,35 +1333,60 @@ function setupSplitter(tab) {
 const USAGE_POLL_MS = 5 * 60 * 1000;
 let usagePollTimer = null;
 
-// Paint one tab's bar from a lib/claude-usage view. A view with `ok: false`
-// (probe failed, panel unreadable, not logged in) hides the bar rather than
-// showing a zero — a quota bar reading 0% when it simply could not be read is
-// actively misleading. The reason still lands in the title for the next hover.
+// Paint one tab's bar from a lib/claude-usage view. Two distinct "not a real
+// figure" states, deliberately not conflated:
+//   - openCode has no Claude weekly limit to report at all, so its bar is fully
+//     HIDDEN (`.hidden`, backed by a real CSS rule — see styles.css).
+//   - a `claude` pane whose reading is unavailable (`view.ok === false`, or no
+//     view at all yet) stays VISIBLE as a muted "unavailable" affordance
+//     (`.is-unavailable`) with the reason in `title` — a bar that vanishes
+//     whenever a probe fails is indistinguishable from "nothing to see here",
+//     and a bar reading a stale number from the last successful probe is
+//     actively misleading, so both the fill and the label are reset every time.
 function applyUsageView(tab, view) {
   const els = tab && tab.els;
   if (!els || !els.usageBar) return;
   const bar = els.usageBar;
   bar.classList.remove('is-loading');
+  bar.classList.remove('state-ok', 'state-near', 'state-over', 'state-unknown');
 
-  // openCode panes have no Claude weekly limit to report.
-  if (tab.agent !== 'claude' || !view || !view.ok) {
+  const resetPaint = () => {
+    if (els.usageBarFill) els.usageBarFill.style.width = '0%';
+    if (els.usageBarPace) els.usageBarPace.style.left = '0%';
+    // textContent, never innerHTML: the label is derived from scraped terminal
+    // output, which is untrusted text.
+    if (els.usageBarLabel) els.usageBarLabel.textContent = '—';
+  };
+
+  // openCode panes have no Claude weekly limit to report — the ONE case that is
+  // actually hidden rather than shown-as-unavailable.
+  if (!tab || tab.agent !== 'claude') {
     bar.classList.add('hidden');
-    if (view && view.title) bar.title = view.title;
+    bar.classList.remove('is-unavailable', 'pace-unknown');
+    resetPaint();
+    bar.title = '';
     return;
   }
 
+  bar.classList.remove('hidden');
+
+  if (!view || !view.ok) {
+    bar.classList.add('is-unavailable');
+    bar.classList.add('pace-unknown');
+    resetPaint();
+    bar.title = (view && view.title) || 'Weekly usage unavailable.';
+    return;
+  }
+
+  bar.classList.remove('is-unavailable');
   const pct = Math.min(100, Math.max(0, Number(view.percent) || 0));
   const pace = view.pacePercent == null ? null : Math.min(100, Math.max(0, Number(view.pacePercent)));
 
-  bar.classList.remove('hidden');
-  bar.classList.remove('state-ok', 'state-near', 'state-over', 'state-unknown');
   bar.classList.add('state-' + (view.state || 'ok'));
   bar.classList.toggle('pace-unknown', pace == null);
   bar.title = view.title || '';
   if (els.usageBarFill) els.usageBarFill.style.width = pct + '%';
   if (els.usageBarPace) els.usageBarPace.style.left = (pace == null ? 0 : pace) + '%';
-  // textContent, never innerHTML: the label is derived from scraped terminal
-  // output, which is untrusted text.
   if (els.usageBarLabel) els.usageBarLabel.textContent = view.label || '—';
 }
 
@@ -1378,14 +1397,23 @@ async function refreshUsageBar(tab, opts = {}) {
   const els = tab && tab.els;
   if (!els || !els.usageBar) return;
   if (tab.agent !== 'claude') { applyUsageView(tab, null); return; }
-  if (!window.api || !window.api.usage || !window.api.usage.get) return;
+  // No bridge (older preload, or the API surface missing entirely): leave the
+  // bar in the visible-unavailable state rather than a half-painted one — it
+  // must not go on showing whatever it happened to be painted with before.
+  if (!window.api || !window.api.usage || !window.api.usage.get) {
+    applyUsageView(tab, { ok: false, reason: 'no-bridge', title: 'Weekly usage unavailable — the app bridge is missing.' });
+    return;
+  }
   // A forced scrape takes seconds; dim the bar so the click visibly registers.
   if (opts.force) els.usageBar.classList.add('is-loading');
   try {
     const res = await window.api.usage.get({ cwd: tab.folder || '', force: !!opts.force });
     applyUsageView(tab, res && res.view);
   } catch (_) {
-    els.usageBar.classList.remove('is-loading');
+    // A rejected/throwing invoke is still a failed reading: fall through to the
+    // same visible-unavailable state (and clear a stale prior figure) rather
+    // than just clearing the loading dim and leaving whatever was painted before.
+    applyUsageView(tab, { ok: false, reason: 'unparsed', title: 'Weekly usage unavailable — the request failed.' });
   }
 }
 
@@ -3529,6 +3557,36 @@ function fmtTokens(n) {
   return v.toLocaleString();
 }
 
+// TASK-195: correlate ONE top-level prompt entry's real token/cost totals off
+// the captured telemetry for the whole `claude_code.api_request` sequence it
+// triggered. The window is [entry.ts, nextEntry.ts) — or, for the newest
+// entry (no `nextEntry`), [entry.ts, now) — and is scoped to THIS project's
+// own telemetry bucket only (usageForWindowInProject), so a different,
+// concurrently-running project's calls are never folded in. The model filter
+// is left empty so a sequence spanning multiple models is summed in full.
+// Returns null (no change) when correlation is unavailable/inapplicable
+// (missing api, missing entry.ts, or nothing matched the window) rather than
+// ever throwing — callers keep whatever value they already had.
+async function correlatePromptEntryUsage(folder, entry, nextEntry) {
+  try {
+    if (!entry || !entry.ts) return null;
+    if (!window.api || !window.api.telemetry || typeof window.api.telemetry.usageForWindowInProject !== 'function') return null;
+    const startedAt = entry.ts;
+    const finishedAt = (nextEntry && nextEntry.ts) ? nextEntry.ts : new Date().toISOString();
+    const res = await window.api.telemetry.usageForWindowInProject(folder, { startedAt, finishedAt, model: '' });
+    const usage = res && res.usage;
+    if (!usage || !(Number(usage.requests) > 0)) return null;
+    return {
+      inputTokens: Number.isFinite(usage.inputTokens) ? usage.inputTokens : 0,
+      outputTokens: Number.isFinite(usage.outputTokens) ? usage.outputTokens : 0,
+      costUsd: Number.isFinite(usage.costUsd) ? usage.costUsd : 0,
+    };
+  } catch (err) {
+    console.warn('[telemetry.usageForWindowInProject]', err);
+    return null;
+  }
+}
+
 async function loadPromptLog(tab, showOnLoad) {
   if (!tab.folder) return;
   try {
@@ -3545,13 +3603,46 @@ async function loadPromptLog(tab, showOnLoad) {
     const res = await window.api.prompts.read(tab.folder);
     if (res && res.ok) {
       const raw = Array.isArray(res.entries) ? res.entries : [];
-      tab.promptLog = raw.map((e) => {
+      const updatedRaw = raw.slice();
+      let dirty = false;
+      const mapped = [];
+      for (let i = 0; i < raw.length; i++) {
+        const e = raw[i];
         const prompt = e && typeof e.prompt === 'string' ? e.prompt : '';
         const response = e && typeof e.response === 'string' ? e.response : '';
-        const inputTokens = Number.isFinite(e && e.inputTokens) ? e.inputTokens : estimateTokens(prompt);
-        const outputTokens = Number.isFinite(e && e.outputTokens) ? e.outputTokens : estimateTokens(response);
-        const costUsd = Number.isFinite(e && e.costUsd) ? e.costUsd : estimateCostUsd(inputTokens, outputTokens);
-        return {
+        let inputTokens = Number.isFinite(e && e.inputTokens) ? e.inputTokens : null;
+        let outputTokens = Number.isFinite(e && e.outputTokens) ? e.outputTokens : null;
+        let costUsd = Number.isFinite(e && e.costUsd) ? e.costUsd : null;
+        let real = inputTokens != null && outputTokens != null && costUsd != null;
+
+        if (!real) {
+          // Only a BOUNDED window (a next entry already exists) is persisted —
+          // the newest entry's window is still open-ended (extends to "now")
+          // and may be mid-sequence, so its correlation is recomputed fresh on
+          // every load rather than frozen into the file prematurely.
+          const nextEntry = raw[i + 1];
+          const correlated = await correlatePromptEntryUsage(tab.folder, e, nextEntry);
+          if (correlated) {
+            inputTokens = correlated.inputTokens;
+            outputTokens = correlated.outputTokens;
+            costUsd = correlated.costUsd;
+            real = true;
+            if (nextEntry) {
+              updatedRaw[i] = Object.assign({}, e, {
+                inputTokens: correlated.inputTokens,
+                outputTokens: correlated.outputTokens,
+                costUsd: correlated.costUsd,
+              });
+              dirty = true;
+            }
+          }
+        }
+
+        if (inputTokens == null) inputTokens = estimateTokens(prompt);
+        if (outputTokens == null) outputTokens = estimateTokens(response);
+        if (costUsd == null) costUsd = estimateCostUsd(inputTokens, outputTokens);
+
+        mapped.push({
           ts: (e && e.ts) || null,
           source: (e && e.source) || 'user',
           prompt,
@@ -3559,11 +3650,25 @@ async function loadPromptLog(tab, showOnLoad) {
           inputTokens,
           outputTokens,
           costUsd,
+          real,
           modelAssumed: (e && e.modelAssumed) || COST_MODEL_LABEL
-        };
-      });
+        });
+      }
+      tab.promptLog = mapped;
       tab.pendingPromptIndex = -1;
       tab.responseBuffer = '';
+      // Persist the newly-correlated totals so a reload reads them straight
+      // from the file instead of re-correlating (TASK-195). Goes through the
+      // existing fsRoots-confined, atomic write path; preserves every
+      // pre-existing field and the file's order — only bounded entries that
+      // lacked real numbers are touched.
+      if (dirty) {
+        try {
+          await window.api.prompts.write(tab.folder, updatedRaw);
+        } catch (err) {
+          console.error('[prompts.write]', err);
+        }
+      }
     }
   } catch (err) {
     console.error('[prompts.read]', err);
@@ -3588,15 +3693,17 @@ function renderLogsList(tab) {
   const items = tab.promptLog.slice().reverse();
   const totalIn = tab.promptLog.reduce((acc, e) => acc + (Number(e.inputTokens) || 0), 0);
   const totalOut = tab.promptLog.reduce((acc, e) => acc + (Number(e.outputTokens) || 0), 0);
-  const totalQueryCost = estimateCostUsd(totalIn, 0);
-  const totalResultCost = estimateCostUsd(0, totalOut);
-  const totalCost = totalQueryCost + totalResultCost;
+  // TASK-195: sum each entry's OWN costUsd — real (telemetry-correlated) where
+  // available, the length/4 estimate otherwise — rather than recomputing a
+  // flat-rate estimate from the pooled token totals, so a real per-model cost
+  // (which may differ a lot from the Sonnet estimate rates) is actually used.
+  const totalCost = tab.promptLog.reduce((acc, e) => acc + (Number(e.costUsd) || 0), 0);
+  const anyEstimated = tab.promptLog.some((e) => !e.real);
 
   const totalsLi = document.createElement('li');
   totalsLi.className = 'logs-totals';
-  totalsLi.textContent =
-    `Σ query ${fmtCostUsd(totalQueryCost)} + results ${fmtCostUsd(totalResultCost)} = ${fmtCostUsd(totalCost)} · `
-    + `${fmtTokens(totalIn)}↑ / ${fmtTokens(totalOut)}↓ tok · ${COST_MODEL_LABEL}`;
+  totalsLi.textContent = `Σ cost ${fmtCostUsd(totalCost)} · ${fmtTokens(totalIn)}↑ / ${fmtTokens(totalOut)}↓ tok`
+    + (anyEstimated ? ` (some ${COST_MODEL_LABEL})` : '');
   list.appendChild(totalsLi);
 
   items.forEach((entry, idx) => {
@@ -3622,20 +3729,35 @@ function renderLogsList(tab) {
     cost.className = 'logs-item-cost';
     const inTok = Number(entry.inputTokens) || 0;
     const outTok = Number(entry.outputTokens) || 0;
-    const queryCost = estimateCostUsd(inTok, 0);
-    const resultCost = estimateCostUsd(0, outTok);
-    const totalLine = queryCost + resultCost;
     if (isPending) {
+      // Still awaiting a response: no completed sequence to correlate against
+      // yet, so this stays the length/4 query-side estimate.
+      const queryCost = estimateCostUsd(inTok, 0);
       cost.textContent = `query ${fmtCostUsd(queryCost)} · results pending · ${fmtTokens(inTok)}↑ tok`;
+      cost.title = `Estimated cost — ${COST_MODEL_LABEL}\n`
+        + `query cost (input ${fmtTokens(inTok)} tok × $${COST_PER_M_INPUT}/M): ${fmtCostUsd(queryCost)}`;
+    } else if (entry.real) {
+      // TASK-195: the REAL total tokens/cost of the whole api_request sequence
+      // this prompt triggered (correlated by time window, scoped to this
+      // project), not the flat-rate estimate.
+      const total = Number(entry.costUsd) || 0;
+      cost.textContent = `${fmtCostUsd(total)} · ${fmtTokens(inTok)}↑ / ${fmtTokens(outTok)}↓ tok`;
+      cost.title = `Actual cost (captured telemetry)\n`
+        + `tokens up (input + cache write + cache read): ${fmtTokens(inTok)}\n`
+        + `tokens down (output): ${fmtTokens(outTok)}\n`
+        + `cost: ${fmtCostUsd(total)}`;
     } else {
+      const queryCost = estimateCostUsd(inTok, 0);
+      const resultCost = estimateCostUsd(0, outTok);
+      const totalLine = queryCost + resultCost;
       cost.textContent =
         `query ${fmtCostUsd(queryCost)} + results ${fmtCostUsd(resultCost)} = ${fmtCostUsd(totalLine)} · `
         + `${fmtTokens(inTok)}↑ / ${fmtTokens(outTok)}↓ tok`;
+      cost.title =
+        `Estimated cost — ${COST_MODEL_LABEL}\n`
+        + `query cost (input ${fmtTokens(inTok)} tok × $${COST_PER_M_INPUT}/M): ${fmtCostUsd(queryCost)}\n`
+        + `results cost (output ${fmtTokens(outTok)} tok × $${COST_PER_M_OUTPUT}/M): ${fmtCostUsd(resultCost)}`;
     }
-    cost.title =
-      `Estimated cost — ${COST_MODEL_LABEL}\n`
-      + `query cost (input ${fmtTokens(inTok)} tok × $${COST_PER_M_INPUT}/M): ${fmtCostUsd(queryCost)}\n`
-      + `results cost (output ${fmtTokens(outTok)} tok × $${COST_PER_M_OUTPUT}/M): ${fmtCostUsd(resultCost)}`;
 
     meta.appendChild(idxSpan);
     meta.appendChild(ts);
@@ -5432,15 +5554,14 @@ function tryDispatchNextPrompt(tab) {
 
 // ───────────────────────────────────────────────────────── tasks board
 
-// Canonical LANE status enum, in board left-to-right order (TASK-006/028).
-// Mirrors LANE_STATUSES in lib/ticket-lanes.js for the browser side, which
-// cannot require Node modules — KEEP IN LOCKSTEP. `todo` is where new tickets
-// are created; `defining` is the BA phase (acceptance criteria + Gherkin) before
-// coding; `post-processing` holds post-processing tickets (kind: post-processing)
-// run against normal tasks after tests pass, and is excluded from the build swarm.
-// `failed-testing` is deliberately absent — it is a valid status without its own
-// lane (its cards fold into Testing; see TASKS_VALID_STATUSES).
-const TASKS_LANE_STATUSES = ['todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done'];
+// Canonical LANE status enum, in board left-to-right order (TASK-006/028,
+// TASK-206 removed the post-processing lane TASK-028 added). Mirrors
+// LANE_STATUSES in lib/ticket-lanes.js for the browser side, which cannot
+// require Node modules — KEEP IN LOCKSTEP. `todo` is where new tickets are
+// created; `defining` is the BA phase (acceptance criteria + Gherkin) before
+// coding. `failed-testing` is deliberately absent — it is a valid status
+// without its own lane (its cards fold into Testing; see TASKS_VALID_STATUSES).
+const TASKS_LANE_STATUSES = ['todo', 'defining', 'in-progress', 'testing', 'done'];
 // The full set of valid, persistable statuses: every lane status PLUS
 // `failed-testing`, which stays a real, claimable status (owns its own
 // tasks/failed-testing/ folder) even though it has no dedicated board lane.
@@ -5449,25 +5570,16 @@ const TASKS_VALID_STATUSES = [...TASKS_LANE_STATUSES, 'failed-testing'];
 // Statuses that mean an agent is actively working the ticket right now (BA while
 // defining, coder while in-progress, tester while testing). Cards in one of
 // these states show the per-card blue "being worked on" dot; idle states
-// (todo / done / failed-testing / post-processing) show no active dot. Mirrors
-// ACTIVE_STATUSES in lib/ticket-lanes.js.
+// (todo / done / failed-testing) show no active dot. Mirrors ACTIVE_STATUSES in
+// lib/ticket-lanes.js.
 const TASKS_ACTIVE_STATUSES = ['defining', 'in-progress', 'testing'];
 // Status whose tests failed — its card shows a red "failed" marker, now folded
 // into the Testing lane. Mirrors FAILED_STATUS in lib/ticket-lanes.js.
 const TASKS_FAILED_STATUS = 'failed-testing';
-// Post-processing status/lane and the matching ticket `kind` (TASK-028). Mirrors
-// POST_PROCESSING_STATUS / POST_PROCESSING_KIND in lib/ticket-lanes.js.
-const TASKS_POST_PROCESSING_STATUS = 'post-processing';
-const TASKS_POST_PROCESSING_KIND = 'post-processing';
 // Dedicated lane for out-of-enum tickets so an unknown status is rendered
 // gracefully instead of being silently dumped into `todo`. Mirrors
 // UNKNOWN_STATUS in lib/ticket-lanes.js.
 const TASKS_UNKNOWN_STATUS = 'unknown';
-// True when `fm` is a post-processing ticket. Mirrors isPostProcessingTicket in
-// lib/ticket-lanes.js.
-function isTasksPostProcessingTicket(fm) {
-  return !!fm && fm.kind === TASKS_POST_PROCESSING_KIND;
-}
 
 // ── Team-config lane mirror (TASK-101) ──────────────────────────────────────
 // Renderer duplicate of the tiny slice of lib/team-config.js + lib/ticket-lanes.js
@@ -5484,7 +5596,6 @@ const TASKS_SYSTEM_LABELS = {
   defining: 'Defining',
   'in-progress': 'In Progress',
   testing: 'Testing',
-  'post-processing': 'Post-processing',
   done: 'Done',
 };
 // Slugs a user column may never take (mirror of RESERVED_SLUGS in
@@ -5516,70 +5627,38 @@ function tasksPrettifyLabel(slug) {
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 }
 
-// The four canonical orchestrate phase keys, in canonical order. Mirror of
-// PHASE_KEYS in lib/team-config.js (itself sourced from lib/skill-workflow.js's
-// PHASE_SPECS) — backs the Board panel's per-column phase link (TASK-183) and
-// pairs with the Workflow panel's skill.phases mirror (TASK-182, WF_PHASE_*).
-const TASKS_PHASE_KEYS = ['plan', 'build', 'test', 'review'];
-// Default `enabled` per phase (mirror of PHASE_DEFAULTS' enabled field in
-// lib/team-config.js): plan/build/test mirror their historic always-on system-
-// column correspondence; review has no system column, so it stays opt-in until
-// a column is explicitly linked to it (TASK-183) or manually toggled on
-// (Workflow panel, TASK-182).
-const TASKS_PHASE_ENABLED_DEFAULTS = Object.fromEntries(
-  TASKS_PHASE_KEYS.map((key) => [key, key !== 'review'])
-);
+// The three valid skill.contextOptimization.level values, and the default
+// { enabled, level } (TASK-200). Mirror of CONTEXT_OPT_LEVELS /
+// CONTEXT_OPT_DEFAULT in lib/team-config.js — KEEP IN LOCKSTEP. Backs the
+// Board panel's context-optimisation control (buildWorkflowContextOptimizationControl).
+const TASKS_CONTEXT_OPT_LEVELS = ['conservative', 'standard', 'aggressive'];
+const TASKS_CONTEXT_OPT_DEFAULT = { enabled: true, level: 'standard' };
 
-// Normalise a column's `phase` link (mirror of normalizeColumnPhase in
-// lib/team-config.js): a string equal to one of the four canonical phase keys
-// is kept; anything else (missing/unknown/non-string) becomes null.
-function tasksNormalizeColumnPhase(rawPhase) {
-  return (typeof rawPhase === 'string' && TASKS_PHASE_KEYS.includes(rawPhase)) ? rawPhase : null;
+// Normalise skill.contextOptimization into `{ enabled, level }` (mirror of
+// normalizeContextOptimization in lib/team-config.js — KEEP IN LOCKSTEP, byte-
+// for-behaviour): the whole value missing/not-an-object → the default;
+// `enabled` a strict boolean kept, else → true; `level` a string equal to one
+// of TASKS_CONTEXT_OPT_LEVELS kept, else → "standard". Unknown/unsafe keys are
+// simply not read (the renderer mirror carries no warnings channel). Never throws.
+function tasksNormalizeContextOptimization(raw) {
+  const src = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : null;
+  if (!src) return { enabled: TASKS_CONTEXT_OPT_DEFAULT.enabled, level: TASKS_CONTEXT_OPT_DEFAULT.level };
+  const enabled = typeof src.enabled === 'boolean' ? src.enabled : TASKS_CONTEXT_OPT_DEFAULT.enabled;
+  const level = (typeof src.level === 'string' && TASKS_CONTEXT_OPT_LEVELS.includes(src.level))
+    ? src.level
+    : TASKS_CONTEXT_OPT_DEFAULT.level;
+  return { enabled, level };
 }
 
-// Count how many columns are currently linked to each phase. Snapshotted at
-// load time (refreshTeamBoard's `baselinePhaseLinks`) so Save can detect a
-// genuine zero-to-one transition for the one-time auto-enable flip below.
-function tasksPhaseLinkCounts(columns) {
-  const counts = {};
-  for (const key of TASKS_PHASE_KEYS) counts[key] = 0;
-  for (const c of (Array.isArray(columns) ? columns : [])) {
-    if (c && TASKS_PHASE_KEYS.includes(c.phase)) counts[c.phase] += 1;
-  }
-  return counts;
-}
-
-// One-time zero-to-one auto-enable flip (TASK-183): when a phase had ZERO
-// linked columns at the panel's last load (`baselineCounts`) and now has >= 1
-// AND is currently disabled, flip it to enabled as part of this same save.
-// Never re-flips a phase the user manually re-disabled after an earlier link
-// (baseline was already >= 1), and never touches an already-enabled phase.
-function tasksApplyPhaseAutoEnable(columns, baselineCounts, skill) {
-  const s = (skill && typeof skill === 'object' && !Array.isArray(skill)) ? skill : {};
-  const phases = (s.phases && typeof s.phases === 'object' && !Array.isArray(s.phases)) ? s.phases : {};
-  const counts = tasksPhaseLinkCounts(columns);
-  const baseline = (baselineCounts && typeof baselineCounts === 'object') ? baselineCounts : {};
-  TASKS_PHASE_KEYS.forEach((key, idx) => {
-    const before = Number(baseline[key]) || 0;
-    const after = counts[key] || 0;
-    if (before !== 0 || after === 0) return;
-    const cur = (phases[key] && typeof phases[key] === 'object' && !Array.isArray(phases[key])) ? phases[key] : null;
-    const enabled = (cur && typeof cur.enabled === 'boolean') ? cur.enabled : TASKS_PHASE_ENABLED_DEFAULTS[key];
-    if (enabled !== false) return;
-    const order = (cur && cur.order != null) ? cur.order : idx + 1;
-    phases[key] = { ...(cur || {}), enabled: true, order };
-  });
-  s.phases = phases;
-  return s;
-}
-
-// Build a normalised board column { status, label, description, agent, system, phase }
-// from a raw config column. Collapsed mirror of defaultSystemColumn /
-// repairSystemColumn / buildUserColumn in lib/team-config.js — just the fields the
-// board renders. A system column defaults to its canonical label; a user column
-// falls back to a prettified slug. `agent` is display-only metadata (a nonexistent
-// agent is preserved here and warned about at render time); `phase` links the
-// column to a workflow phase (TASK-183), optional and normalised the same way.
+// Build a normalised board column { status, label, description, agent,
+// instructions, system } from a raw config column. Collapsed mirror of
+// defaultSystemColumn / repairSystemColumn / buildUserColumn in
+// lib/team-config.js — just the fields the board renders. A system column
+// defaults to its canonical label; a user column falls back to a prettified
+// slug. `agent` is display-only metadata (a nonexistent agent is preserved
+// here and warned about at render time); `instructions` (TASK-202) is the
+// free-text brief the orchestrator dispatches for tickets in that column,
+// kept verbatim (never a non-string) so it round-trips byte-for-byte.
 function tasksBuildColumn(slug, rawCol, system) {
   const src = rawCol && typeof rawCol === 'object' ? rawCol : {};
   const label = typeof src.label === 'string' && src.label.trim() !== ''
@@ -5587,8 +5666,8 @@ function tasksBuildColumn(slug, rawCol, system) {
     : (system ? (TASKS_SYSTEM_LABELS[slug] || tasksPrettifyLabel(slug)) : tasksPrettifyLabel(slug));
   const description = typeof src.description === 'string' ? src.description : '';
   const agent = typeof src.agent === 'string' && src.agent.trim() !== '' ? src.agent.trim() : null;
-  const phase = tasksNormalizeColumnPhase(src.phase);
-  return { status: slug, label: String(label), description, agent, system: !!system, phase };
+  const instructions = typeof src.instructions === 'string' ? src.instructions : '';
+  return { status: slug, label: String(label), description, agent, instructions, system: !!system };
 }
 
 // Normalise ANY parsed config into the ordered board columns: the six system
@@ -5596,8 +5675,13 @@ function tasksBuildColumn(slug, rawCol, system) {
 // position it holds in the config (anchored to the last system column before it),
 // mirroring lib/team-config.js normalizeConfig + lib/ticket-lanes.js
 // laneStatusesFor. Tolerates null/junk (→ the six system defaults) and NEVER
-// throws. `failed-testing`/reserved/invalid/duplicate user slugs are dropped.
+// throws. `failed-testing`/reserved/invalid/duplicate user slugs are dropped. A
+// legacy removed system column (currently just `post-processing`, TASK-206) is
+// dropped outright too — see TASKS_LEGACY_DROPPED_SYSTEM_SLUGS below, a mirror of
+// LEGACY_DROPPED_SYSTEM_SLUGS in lib/team-config.js (KEEP IN LOCKSTEP), declared
+// inline so this function stays self-contained for extraction-based tests.
 function normalizeTasksColumns(raw) {
+  const TASKS_LEGACY_DROPPED_SYSTEM_SLUGS = new Set(['post-processing']);
   const rawCols = raw && Array.isArray(raw.columns) ? raw.columns : [];
   const seenSystem = new Set();
   const seenUser = new Set();
@@ -5607,6 +5691,12 @@ function normalizeTasksColumns(raw) {
   for (const rc of rawCols) {
     if (!rc || typeof rc !== 'object' || Array.isArray(rc)) continue;
     const status = typeof rc.status === 'string' ? rc.status.trim() : '';
+    // A legacy removed system column is dropped outright before any other
+    // per-column check runs, so it can never fall through to the user-column
+    // branch below and resurrect a "Post-processing" lane. No warnings channel
+    // exists here (this is a pure column-array mirror), so the drop is silent,
+    // same as every other renderer mirror without a warnings channel.
+    if (TASKS_LEGACY_DROPPED_SYSTEM_SLUGS.has(status)) continue;
     if (TASKS_LANE_STATUSES.includes(status)) {
       if (seenSystem.has(status)) continue;
       seenSystem.add(status);
@@ -5781,14 +5871,18 @@ function tasksValidateNewColumn(label, existingSlugs) {
 // Collapsed mirror of serializeConfig in lib/team-config.js. KEEP IN SYNC.
 function tasksSerializeTeamConfig(working) {
   const w = working && typeof working === 'object' ? working : {};
+  // No `phase` key here (TASK-201 removed the phase concept from lib/team-config.js's
+  // persisted column shape entirely — COLUMN_KEYS has no `phase`; TASK-203 removed
+  // the renderer's in-memory `.phase` working-model field too, so there is nothing
+  // left that could resurrect the legacy `phase` key on disk).
   const columns = normalizeTasksColumns({ columns: Array.isArray(w.columns) ? w.columns : [] })
     .map((c) => ({
       status: c.status,
       label: c.label,
       description: c.description,
       agent: c.agent,
+      instructions: c.instructions,
       system: c.system,
-      phase: c.phase,
     }));
   let version = 1;
   if (w.version != null) {
@@ -5804,6 +5898,9 @@ function tasksSerializeTeamConfig(working) {
   if (rawSkill.concurrencyDefault != null && rawSkill.concurrencyDefault !== '') {
     skill.concurrencyDefault = resolveTasksConcurrency(rawSkill.concurrencyDefault);
   }
+  // Normalise skill.contextOptimization (TASK-200) so a Save can never persist
+  // an invalid enabled/level, mirroring lib serializeConfig/normalizeConfig.
+  skill.contextOptimization = tasksNormalizeContextOptimization(rawSkill.contextOptimization);
   const out = { version, columns, skill };
   if (w.extra && typeof w.extra === 'object') {
     for (const k of Object.keys(w.extra)) {
@@ -5936,13 +6033,13 @@ async function refreshTeamBoard(tab) {
   // normalizeTasksColumns tolerates any junk (→ the six system defaults) and only
   // ever yields valid, canonically-ordered columns, so the model starts clean.
   const columns = normalizeTasksColumns(raw && typeof raw === 'object' ? raw : null)
-    .map((c) => ({ status: c.status, label: c.label, description: c.description, agent: c.agent, system: c.system, phase: c.phase }));
+    .map((c) => ({ status: c.status, label: c.label, description: c.description, agent: c.agent, instructions: c.instructions, system: c.system }));
 
-  // Snapshot each phase's link count at load time (TASK-183): Save compares
-  // against this baseline to detect a genuine zero-to-one link transition.
-  const baselinePhaseLinks = tasksPhaseLinkCounts(columns);
-
-  tab.teamBoard = { version, skill, extra, columns, agentNames, notice, dirty: false, baselinePhaseLinks };
+  // `rawConfig` is the as-parsed-from-disk snapshot (or null), passed through to
+  // the Build-concurrency-default / Context-optimisation controls (TASK-202)
+  // rendered below — those controls re-read the file fresh on Save, so this
+  // snapshot only seeds their initial display.
+  tab.teamBoard = { version, skill, extra, columns, agentNames, notice, dirty: false, rawConfig: raw };
   renderTeamBoard(tab);
 }
 
@@ -5966,9 +6063,9 @@ function renderTeamBoard(tab) {
 
   const help = document.createElement('div');
   help.className = 'team-board-help';
-  help.textContent = 'Columns are the board lanes. The display agent is metadata only (it does not change orchestration). '
-    + 'Optionally, linking a column to a workflow phase (plan/build/test/review) marks that column as the phase\'s board '
-    + 'lane; the phase itself is enabled/ordered on the Workflow panel. System columns cannot be removed or re-slugged.';
+  help.textContent = 'Columns are the board lanes. Each column names a display agent and free-text instructions the '
+    + 'orchestrator dispatches for tickets sitting in that column. The display agent is metadata only (it does not '
+    + 'change orchestration). System columns cannot be removed or re-slugged.';
   body.appendChild(help);
 
   const list = document.createElement('div');
@@ -5990,6 +6087,16 @@ function renderTeamBoard(tab) {
     footer.appendChild(dot);
   }
   body.appendChild(footer);
+
+  // Relocated global skill settings (TASK-202): Build concurrency default and
+  // Context optimisation are project-wide, not per-column, so they render once
+  // below the columns/add-form rather than inside a column row. Reuses the same
+  // builder functions the Workflow panel renders (not duplicated); each control
+  // re-reads tasks/team-config.json fresh on its own Save and keeps the render-
+  // time `state.rawConfig` snapshot as a keep-last-good fallback, so neither
+  // control can ever drop the Board's columns/instructions.
+  body.appendChild(buildWorkflowConcurrencyControl(tab, state.rawConfig));
+  body.appendChild(buildWorkflowContextOptimizationControl(tab, state.rawConfig));
 }
 
 // True when swapping the columns at `i` and `j` is allowed: both in range and NOT
@@ -6105,6 +6212,37 @@ function buildTeamColumnRow(tab, col, idx) {
   descField.appendChild(descInput);
   fields.appendChild(descField);
 
+  // Display agent + Instructions: gated behind an Edit button (view shows the
+  // current values as read-only text; Edit reveals the agent <select>, the
+  // instructions <textarea>, and an AI-assist box that can draft/rewrite the
+  // instructions text). Both fields are still written into the model live
+  // (matching label/description above) as soon as they change — the
+  // board-level Save button is what persists everything to
+  // tasks/team-config.json; clicking Done just collapses back to the read
+  // view, it does not discard or write anything on its own.
+  const agentInstrField = document.createElement('div');
+  agentInstrField.className = 'team-column-field team-column-field-full team-column-agentinstr';
+
+  const view = document.createElement('div');
+  view.className = 'team-column-agentinstr-view';
+  const agentLine = document.createElement('div');
+  agentLine.className = 'team-column-agentinstr-agentline';
+  const agentWarnView = document.createElement('span');
+  agentWarnView.className = 'team-column-agent-warning hidden';
+  agentWarnView.textContent = 'This agent no longer exists in .claude/agents/.';
+  const instrPreview = document.createElement('div');
+  instrPreview.className = 'team-column-agentinstr-instrtext';
+  const editBtn = document.createElement('button');
+  editBtn.className = 'team-column-agentinstr-edit small-btn';
+  editBtn.textContent = 'Edit';
+  view.appendChild(agentLine);
+  view.appendChild(agentWarnView);
+  view.appendChild(instrPreview);
+  view.appendChild(editBtn);
+
+  const editor = document.createElement('div');
+  editor.className = 'team-column-agentinstr-editor hidden';
+
   const agentField = document.createElement('label');
   agentField.className = 'team-column-field';
   const agentCap = document.createElement('span');
@@ -6126,55 +6264,191 @@ function buildTeamColumnRow(tab, col, idx) {
   }
   // A saved agent no longer present in .claude/agents/ is kept as a selected
   // "(missing)" option so the value is never silently lost.
-  let missing = false;
   if (current !== '' && !names.includes(current)) {
-    missing = true;
     const opt = document.createElement('option');
     opt.value = current;
     opt.textContent = current + ' (missing)';
     agentSel.appendChild(opt);
   }
   agentSel.value = current;
+  const agentWarnEdit = document.createElement('span');
+  agentWarnEdit.className = 'team-column-agent-warning hidden';
+  agentWarnEdit.textContent = 'This agent no longer exists in .claude/agents/.';
+
+  // Recompute the missing-agent warning (view + editor copies) from the
+  // select's LIVE value, without a full board re-render — a re-render would
+  // rebuild every column row and silently close this editor.
+  const updateAgentWarning = () => {
+    const val = agentSel.value;
+    const nowMissing = val !== '' && !names.includes(val);
+    agentWarnEdit.classList.toggle('hidden', !nowMissing);
+    agentWarnView.classList.toggle('hidden', !nowMissing);
+  };
+  updateAgentWarning();
+
   agentSel.addEventListener('change', () => {
     col.agent = agentSel.value === '' ? null : agentSel.value;
     markTeamBoardDirty(tab);
-    renderTeamBoard(tab); // refresh the missing-warning state
+    updateAgentWarning();
   });
   agentField.appendChild(agentCap);
   agentField.appendChild(agentSel);
-  if (missing) {
-    const warn = document.createElement('span');
-    warn.className = 'team-column-agent-warning';
-    warn.textContent = 'This agent no longer exists in .claude/agents/.';
-    agentField.appendChild(warn);
-  }
-  fields.appendChild(agentField);
+  agentField.appendChild(agentWarnEdit);
+  editor.appendChild(agentField);
 
-  const phaseField = document.createElement('label');
-  phaseField.className = 'team-column-field';
-  const phaseCap = document.createElement('span');
-  phaseCap.className = 'team-column-field-label';
-  phaseCap.textContent = 'Phase';
-  const phaseSel = document.createElement('select');
-  phaseSel.className = 'team-column-phase-select';
-  const noPhaseOpt = document.createElement('option');
-  noPhaseOpt.value = '';
-  noPhaseOpt.textContent = '(none)';
-  phaseSel.appendChild(noPhaseOpt);
-  for (const key of TASKS_PHASE_KEYS) {
-    const opt = document.createElement('option');
-    opt.value = key;
-    opt.textContent = key;
-    phaseSel.appendChild(opt);
-  }
-  phaseSel.value = tasksNormalizeColumnPhase(col.phase) || '';
-  phaseSel.addEventListener('change', () => {
-    col.phase = phaseSel.value;
+  // Instructions (TASK-202): the free-text brief the orchestrator dispatches
+  // for tickets sitting in this column. Rendered via `.value` only (never
+  // innerHTML), so a tampered on-disk value can never inject markup — it
+  // always shows as literal text.
+  const instructionsField = document.createElement('label');
+  instructionsField.className = 'team-column-field team-column-field-full';
+  const instructionsCap = document.createElement('span');
+  instructionsCap.className = 'team-column-field-label';
+  instructionsCap.textContent = 'Instructions';
+  const instructionsInput = document.createElement('textarea');
+  instructionsInput.className = 'team-column-instructions-input';
+  instructionsInput.rows = 3;
+  instructionsInput.value = col.instructions != null ? String(col.instructions) : '';
+  instructionsInput.addEventListener('input', () => {
+    col.instructions = instructionsInput.value;
     markTeamBoardDirty(tab);
   });
-  phaseField.appendChild(phaseCap);
-  phaseField.appendChild(phaseSel);
-  fields.appendChild(phaseField);
+  instructionsField.appendChild(instructionsCap);
+  instructionsField.appendChild(instructionsInput);
+  editor.appendChild(instructionsField);
+
+  // AI-assist box: draft/rewrite the instructions text from a natural-language
+  // request. Nothing is written to disk here — the result is only loaded into
+  // the textarea as a preview; the board-level Save persists it like any
+  // other field edit.
+  const ai = document.createElement('div');
+  ai.className = 'team-column-ai';
+  const aiLbl = document.createElement('label');
+  aiLbl.className = 'team-column-field-label';
+  aiLbl.textContent = 'Generate with AI';
+  const aiInput = document.createElement('textarea');
+  aiInput.className = 'team-column-ai-input';
+  aiInput.rows = 2;
+  aiInput.spellcheck = false;
+  aiInput.placeholder = 'Describe what the instructions should say (e.g. "tell the agent to run the '
+    + 'test suite before marking a ticket done")…';
+  const aiActions = document.createElement('div');
+  aiActions.className = 'team-column-ai-actions';
+  const regenBtn = document.createElement('button');
+  regenBtn.className = 'small-btn';
+  regenBtn.textContent = 'Generate with AI';
+  aiActions.appendChild(regenBtn);
+  const aiNote = document.createElement('div');
+  aiNote.className = 'team-column-ai-note hidden';
+  aiNote.textContent = 'AI proposal loaded into Instructions — review it, then click Save to apply. Nothing has '
+    + 'been written yet.';
+  const aiMsg = document.createElement('div');
+  aiMsg.className = 'team-column-ai-msg hidden';
+  ai.appendChild(aiLbl);
+  ai.appendChild(aiInput);
+  ai.appendChild(aiActions);
+  ai.appendChild(aiNote);
+  ai.appendChild(aiMsg);
+  editor.appendChild(ai);
+
+  const editorActions = document.createElement('div');
+  editorActions.className = 'team-column-agentinstr-editor-actions';
+  const doneBtn = document.createElement('button');
+  doneBtn.className = 'small-btn';
+  doneBtn.textContent = 'Done';
+  editorActions.appendChild(doneBtn);
+  editor.appendChild(editorActions);
+
+  const showAiMsg = (msg) => { aiMsg.textContent = msg; aiMsg.classList.remove('hidden'); };
+  const clearAiMsg = () => { aiMsg.textContent = ''; aiMsg.classList.add('hidden'); };
+  const hideAiNote = () => { aiNote.classList.add('hidden'); };
+
+  // Refresh the read view's text from the current model values. Called on
+  // build and whenever Done collapses the editor.
+  const refreshView = () => {
+    const agentVal = col.agent != null ? String(col.agent).trim() : '';
+    agentLine.textContent = 'Display agent: ' + (agentVal || '(none)');
+    const instrVal = col.instructions != null ? String(col.instructions).trim() : '';
+    instrPreview.textContent = instrVal || '(no instructions set)';
+    instrPreview.classList.toggle('team-column-agentinstr-instr-empty', !instrVal);
+  };
+
+  editBtn.addEventListener('click', () => {
+    view.classList.add('hidden');
+    editor.classList.remove('hidden');
+    agentSel.focus();
+  });
+  doneBtn.addEventListener('click', () => {
+    clearAiMsg();
+    hideAiNote();
+    aiInput.value = '';
+    editor.classList.add('hidden');
+    view.classList.remove('hidden');
+    refreshView();
+  });
+
+  regenBtn.addEventListener('click', async () => {
+    clearAiMsg();
+    hideAiNote();
+    const instruction = aiInput.value.trim();
+    // Empty instruction → inline error, NO API call.
+    if (instruction === '') {
+      showAiMsg('Enter an instruction describing what the instructions should say.');
+      return;
+    }
+    const bodyAtRequest = tab.els.teamBoardBody;
+    const prevLabel = regenBtn.textContent;
+    regenBtn.disabled = true;
+    regenBtn.textContent = 'Generating…';
+
+    let res;
+    try {
+      res = await window.api.team.regenerateColumnInstructions({
+        instructions: instructionsInput.value,
+        label: col.label,
+        description: col.description,
+        agent: col.agent,
+        instruction
+      });
+    } catch (e) {
+      res = { ok: false, reason: 'error' };
+    }
+
+    // Stale-guard: if the tab/folder changed or this row closed while the
+    // request was in flight, discard the response — no DOM update, no write.
+    if (tab.els.teamBoardBody !== bodyAtRequest || !editor.isConnected) return;
+
+    regenBtn.disabled = false;
+    regenBtn.textContent = prevLabel;
+
+    if (!res || !res.ok) {
+      const reason = res && res.reason;
+      if (reason === 'no-key') {
+        showAiMsg('Set ANTHROPIC_API_KEY (Settings) to use AI generation — no request was sent.');
+      } else if (reason === 'empty-instruction') {
+        showAiMsg('Enter an instruction describing what the instructions should say.');
+      } else {
+        showAiMsg('AI generation failed (' + (reason || 'error') + '). Your text was kept.');
+      }
+      return;
+    }
+
+    // Preview: load the proposal into the textarea AND the model (matching
+    // the Agents panel's pattern would leave it un-saved; here Instructions
+    // has no separate Save, so this write goes straight into `col` like a
+    // normal keystroke would, gated behind the board-level Save same as any
+    // other field).
+    instructionsInput.value = res.content;
+    col.instructions = res.content;
+    markTeamBoardDirty(tab);
+    aiNote.classList.remove('hidden');
+  });
+
+  refreshView();
+
+  agentInstrField.appendChild(view);
+  agentInstrField.appendChild(editor);
+  fields.appendChild(agentInstrField);
 
   row.appendChild(fields);
   return row;
@@ -6289,8 +6563,8 @@ function buildTeamAddColumnForm(tab) {
       label: labelInput.value.trim(),
       description: '',
       agent: null,
+      instructions: '',
       system: false,
-      phase: null,
     });
     state.dirty = true;
     renderTeamBoard(tab);
@@ -6337,9 +6611,6 @@ async function saveTeamBoardConfig(tab) {
   const state = tab.teamBoard;
   if (!state || !tab.folder) return;
   const btn = tab.els.teamBoardSaveBtn;
-  // TASK-183: apply the one-time zero-to-one auto-enable flip against the
-  // baseline snapshotted at load time, BEFORE serializing.
-  state.skill = tasksApplyPhaseAutoEnable(state.columns, state.baselinePhaseLinks, state.skill);
   const content = tasksSerializeTeamConfig(state);
   const tasksDir = tasksJoin(tab.folder, 'tasks');
   const cfgPath = tasksJoin(tasksDir, 'team-config.json');
@@ -6638,9 +6909,9 @@ function compareTicketOrder(a, b) {
 
 // Subfolder name (relative to tasks/) a ticket with this status belongs in, or
 // null for out-of-enum statuses (left in place, never filed into a status folder).
-// Driven by the valid-statuses set so both post-processing and failed-testing own
-// their own subfolders (failed-testing has no lane but still files into
-// tasks/failed-testing/). Mirrors folderForStatus in lib/ticket-folders.js.
+// Driven by the valid-statuses set so failed-testing owns its own subfolder too
+// (it has no lane but still files into tasks/failed-testing/). Mirrors
+// folderForStatus in lib/ticket-folders.js.
 function ticketFolderForStatus(status) {
   return TASKS_VALID_STATUSES.includes(status) ? status : null;
 }
@@ -6659,7 +6930,7 @@ function ticketFolderMatchesStatus(folder, status) {
 // re-checked here as a belt-and-braces guard so an arbitrary/untrusted status
 // string (a removed column, a hand-edited frontmatter status, out-of-enum junk)
 // can NEVER be used to build a folder path for mkdir/rename. Every system status
-// (todo … done, failed-testing, post-processing) also satisfies this.
+// (todo … done, failed-testing) also satisfies this.
 function isSafeTasksSlug(status) {
   if (typeof status !== 'string') return false;
   if (status.length === 0 || status.length > TASKS_MAX_SLUG_LENGTH) return false;
@@ -6872,8 +7143,8 @@ function ticketRunLines(fm) {
 // pure helpers). The orchestrator appends one activity entry per dispatched phase
 // — { activity, model, startedAt, finishedAt, durationMs, tokensIn, tokensOut,
 // costUsd } — to a JSON array kept on a single flat `activities` frontmatter
-// field, giving a complete cost breakdown by activity (ba/code/test/review/
-// post-processing/…). These helpers parse, sum and format that log for display.
+// field, giving a complete cost breakdown by activity (ba/code/test/review/…).
+// These helpers parse, sum and format that log for display.
 
 // Parse the `activities` JSON array off a frontmatter object into an array of
 // entries. Tolerant: absent / non-string / invalid-JSON / non-array / non-object
@@ -7100,29 +7371,26 @@ function initTasksTab(tab) {
   startTasksPolling(tab);
 }
 
-// Team sub-tab (TASK-091). Scaffold only: three placeholder sections
-// (Agents / Workflow / Board) that later tickets fill. With no folder open we
-// show an "(open a folder)" empty state and leave every section body empty;
-// once a folder is open the three sections are shown. Safe to call repeatedly
-// (no listeners are bound here), mirroring initTasksTab's re-activation guard.
+// Team sub-tab (TASK-091). Scaffold only: placeholder sections (Agents / Board)
+// that later tickets fill. With no folder open we show an "(open a folder)"
+// empty state and leave every section body empty; once a folder is open the
+// sections are shown. Safe to call repeatedly (no listeners are bound here),
+// mirroring initTasksTab's re-activation guard.
 function initTeamTab(tab) {
   if (!tab.folder) {
     // Deliberate per-section empty state: the "(open a folder)" literal is set on
-    // the status AND all three section bodies (unlike initTasksTab's single-status
+    // the status AND both section bodies (unlike initTasksTab's single-status
     // pattern). The static HTML ships this literal in every body, but writing it
     // here too clears any stale content left over from a folder→no-folder switch;
     // blanking the bodies instead would leave bare section frames. Keep as-is.
     tab.els.teamStatus.textContent = '(open a folder)';
     tab.els.teamAgentsBody.textContent = '(open a folder)';
-    tab.els.teamWorkflowBody.textContent = '(open a folder)';
     tab.els.teamBoardBody.textContent = '(open a folder)';
     return;
   }
   tab.els.teamStatus.textContent = '';
   // Agents panel (TASK-094) reads .claude/agents/ from disk each activation.
   refreshTeamAgents(tab);
-  // Workflow panel (TASK-105): read-only pipeline view of the orchestrate skill.
-  refreshTeamWorkflow(tab);
   // Board panel (TASK-103): column manager over tasks/team-config.json.
   refreshTeamBoard(tab);
 }
@@ -7341,6 +7609,339 @@ function buildTelemetryControl(tab) {
     }
   }
 
+  // ── Session totals (all projects) ──────────────────────────────────────────
+  // TASK-195: unlike the project-scoped byModelWrap above (fed by
+  // getUsage(folder)'s project-scoped `usage.byModel`), this section covers
+  // the WHOLE captured session — every project bucket combined — driven by the
+  // app-wide `usage.byModel` (aggregateUsage over allRows()). It never issues
+  // its own IPC call: it starts zeroed and is kept live purely off the SAME
+  // pushed telemetry:update payload the project view already subscribes to
+  // (payload.usage, present on every push regardless of which project's ingest
+  // triggered it), so no extra IPC round-trip is added.
+  const sessionWrap = document.createElement('div');
+  sessionWrap.className = 'team-telemetry-session';
+  const sessionTitle = document.createElement('div');
+  sessionTitle.className = 'team-telemetry-session-title';
+  sessionTitle.textContent = 'Session totals (all projects)';
+  const sessionByModelWrap = document.createElement('div');
+  sessionByModelWrap.className = 'team-telemetry-bymodel team-telemetry-session-bymodel';
+  sessionWrap.appendChild(sessionTitle);
+  sessionWrap.appendChild(sessionByModelWrap);
+
+  function renderSessionUsage(usage) {
+    sessionByModelWrap.textContent = '';
+    const byModel = (usage && usage.byModel) || {};
+    const names = Object.keys(byModel).sort();
+    if (names.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'team-telemetry-session-empty';
+      empty.textContent = 'No session usage captured yet.';
+      sessionByModelWrap.appendChild(empty);
+      return;
+    }
+    for (const name of names) {
+      const m = byModel[name] || {};
+      const row = document.createElement('div');
+      row.className = 'team-telemetry-model-row';
+      const nameEl = document.createElement('span');
+      nameEl.className = 'team-telemetry-model-name';
+      nameEl.textContent = telShortModel(name);
+      const statEl = document.createElement('span');
+      statEl.className = 'team-telemetry-model-stat';
+      statEl.textContent = telFmtInt(m.requests) + ' calls · ' + telFmtInt(m.totalTokens) + ' tok · ' + telFmtUsd(m.costUsd);
+      row.appendChild(nameEl);
+      row.appendChild(statEl);
+      sessionByModelWrap.appendChild(row);
+    }
+  }
+  renderSessionUsage(null);
+
+  // ── Cost-over-time graph (TASK-199) ────────────────────────────────────────
+  // Scoped to the CURRENT project's per-call rows (same stream that feeds the
+  // prompt log below), per A1 — there is no app-wide per-row timeline to plot
+  // (payload.usage / usage(allRows()) are aggregate totals only). Each model
+  // present in the rows gets its own smoothed, cumulative-running-total series
+  // over the same shared axes (A2-A4); a metric toggle switches what is
+  // plotted without any new IPC call (A5), re-rendering from the cached rows.
+  //
+  // Declared LOCAL to buildTelemetryControl (rather than module-scope) so the
+  // existing test convention of extracting just this one function's source
+  // text (extractFn(rendererSrc, 'buildTelemetryControl')) keeps working
+  // without needing every test file updated to also extract new collaborators.
+  const TEL_SVG_NS = 'http://www.w3.org/2000/svg';
+
+  // Selectable metrics (A5): Cost is the default on mount. Each `value(r)`
+  // coerces via telNum so a malformed/non-numeric field never contributes NaN.
+  const TEL_GRAPH_METRICS = [
+    { key: 'cost', label: 'Cost', value: (r) => telNum(r && r.costUsd), fmt: telFmtUsd },
+    { key: 'input', label: 'Input tokens', value: (r) => telNum(r && r.inputTokens), fmt: telFmtInt },
+    { key: 'output', label: 'Output tokens', value: (r) => telNum(r && r.outputTokens), fmt: telFmtInt },
+    {
+      key: 'cache',
+      label: 'Cache tokens',
+      value: (r) => telNum(r && r.cacheReadTokens) + telNum(r && r.cacheCreationTokens),
+      fmt: telFmtInt
+    }
+  ];
+
+  // Distinct, dark-theme-friendly colours, cycled if there are more models
+  // than colours. Order is stable across renders because callers always
+  // iterate `Array.from(seriesMap.keys()).sort()`.
+  const TEL_GRAPH_COLORS = ['#61afef', '#e5c07b', '#98c379', '#e06c75', '#c678dd', '#56b6c2', '#d19a66', '#abb2bf'];
+
+  // Catmull-Rom -> cubic-Bezier smoothed path `d` for an array of {x,y} points,
+  // already in SVG coordinate space. Never throws and never emits NaN: a 0- or
+  // 1-point series returns '' (nothing to draw — caller still renders a marker
+  // circle so a lone point stays visible), a 2-point series is a straight line
+  // (a spline needs >=3 points to have a meaningful tangent), and missing
+  // neighbours at the ends of the array fall back to the nearest known point
+  // rather than reading `undefined` (which would otherwise produce NaN control
+  // points).
+  function telSmoothPathD(points) {
+    if (!Array.isArray(points) || points.length < 2) return '';
+    if (points.length === 2) {
+      return 'M ' + points[0].x + ' ' + points[0].y + ' L ' + points[1].x + ' ' + points[1].y;
+    }
+    let d = 'M ' + points[0].x + ' ' + points[0].y;
+    for (let i = 0; i < points.length - 1; i++) {
+      const p0 = points[i - 1] || points[i];
+      const p1 = points[i];
+      const p2 = points[i + 1];
+      const p3 = points[i + 2] || p2;
+      const c1x = p1.x + (p2.x - p0.x) / 6;
+      const c1y = p1.y + (p2.y - p0.y) / 6;
+      const c2x = p2.x - (p3.x - p1.x) / 6;
+      const c2y = p2.y - (p3.y - p1.y) / 6;
+      d += ' C ' + c1x + ' ' + c1y + ' ' + c2x + ' ' + c2y + ' ' + p2.x + ' ' + p2.y;
+    }
+    return d;
+  }
+
+  const graphWrap = document.createElement('div');
+  graphWrap.className = 'team-telemetry-graph';
+
+  const graphHeader = document.createElement('div');
+  graphHeader.className = 'team-telemetry-graph-header';
+  const graphTitle = document.createElement('div');
+  graphTitle.className = 'team-telemetry-graph-title';
+  graphTitle.textContent = 'Cost over time';
+  const metricToggleWrap = document.createElement('div');
+  metricToggleWrap.className = 'team-telemetry-metric-toggle';
+  graphHeader.appendChild(graphTitle);
+  graphHeader.appendChild(metricToggleWrap);
+
+  const graphBody = document.createElement('div');
+  graphBody.className = 'team-telemetry-graph-body';
+  const graphSvgWrap = document.createElement('div');
+  graphSvgWrap.className = 'team-telemetry-graph-svgwrap';
+  const graphEmpty = document.createElement('div');
+  graphEmpty.className = 'team-telemetry-graph-empty';
+  graphBody.appendChild(graphSvgWrap);
+  graphBody.appendChild(graphEmpty);
+
+  const graphLegend = document.createElement('div');
+  graphLegend.className = 'team-telemetry-graph-legend';
+
+  graphWrap.appendChild(graphHeader);
+  graphWrap.appendChild(graphBody);
+  graphWrap.appendChild(graphLegend);
+
+  // Small guarded DOM helpers so this graph degrades to a silent no-op (never
+  // a throw) against the panel's existing test-suite DOM mocks, which predate
+  // this feature and only implement the subset of the Element/Document API
+  // buildTelemetryControl previously needed (createElement, classList
+  // add/remove/contains, textContent, plain property assignment) — no
+  // setAttribute, no `.style`, no createElementNS. A real browser `document`
+  // has all of these, so real rendering is unaffected.
+  function telSetAttr(el, name, value) {
+    if (el && typeof el.setAttribute === 'function') el.setAttribute(name, value);
+  }
+  function telCreateSvgEl(tag) {
+    if (typeof document.createElementNS === 'function') return document.createElementNS(TEL_SVG_NS, tag);
+    return document.createElement(tag);
+  }
+
+  // Default metric on mount = Cost (per A5 / acceptance criteria). Preserved
+  // across live re-renders — only the toggle click handler changes it.
+  let graphMetric = TEL_GRAPH_METRICS[0].key;
+  // Cache of the last rows passed to renderGraph so the metric toggle can
+  // re-plot instantly from the same data, with no new telemetry IPC call.
+  let graphRows = [];
+
+  const metricBtns = {};
+  function updateMetricBtnActive() {
+    for (const m of TEL_GRAPH_METRICS) {
+      const active = m.key === graphMetric;
+      // add/remove (not classList.toggle) — some of this panel's DOM mocks in
+      // existing tests only implement add/remove/contains.
+      if (active) metricBtns[m.key].classList.add('active');
+      else metricBtns[m.key].classList.remove('active');
+      telSetAttr(metricBtns[m.key], 'aria-pressed', active ? 'true' : 'false');
+    }
+  }
+  for (const m of TEL_GRAPH_METRICS) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'team-telemetry-metric-btn';
+    btn.textContent = m.label;
+    btn.disabled = !folder;
+    btn.addEventListener('click', () => {
+      if (graphMetric === m.key) return;
+      graphMetric = m.key;
+      updateMetricBtnActive();
+      renderGraph(graphRows);
+    });
+    metricBtns[m.key] = btn;
+    metricToggleWrap.appendChild(btn);
+  }
+  updateMetricBtnActive();
+
+  // `rows` is the project bucket's `recent` array (same shape/source as
+  // renderLog's argument). May be null/undefined (no folder, or a payload
+  // that carries no rows) — rendered as a graceful empty state, never a throw.
+  function renderGraph(rows) {
+    graphRows = Array.isArray(rows) ? rows : [];
+    // Clear + rebuild every call (idempotent — a rapid run of live pushes
+    // never accumulates stale SVG/legend nodes). Which of graphSvgWrap /
+    // graphLegend / graphEmpty ends up with children (rather than a `.style`
+    // visibility toggle) is what shows/hides each state, mirroring renderLog's
+    // "clear then conditionally append an empty-state child" convention.
+    graphSvgWrap.textContent = '';
+    graphLegend.textContent = '';
+    graphEmpty.textContent = '';
+
+    if (!folder) {
+      graphEmpty.textContent = '(open a folder to see the cost graph)';
+      return;
+    }
+
+    const metric = TEL_GRAPH_METRICS.find((m) => m.key === graphMetric) || TEL_GRAPH_METRICS[0];
+
+    // Only rows with a parseable timestamp can be placed on the x-axis; a bad
+    // timestamp makes the row unplaceable so it is skipped entirely (its
+    // metric value — which would otherwise coerce to 0 anyway — contributes
+    // nothing). Sorted ascending so cumulative sums accumulate left-to-right
+    // even if the source array were ever out of order.
+    const valid = [];
+    for (const r0 of graphRows) {
+      const r = r0 || {};
+      const t = new Date(String(r.timestamp == null ? '' : r.timestamp)).getTime();
+      if (!Number.isFinite(t)) continue;
+      valid.push({ t, model: telShortModel(r.model), value: metric.value(r) });
+    }
+    valid.sort((a, b) => a.t - b.t);
+
+    if (valid.length === 0) {
+      graphEmpty.textContent = 'No usage data yet.';
+      return;
+    }
+
+    const tMin = valid[0].t;
+    const tMax = valid[valid.length - 1].t;
+    const tSpan = tMax - tMin;
+
+    // Cumulative running total per model (A2), in first-seen-then-sorted order.
+    const seriesMap = new Map();
+    const running = new Map();
+    for (const pt of valid) {
+      const prev = running.get(pt.model) || 0;
+      const cum = prev + (Number.isFinite(pt.value) ? pt.value : 0);
+      running.set(pt.model, cum);
+      if (!seriesMap.has(pt.model)) seriesMap.set(pt.model, []);
+      seriesMap.get(pt.model).push({ t: pt.t, v: cum });
+    }
+
+    const modelNames = Array.from(seriesMap.keys()).sort();
+    // Shared y-axis across every series (so overlaid curves are comparable):
+    // since each series is non-decreasing, its own max is always its last point.
+    let yMax = 0;
+    for (const name of modelNames) {
+      const arr = seriesMap.get(name);
+      const last = arr[arr.length - 1].v;
+      if (Number.isFinite(last) && last > yMax) yMax = last;
+    }
+    if (!Number.isFinite(yMax) || yMax <= 0) yMax = 1; // avoid divide-by-zero; renders a flat baseline
+
+    const W = 600, H = 220, padL = 46, padR = 12, padT = 12, padB = 20;
+    const plotW = W - padL - padR;
+    const plotH = H - padT - padB;
+
+    function xFor(t) {
+      if (tSpan <= 0) return padL + plotW / 2; // identical/zero time span (A single row, or all rows share one timestamp)
+      return padL + ((t - tMin) / tSpan) * plotW;
+    }
+    function yFor(v) {
+      return padT + plotH - (v / yMax) * plotH;
+    }
+
+    const svg = telCreateSvgEl('svg');
+    telSetAttr(svg, 'viewBox', '0 0 ' + W + ' ' + H);
+    telSetAttr(svg, 'preserveAspectRatio', 'none');
+    telSetAttr(svg, 'class', 'team-telemetry-graph-svg');
+
+    const baseline = telCreateSvgEl('line');
+    telSetAttr(baseline, 'x1', String(padL));
+    telSetAttr(baseline, 'y1', String(padT + plotH));
+    telSetAttr(baseline, 'x2', String(padL + plotW));
+    telSetAttr(baseline, 'y2', String(padT + plotH));
+    telSetAttr(baseline, 'class', 'team-telemetry-graph-axis');
+    svg.appendChild(baseline);
+
+    const yMaxLabel = telCreateSvgEl('text');
+    telSetAttr(yMaxLabel, 'x', '2');
+    telSetAttr(yMaxLabel, 'y', String(padT + 6));
+    telSetAttr(yMaxLabel, 'class', 'team-telemetry-graph-axislabel');
+    yMaxLabel.textContent = metric.fmt(yMax);
+    svg.appendChild(yMaxLabel);
+
+    const yMinLabel = telCreateSvgEl('text');
+    telSetAttr(yMinLabel, 'x', '2');
+    telSetAttr(yMinLabel, 'y', String(padT + plotH));
+    telSetAttr(yMinLabel, 'class', 'team-telemetry-graph-axislabel');
+    yMinLabel.textContent = metric.fmt(0);
+    svg.appendChild(yMinLabel);
+
+    modelNames.forEach((name, idx) => {
+      const color = TEL_GRAPH_COLORS[idx % TEL_GRAPH_COLORS.length];
+      const pts = seriesMap.get(name).map((p) => ({ x: xFor(p.t), y: yFor(p.v) }));
+
+      const d = telSmoothPathD(pts);
+      if (d) {
+        const path = telCreateSvgEl('path');
+        telSetAttr(path, 'd', d);
+        telSetAttr(path, 'class', 'team-telemetry-graph-line');
+        telSetAttr(path, 'stroke', color);
+        svg.appendChild(path);
+      }
+      // Marker circles: keep a single-point series visible (a lone point has
+      // no path to draw) and mark every plotted call for the other series too.
+      for (const p of pts) {
+        const c = telCreateSvgEl('circle');
+        telSetAttr(c, 'cx', String(p.x));
+        telSetAttr(c, 'cy', String(p.y));
+        telSetAttr(c, 'r', '2.5');
+        telSetAttr(c, 'class', 'team-telemetry-graph-point');
+        telSetAttr(c, 'fill', color);
+        svg.appendChild(c);
+      }
+
+      const legendItem = document.createElement('div');
+      legendItem.className = 'team-telemetry-graph-legend-item';
+      const swatch = document.createElement('span');
+      swatch.className = 'team-telemetry-graph-legend-swatch';
+      if (swatch.style) swatch.style.backgroundColor = color;
+      const label = document.createElement('span');
+      label.className = 'team-telemetry-graph-legend-label';
+      label.textContent = name; // telShortModel'd already — textContent only (XSS-safe)
+      legendItem.appendChild(swatch);
+      legendItem.appendChild(label);
+      graphLegend.appendChild(legendItem);
+    });
+
+    graphSvgWrap.appendChild(svg);
+  }
+  renderGraph(null);
+
   // ── Prompt log ────────────────────────────────────────────────────────────
   // One row per captured API call — time, model, tokens up, tokens down, cost —
   // newest first, plus a footer summing the logged calls. This is the "live
@@ -7468,6 +8069,8 @@ function buildTelemetryControl(tab) {
   section.appendChild(scopeLine);
   section.appendChild(totalsGrid);
   section.appendChild(byModelWrap);
+  section.appendChild(sessionWrap);
+  section.appendChild(graphWrap);
   section.appendChild(logWrap);
   section.appendChild(forwardWrap);
   section.appendChild(projWrap);
@@ -7488,6 +8091,7 @@ function buildTelemetryControl(tab) {
     if (!folder) {
       renderUsage(null);
       renderLog(null);
+      renderGraph(null);
       projCb.checked = false;
       projCb.disabled = true;
       return;
@@ -7508,11 +8112,15 @@ function buildTelemetryControl(tab) {
       const projectUsage = res && res.usage ? res.usage.usage : null;
       renderUsage(projectUsage);
       // Project-scoped getUsage returns { usage, recent } (TASK-166) — `recent`
-      // is this project's per-call rows for the prompt log.
-      renderLog(res && res.usage ? res.usage.recent : null);
+      // is this project's per-call rows for the prompt log and the graph
+      // (TASK-199), seeded here so both show already-captured data on mount.
+      const recent = res && res.usage ? res.usage.recent : null;
+      renderLog(recent);
+      renderGraph(recent);
     } catch (_) {
       renderUsage(null);
       renderLog(null);
+      renderGraph(null);
     }
   }
 
@@ -7550,728 +8158,28 @@ function buildTelemetryControl(tab) {
 
   if (typeof telemetryUnsub === 'function') telemetryUnsub();
   telemetryUnsub = window.api.telemetry.onUpdate((payload) => {
+    // The app-wide `usage` field is carried on EVERY push regardless of which
+    // project's ingest triggered it, so the session view always reflects the
+    // current combined total across every open project — including one that
+    // isn't the tab currently focused (TASK-195).
+    if (payload && payload.usage) renderSessionUsage(payload.usage);
     if (folder && payload.project === folder && payload.projectUsage) {
       renderUsage(payload.projectUsage);
       // `projectRecent` is the same bucket's per-call rows. A payload that
-      // doesn't carry the array leaves the existing log alone rather than
-      // blanking a good log.
-      if (Array.isArray(payload.projectRecent)) renderLog(payload.projectRecent);
+      // doesn't carry the array leaves the existing log (and graph) alone
+      // rather than blanking a good one. The graph's own selected-metric
+      // state (`graphMetric`) is untouched by a re-render, so it survives
+      // every live push (TASK-199).
+      if (Array.isArray(payload.projectRecent)) {
+        renderLog(payload.projectRecent);
+        renderGraph(payload.projectRecent);
+      }
     }
   });
 
   refresh();
 
   return section;
-}
-
-// ── Team tab · Workflow panel (TASK-105) ────────────────────────────────────
-// Read-only pipeline visualization of the project's orchestrate skill. Reads
-// `.claude/skills/orchestrate/SKILL.md` and renders the four ordered phases
-// (plan → build → test → review) with each phase's dispatched agent, the
-// planning model directive, and the general-purpose fallback rule. This panel
-// NEVER writes SKILL.md (clarification Q3) — it is a pure read/render surface.
-//
-// Renderer-duplication convention: this renderer is a browser script and cannot
-// `require` lib/skill-workflow.js (TASK-096) or lib/orchestrate-agents.js, so —
-// exactly as those modules document — the tiny parse/agent-resolution slice they
-// own is mirrored inline below. lib/skill-workflow.js is the SOURCE OF TRUTH;
-// keep this mirror in lockstep — changing one without the other is a bug.
-
-// Mirror of FALLBACK_AGENT / AGENT_TYPES / AGENT_NAMES (lib/orchestrate-agents.js).
-const WF_FALLBACK_AGENT = 'general-purpose';
-const WF_AGENT_TYPES = {
-  ba: 'orchestrate-ba',
-  coder: 'orchestrate-coder',
-  tester: 'orchestrate-tester',
-  techLead: 'orchestrate-tech-lead'
-};
-const WF_AGENT_NAMES = [
-  WF_AGENT_TYPES.ba,
-  WF_AGENT_TYPES.coder,
-  WF_AGENT_TYPES.tester,
-  WF_AGENT_TYPES.techLead
-];
-
-// Mirror of PHASE_SPECS / model-directive constants (lib/skill-workflow.js).
-const WF_PHASE_SPECS = [
-  { key: 'plan', number: 1, label: 'plan', agent: WF_AGENT_TYPES.ba },
-  { key: 'build', number: 2, label: 'build', agent: WF_AGENT_TYPES.coder },
-  { key: 'test', number: 3, label: 'test', agent: WF_AGENT_TYPES.tester },
-  { key: 'review', number: 4, label: 'review', agent: WF_AGENT_TYPES.techLead }
-];
-const WF_PLAN_MODEL_PRIMARY = 'claude-opus-4-8';
-const WF_PLAN_MODEL_FALLBACK = 'claude-sonnet-5';
-
-// Mirror of isFallback (lib/orchestrate-agents.js): true when dispatch would fall
-// back to general-purpose for `name`. Faithful to the lib's resolveAgentType +
-// isFallback composition: a non-string / empty `name` resolves to the fallback
-// (so it IS a fallback), an absent `name` (not in the `available` array) is a
-// fallback, and a present `name` is not. `name` === the fallback itself is never
-// flagged. (`available` is an array of agent names, as this mirror is only ever
-// called with the resolved `name:` set.)
-function wfIsFallback(name, available) {
-  let resolved;
-  if (typeof name !== 'string' || name === '') {
-    resolved = WF_FALLBACK_AGENT;
-  } else {
-    const has = Array.isArray(available) && available.includes(name);
-    resolved = has ? name : WF_FALLBACK_AGENT;
-  }
-  return resolved === WF_FALLBACK_AGENT && name !== WF_FALLBACK_AGENT;
-}
-
-// Mirror of headingName (lib/skill-workflow.js): a `## <text>` level-2 heading.
-function wfHeadingName(line) {
-  const m = /^\s*##\s+(.*?)\s*$/.exec(line);
-  return m ? m[1] : null;
-}
-
-// Mirror of phaseNumberOf: the `Phase <n>` number a heading declares, or null.
-function wfPhaseNumberOf(headingText) {
-  const m = /^Phase\s+(\d+)\b/i.exec(headingText);
-  return m ? Number(m[1]) : null;
-}
-
-// Mirror of agentIn: first known orchestrate-* agent name appearing in `text`.
-function wfAgentIn(text) {
-  const re = /orchestrate-[a-z-]+/gi;
-  let m;
-  while ((m = re.exec(text)) !== null) {
-    const name = m[0].toLowerCase();
-    if (WF_AGENT_NAMES.includes(name)) return name;
-  }
-  return null;
-}
-
-// Mirror of modelDirectiveIn: { primary, fallback } for the Phase-1 model, else null.
-function wfModelDirectiveIn(text) {
-  if (!/claude-opus-4-8/i.test(text)) return null;
-  let fallback = null;
-  const re = /claude-[a-z0-9.-]+/gi;
-  let m;
-  while ((m = re.exec(text)) !== null) {
-    const token = m[0].toLowerCase();
-    if (token !== WF_PLAN_MODEL_PRIMARY) { fallback = token; break; }
-  }
-  return { primary: WF_PLAN_MODEL_PRIMARY, fallback: fallback || WF_PLAN_MODEL_FALLBACK };
-}
-
-// Mirror of sectionsOf: fence-aware split into level-2 sections.
-function wfSectionsOf(md) {
-  const lines = String(md).split(/\r?\n/);
-  const sections = [];
-  let current = null;
-  let inFence = false;
-  let fenceMarker = '';
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const fence = /^\s*(`{3,}|~{3,})\s*\S*\s*$/.exec(line);
-    if (fence) {
-      const marker = fence[1][0];
-      if (!inFence) { inFence = true; fenceMarker = marker; }
-      else if (marker === fenceMarker) { inFence = false; }
-      if (current) current.lines.push(line);
-      continue;
-    }
-    if (!inFence) {
-      const h = wfHeadingName(line);
-      if (h != null) {
-        current = { name: h, startLine: i + 1, lines: [] };
-        sections.push(current);
-        continue;
-      }
-    }
-    if (current) current.lines.push(line);
-  }
-  return sections;
-}
-
-// Mirror of agentFromDispatch: agent named on the dispatch line mentioning `Phase <n>`.
-function wfAgentFromDispatch(dispatchText, number) {
-  if (!dispatchText) return null;
-  const lines = dispatchText.split(/\r?\n/);
-  const re = new RegExp('Phase\\s+' + number + '\\b', 'i');
-  for (const line of lines) {
-    if (re.test(line)) {
-      const agent = wfAgentIn(line);
-      if (agent) return agent;
-    }
-  }
-  return null;
-}
-
-// Mirror of parseWorkflow: SKILL.md content → { phases, warnings }. Tolerant of
-// any non-string/garbage input; never throws; phases in canonical order.
-function wfParseWorkflow(skillMd) {
-  const warnings = [];
-  if (typeof skillMd !== 'string') {
-    warnings.push('SKILL.md content is not a string; no workflow parsed.');
-    return { phases: [], warnings };
-  }
-  try {
-    const sections = wfSectionsOf(skillMd);
-
-    const phaseSectionByNumber = new Map();
-    for (const section of sections) {
-      const num = wfPhaseNumberOf(section.name);
-      if (num != null && !phaseSectionByNumber.has(num)) {
-        phaseSectionByNumber.set(num, section);
-      }
-    }
-
-    const dispatchSection = sections.find(s => /dispatch/i.test(s.name)
-      && /fallback/i.test(s.name));
-    const dispatchText = dispatchSection ? dispatchSection.lines.join('\n') : '';
-
-    const phases = [];
-    for (const spec of WF_PHASE_SPECS) {
-      const section = phaseSectionByNumber.get(spec.number);
-      if (!section) {
-        warnings.push(
-          `Missing Phase ${spec.number} (${spec.label}) heading in SKILL.md.`
-        );
-        continue;
-      }
-      const bodyText = section.lines.join('\n');
-
-      const agent = wfAgentFromDispatch(dispatchText, spec.number)
-        || wfAgentIn(bodyText)
-        || spec.agent;
-
-      const phase = {
-        key: spec.key,
-        title: section.name,
-        agent,
-        headingLine: section.startLine
-      };
-
-      if (spec.number === 1) {
-        const model = wfModelDirectiveIn(dispatchText) || wfModelDirectiveIn(bodyText);
-        if (model) phase.model = model;
-      }
-
-      phases.push(phase);
-    }
-
-    return { phases, warnings };
-  } catch (_) {
-    return { phases: [], warnings: warnings.concat('Could not parse SKILL.md.') };
-  }
-}
-
-// ── Workflow panel · per-phase enable/reorder (TASK-182) ────────────────────
-// Mirror of the enabled/order half of lib/team-config.js's PHASE_DEFAULTS /
-// normalizePhases, adapted to read a WHOLE raw team-config object (as loaded
-// off disk) rather than just skill.phases, since this is what refreshTeamWorkflow
-// already has in hand. KEEP IN LOCKSTEP with lib/team-config.js.
-const WF_PHASE_DEFAULTS = Object.fromEntries(
-  WF_PHASE_SPECS.map((spec) => [spec.key, { enabled: spec.key !== 'review', order: spec.number }])
-);
-
-// Dependency pairs for the non-blocking order warning: each entry says "this
-// phase naturally runs after that one" — order is user-configurable, but a
-// phase scheduled at or before its natural dependency is flagged (never
-// blocked; TASK-181's SKILL.md prose is the real build-time safety net).
-const WF_ORDER_DEPENDENCIES = { build: 'plan', test: 'build', review: 'test' };
-
-// Normalise a raw team-config object's skill.phases into all four canonical
-// phase keys' { enabled, order }, defaulting per WF_PHASE_DEFAULTS. Tolerates
-// null/junk/partial input and never throws.
-function wfNormalizePhaseConfig(rawConfig) {
-  const cfg = (rawConfig && typeof rawConfig === 'object' && !Array.isArray(rawConfig)) ? rawConfig : {};
-  const skill = (cfg.skill && typeof cfg.skill === 'object' && !Array.isArray(cfg.skill)) ? cfg.skill : {};
-  const rawPhases = (skill.phases && typeof skill.phases === 'object' && !Array.isArray(skill.phases)) ? skill.phases : {};
-  const out = {};
-  for (const spec of WF_PHASE_SPECS) {
-    const key = spec.key;
-    const def = WF_PHASE_DEFAULTS[key];
-    const rp = (rawPhases[key] && typeof rawPhases[key] === 'object' && !Array.isArray(rawPhases[key])) ? rawPhases[key] : null;
-    const enabled = (rp && typeof rp.enabled === 'boolean') ? rp.enabled : def.enabled;
-    const n = rp ? Number(rp.order) : NaN;
-    const order = (rp && rp.order !== undefined && Number.isInteger(n) && n > 0) ? n : def.order;
-    out[key] = { enabled, order };
-  }
-  return out;
-}
-
-// Sort `keys` (a subset of the four canonical phase keys) by their `order`
-// value in `working`, tie-broken by canonical WF_PHASE_SPECS index so an order
-// collision is resolved deterministically instead of depending on sort
-// stability alone.
-function wfSortedPhaseKeys(keys, working) {
-  const canonicalIndex = {};
-  WF_PHASE_SPECS.forEach((s, i) => { canonicalIndex[s.key] = i; });
-  const w = (working && typeof working === 'object') ? working : {};
-  const arr = (Array.isArray(keys) ? keys : []).slice();
-  arr.sort((a, b) => {
-    const oa = (w[a] && Number.isFinite(w[a].order)) ? w[a].order : canonicalIndex[a];
-    const ob = (w[b] && Number.isFinite(w[b].order)) ? w[b].order : canonicalIndex[b];
-    if (oa !== ob) return oa - ob;
-    return canonicalIndex[a] - canonicalIndex[b];
-  });
-  return arr;
-}
-
-// Non-blocking dependency-order warnings: for each phase with a natural
-// dependency (WF_ORDER_DEPENDENCIES), flag it when its `order` is not strictly
-// after its dependency's `order`. Returns a `{ [phaseKey]: message }` map
-// (Object.create(null) so it is safe to probe with any string key) — checked
-// regardless of the `enabled` flag, which is independent of ordering.
-function wfPhaseOrderWarnings(working) {
-  const warnings = Object.create(null);
-  const w = (working && typeof working === 'object') ? working : {};
-  for (const key of Object.keys(WF_ORDER_DEPENDENCIES)) {
-    const afterKey = WF_ORDER_DEPENDENCIES[key];
-    const cur = w[key];
-    const dep = w[afterKey];
-    if (!cur || !dep || !Number.isFinite(cur.order) || !Number.isFinite(dep.order)) continue;
-    if (cur.order <= dep.order) {
-      warnings[key] = key + ' would run at or before ' + afterKey + ' — order ' + cur.order
-        + ' is not after ' + afterKey + '\'s order ' + dep.order
-        + '. This phase depends on ' + afterKey + ' completing first.';
-    }
-  }
-  return warnings;
-}
-
-// ── Workflow panel · scoped SKILL.md phase-section splice (TASK-184/185) ────
-// Renderer mirror of lib/skill-section.js: the renderer is a browser script
-// and cannot `require` Node modules, so this reuses the wf* section-parsing
-// mirror above (wfSectionsOf/wfPhaseNumberOf) the exact same way
-// lib/skill-section.js reuses lib/skill-workflow.js's sectionsOf/phaseNumberOf.
-// KEEP IN LOCKSTEP with lib/skill-section.js.
-const WF_PHASE_KEYS = WF_PHASE_SPECS.map((s) => s.key);
-
-function wfSpecForKey(phaseKey) {
-  return WF_PHASE_SPECS.find((s) => s.key === phaseKey) || null;
-}
-
-// The line-ending style to rejoin with (mirror of detectEol).
-function wfDetectEol(text) {
-  return /\r\n/.test(text) ? '\r\n' : '\n';
-}
-
-// Locate the (first-wins) section for `spec.number` inside `sections` (mirror
-// of findPhaseSection).
-function wfFindPhaseSection(sections, spec) {
-  for (const section of sections) {
-    if (wfPhaseNumberOf(section.name) === spec.number) return section;
-  }
-  return null;
-}
-
-// Strip ONE surrounding markdown code fence from AI output, if present, so a
-// phase-section body the model wrapped in ``` / ```markdown still splices
-// cleanly (mirror of stripOneCodeFence). Non-string input yields ''.
-function stripOneCodeFence(text) {
-  const raw = typeof text === 'string' ? text : '';
-  const trimmed = raw.trim();
-  const m = /^```[^\n]*\n([\s\S]*?)\r?\n?```$/.exec(trimmed);
-  if (m) return m[1];
-  return raw;
-}
-
-// wfExtractPhaseBody(skillMd, phaseKey) -> { ok, body, reason } — pulls the
-// current prose body of the `## Phase <n>` section for `phaseKey`. NEVER
-// throws. Mirror of lib/skill-section.js's extractPhaseBody.
-function wfExtractPhaseBody(skillMd, phaseKey) {
-  try {
-    if (typeof skillMd !== 'string' || skillMd.length === 0) {
-      return { ok: false, body: '', reason: 'invalid-input' };
-    }
-    const spec = wfSpecForKey(phaseKey);
-    if (!spec) return { ok: false, body: '', reason: 'bad-phase-key' };
-    const sections = wfSectionsOf(skillMd);
-    const section = wfFindPhaseSection(sections, spec);
-    if (!section) return { ok: false, body: '', reason: 'missing-phase' };
-    const eol = wfDetectEol(skillMd);
-    return { ok: true, body: section.lines.join(eol), reason: 'ok' };
-  } catch (_) {
-    return { ok: false, body: '', reason: 'parse-error' };
-  }
-}
-
-// wfReplacePhaseBody(skillMd, phaseKey, newBody) -> { ok, content, reason } —
-// the full new SKILL.md text with ONLY `phaseKey`'s section body replaced;
-// every other byte (other sections, EOL style, trailing newline) preserved.
-// Refuses (no output) on any section-boundary violation. Mirror of
-// lib/skill-section.js's replacePhaseBody.
-function wfReplacePhaseBody(skillMd, phaseKey, newBody) {
-  try {
-    if (typeof skillMd !== 'string' || skillMd.length === 0) {
-      return { ok: false, content: '', reason: 'invalid-input' };
-    }
-    const spec = wfSpecForKey(phaseKey);
-    if (!spec) return { ok: false, content: '', reason: 'bad-phase-key' };
-    if (typeof newBody !== 'string') {
-      return { ok: false, content: '', reason: 'invalid-body' };
-    }
-
-    const originalSections = wfSectionsOf(skillMd);
-    const section = wfFindPhaseSection(originalSections, spec);
-    if (!section) return { ok: false, content: '', reason: 'missing-phase' };
-
-    const eol = wfDetectEol(skillMd);
-    const lines = skillMd.split(/\r?\n/);
-
-    const headingIndex = section.startLine - 1;
-    const bodyStart = headingIndex + 1;
-    const bodyLen = section.lines.length;
-
-    const cleanedBody = stripOneCodeFence(newBody);
-    const newBodyLines = cleanedBody.split(/\r?\n/);
-
-    const newLines = lines
-      .slice(0, bodyStart)
-      .concat(newBodyLines)
-      .concat(lines.slice(bodyStart + bodyLen));
-    const newContent = newLines.join(eol);
-
-    const rebuiltSections = wfSectionsOf(newContent);
-    if (rebuiltSections.length !== originalSections.length) {
-      return { ok: false, content: '', reason: 'section-boundary-violation' };
-    }
-    const targetIdx = originalSections.indexOf(section);
-    for (let i = 0; i < originalSections.length; i++) {
-      if (i === targetIdx) continue;
-      const before = originalSections[i];
-      const after = rebuiltSections[i];
-      if (!after || before.name !== after.name
-        || before.lines.join('\n') !== after.lines.join('\n')) {
-        return { ok: false, content: '', reason: 'section-boundary-violation' };
-      }
-    }
-
-    return { ok: true, content: newContent, reason: 'ok' };
-  } catch (_) {
-    return { ok: false, content: '', reason: 'parse-error' };
-  }
-}
-
-// Validate an AI-proposed phase-section body against the SKILL.md snapshot it
-// was generated from. Loop-strips nested code fences (TASK-194: a doubly/
-// triply-fenced response fully normalizes here, so the preview shown to the
-// user and what Save later splices are byte-identical), rejects empty
-// proposals and any proposal that would touch more than this one phase's
-// section (reusing wfReplacePhaseBody itself as the validator, so this can
-// never disagree with the real Save). Returns { ok, body, error }.
-function validateRegeneratedPhaseSection(proposal, skillMdSnapshot, phaseKey) {
-  const raw = typeof proposal === 'string' ? proposal : '';
-  let body = raw;
-  for (let i = 0; i < 10; i++) {
-    const next = stripOneCodeFence(body);
-    if (next === body) break;
-    body = next;
-  }
-  if (body.trim() === '') {
-    return { ok: false, body: '', error: 'The proposal is empty.' };
-  }
-  const spliced = wfReplacePhaseBody(skillMdSnapshot, phaseKey, body);
-  if (!spliced.ok) {
-    if (spliced.reason === 'section-boundary-violation') {
-      return {
-        ok: false, body: '',
-        error: 'The AI proposal is invalid — it changed more than this one phase\'s section, so nothing was written.'
-      };
-    }
-    return { ok: false, body: '', error: 'Could not validate the proposal (' + spliced.reason + ').' };
-  }
-  return { ok: true, body, error: null };
-}
-
-// Re-read SKILL.md and render the read-only pipeline. Bound to the Workflow
-// Refresh control and called on Team-tab activation (initTeamTab). There is NO
-// background polling and NO write path here. Skill absent → install banner (the
-// same tasks:installSkill flow the Tasks board and Agents panel use). Installed
-// but empty/binary/unreadable → a warning (never a blank panel). Stale-guarded
-// against the folder/tab changing mid-await.
-async function refreshTeamWorkflow(tab) {
-  const body = tab.els.teamWorkflowBody;
-  if (!body) return;
-  if (!tab.folder) { body.textContent = '(open a folder)'; return; }
-  body.textContent = 'Loading…';
-
-  // Cross-check dispatch targets against the real .claude/agents/ by each agent's
-  // frontmatter `name:` value — NOT its filename — mirroring resolveAgentType/
-  // isFallback (lib/orchestrate-agents.js), where a phase agent is "installed" iff
-  // some agent file DECLARES that `name:`. The bundled files ship as
-  // ba.md/coder.md/tester.md/tech-lead.md but declare `name: orchestrate-*`, so the
-  // basename list (readTeamAgentNames, used by the agent select/badges) would flag
-  // every phase as a general-purpose fallback. Resolve the `name:` set here instead.
-  // As well as the installed `name:` set (for fallback detection), capture each
-  // agent's file path + full parsed frontmatter keyed by its `name:` — the
-  // per-phase model editor (TASK-106) rewrites that agent's file, and the file is
-  // identified by its declared `name:`, NOT its basename (matching the resolution
-  // rule above). Unparseable/nameless files are skipped (no editor, no name).
-  const agentNames = [];
-  const agentFiles = new Map(); // frontmatter name -> { filePath, parsed }
-  {
-    const agentsDir = tasksJoin(tab.folder, '.claude', 'agents');
-    let files = [];
-    try {
-      const fr = await window.api.fs.findByExt(agentsDir, '.md');
-      if (fr && fr.ok && Array.isArray(fr.files)) files = fr.files;
-    } catch (err) {
-      console.error('[team workflow agents]', err);
-    }
-    if (tab.els.teamWorkflowBody !== body) return;
-    for (const fp of files) {
-      let content = null;
-      try {
-        const rr = await window.api.fs.readFile(fp);
-        if (rr && rr.ok && !rr.binary && typeof rr.content === 'string') content = rr.content;
-      } catch (err) {
-        console.error('[team workflow agent read]', err);
-      }
-      if (tab.els.teamWorkflowBody !== body) return;
-      if (typeof content !== 'string') continue;
-      const parsed = parseAgentFileRenderer(content);
-      if (!parsed || !parsed.fm) continue; // unparseable frontmatter → skip
-      const nm = parsed.fm.name != null ? String(parsed.fm.name).trim() : '';
-      if (!nm) continue; // no name → cannot map to a phase
-      agentNames.push(nm);
-      if (!agentFiles.has(nm)) agentFiles.set(nm, { filePath: fp, parsed });
-    }
-  }
-  if (tab.els.teamWorkflowBody !== body) return;
-
-  // Read tasks/team-config.json for the concurrency-default control (part b). A
-  // missing/empty/corrupt file → null (the control shows the resolved default).
-  // Never throws; stale-guarded against a mid-await folder switch.
-  let rawConfig = null;
-  try {
-    const cfgPath = tasksJoin(tab.folder, 'tasks', 'team-config.json');
-    const cfgRes = await window.api.fs.readFile(cfgPath);
-    if (tab.els.teamWorkflowBody !== body) return;
-    if (cfgRes && cfgRes.ok && !cfgRes.binary && typeof cfgRes.content === 'string'
-      && cfgRes.content.trim() !== '') {
-      try { rawConfig = JSON.parse(cfgRes.content); } catch (_) { rawConfig = null; }
-    }
-  } catch (_) { rawConfig = null; }
-  if (tab.els.teamWorkflowBody !== body) return;
-
-  const skillPath = tasksJoin(tab.folder, '.claude', 'skills', 'orchestrate', 'SKILL.md');
-
-  // Install state via existence (mirrors checkOrchestrateSkill): a missing
-  // SKILL.md shows the install banner, distinct from an installed-but-unreadable
-  // file which shows a warning.
-  let installed = false;
-  try {
-    const e = await window.api.fs.exists(skillPath);
-    installed = !!(e && e.ok && e.exists);
-  } catch (err) {
-    console.error('[team workflow exists]', err);
-  }
-  if (tab.els.teamWorkflowBody !== body) return;
-  if (!installed) {
-    body.textContent = '';
-    body.appendChild(buildWorkflowInstallHint(tab));
-    return;
-  }
-
-  // Read-only: content is only ever read and rendered, never written.
-  let res = null;
-  try {
-    res = await window.api.fs.readFile(skillPath);
-  } catch (err) {
-    console.error('[team workflow read]', err);
-  }
-  if (tab.els.teamWorkflowBody !== body) return;
-
-  body.textContent = '';
-  if (!res || !res.ok || res.binary || typeof res.content !== 'string') {
-    // Installed but unreadable/binary — degrade to a warning, never blank.
-    body.appendChild(buildWorkflowView(tab, {
-      phases: [],
-      warnings: ['SKILL.md could not be read (empty, binary, or unreadable).']
-    }, agentNames, agentFiles, rawConfig, null, skillPath));
-    return;
-  }
-
-  const model = wfParseWorkflow(res.content);
-  body.appendChild(buildWorkflowView(tab, model, agentNames, agentFiles, rawConfig, res.content, skillPath));
-}
-
-// Install-skill banner shown when SKILL.md is absent. Mirrors the Tasks board
-// banner (tasksSkillBanner) and buildAgentsInstallHint, driving the same
-// tasks:installSkill IPC; on success the pipeline is re-read and rendered.
-function buildWorkflowInstallHint(tab) {
-  const banner = document.createElement('div');
-  banner.className = 'teamWorkflowHint install-banner';
-  const text = document.createElement('div');
-  text.className = 'install-banner-text';
-  const strong = document.createElement('strong');
-  strong.textContent = 'Orchestration skill not installed.';
-  const rest = document.createTextNode(' Install it to see the read-only workflow pipeline for this project.');
-  text.appendChild(strong);
-  text.appendChild(rest);
-  banner.appendChild(text);
-  const actions = document.createElement('div');
-  actions.className = 'install-banner-actions';
-  const btn = document.createElement('button');
-  btn.className = 'teamWorkflowInstallBtn small-btn primary-btn';
-  btn.textContent = 'Install orchestration skill';
-  btn.addEventListener('click', async () => {
-    if (!tab.folder) return;
-    const prev = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = 'Installing…';
-    try {
-      const res = await window.api.tasks.installSkill(tab.folder);
-      if (!res || !res.ok) {
-        strong.textContent = 'Install failed.';
-        rest.textContent = ' ' + ((res && res.error) || 'unknown error');
-        btn.disabled = false;
-        btn.textContent = prev;
-        return;
-      }
-      // Re-read/render the pipeline first (this replaces the install banner), then
-      // place the shared restart notice into the now-populated, persistent body
-      // (TASK-131). Awaited so the notice survives the re-render.
-      await refreshTeamWorkflow(tab);
-      promptSkillRegistration(tab, tab.els.teamWorkflowBody);
-    } catch (err) {
-      console.error('[team workflow installSkill]', err);
-      strong.textContent = 'Install failed.';
-      rest.textContent = ' ' + ((err && err.message) || String(err));
-      btn.disabled = false;
-      btn.textContent = prev;
-    }
-  });
-  actions.appendChild(btn);
-  banner.appendChild(actions);
-  return banner;
-}
-
-// Render the parsed workflow model: parse warnings first (so a partially
-// parseable SKILL.md is never a blank panel), then each phase card in order,
-// then the shared phase-config Save control (TASK-182) and the concurrency
-// default. `skillMdSnapshot`/`skillPath` back the per-phase AI-regenerate box
-// (TASK-185); both are null when SKILL.md could not be read (no phase cards
-// render in that case, so they are simply unused).
-function buildWorkflowView(tab, model, agentNames, agentFiles, rawConfig, skillMdSnapshot, skillPath) {
-  const wrap = document.createElement('div');
-  wrap.className = 'team-workflow';
-
-  const warnings = (model && Array.isArray(model.warnings)) ? model.warnings : [];
-  const phases = (model && Array.isArray(model.phases)) ? model.phases : [];
-
-  for (const w of warnings) {
-    const el = document.createElement('div');
-    el.className = 'team-workflow-warning';
-    el.textContent = String(w); // textContent only — SKILL.md is untrusted (no XSS)
-    wrap.appendChild(el);
-  }
-
-  if (phases.length === 0 && warnings.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'team-workflow-empty';
-    empty.textContent = 'No workflow phases found in SKILL.md.';
-    wrap.appendChild(empty);
-  }
-
-  if (phases.length > 0) {
-    // Working phase-config state (TASK-182): enabled/order per canonical key,
-    // seeded from tasks/team-config.json and edited locally (toggle/reorder)
-    // until the shared Save below persists it. Never touches SKILL.md.
-    const workingPhases = wfNormalizePhaseConfig(rawConfig);
-    const presentKeys = phases.map((p) => p.key);
-
-    const phasesWrap = document.createElement('div');
-    phasesWrap.className = 'team-workflow-phases';
-    wrap.appendChild(phasesWrap);
-
-    const renderPhaseCards = () => {
-      phasesWrap.textContent = '';
-      const sortedOrder = wfSortedPhaseKeys(presentKeys, workingPhases);
-      const orderWarnings = wfPhaseOrderWarnings(workingPhases);
-      for (const phase of phases) {
-        const posIdx = sortedOrder.indexOf(phase.key);
-        const phaseCtl = {
-          workingPhases,
-          isFirst: posIdx <= 0,
-          isLast: posIdx === -1 || posIdx === sortedOrder.length - 1,
-          orderWarning: orderWarnings[phase.key] || null,
-          onToggle: (key, checked) => {
-            if (workingPhases[key]) workingPhases[key].enabled = checked;
-            renderPhaseCards();
-          },
-          onMove: (key, dir) => {
-            const order = wfSortedPhaseKeys(presentKeys, workingPhases);
-            const idx = order.indexOf(key);
-            const otherIdx = idx + dir;
-            if (idx === -1 || otherIdx < 0 || otherIdx >= order.length) return;
-            const otherKey = order[otherIdx];
-            const a = workingPhases[key];
-            const b = workingPhases[otherKey];
-            if (!a || !b) return;
-            const tmp = a.order;
-            a.order = b.order;
-            b.order = tmp;
-            renderPhaseCards();
-          },
-        };
-        phasesWrap.appendChild(buildWorkflowPhase(tab, phase, agentNames, agentFiles, phaseCtl, skillMdSnapshot, skillPath));
-      }
-    };
-    renderPhaseCards();
-
-    // Shared Save control (TASK-182): re-reads tasks/team-config.json first
-    // (mirroring buildWorkflowConcurrencyControl below) so a concurrent Board-
-    // panel or concurrency-default save is not clobbered, writes ONLY
-    // skill.phases, and never touches SKILL.md.
-    const saveSection = document.createElement('div');
-    saveSection.className = 'team-workflow-phase-save';
-    const saveBtn = document.createElement('button');
-    saveBtn.className = 'small-btn primary-btn';
-    saveBtn.textContent = 'Save phase settings';
-    const saveErr = document.createElement('div');
-    saveErr.className = 'team-agent-desc-error hidden';
-    saveSection.appendChild(saveBtn);
-    saveSection.appendChild(saveErr);
-    wrap.appendChild(saveSection);
-
-    const showSaveErr = (m) => { saveErr.textContent = m; saveErr.classList.remove('hidden'); };
-    const clearSaveErr = () => { saveErr.textContent = ''; saveErr.classList.add('hidden'); };
-
-    saveBtn.addEventListener('click', async () => {
-      clearSaveErr();
-      saveBtn.disabled = true;
-      try {
-        const cfgPath = tasksJoin(tab.folder, 'tasks', 'team-config.json');
-        let fresh = rawConfig;
-        try {
-          const r = await window.api.fs.readFile(cfgPath);
-          if (r && r.ok && !r.binary && typeof r.content === 'string' && r.content.trim() !== '') {
-            try { fresh = JSON.parse(r.content); } catch (_) { fresh = rawConfig; }
-          }
-        } catch (_) { fresh = rawConfig; }
-        const working = buildWorkingConfigFromRaw(fresh);
-        working.skill = { ...working.skill, phases: workingPhases };
-        const content = tasksSerializeTeamConfig(working);
-        const tasksDir = tasksJoin(tab.folder, 'tasks');
-        try { await window.api.fs.mkdir(tasksDir); } catch (_) {}
-        const res = await window.api.fs.writeFile(cfgPath, content);
-        if (!res || !res.ok) {
-          showSaveErr('Save failed: ' + ((res && res.error) || 'unknown error') + '. Try again.');
-          saveBtn.disabled = false;
-          return;
-        }
-      } catch (e) {
-        showSaveErr('Save failed: ' + ((e && e.message) || String(e)) + '. Try again.');
-        saveBtn.disabled = false;
-        return;
-      }
-      saveBtn.disabled = false;
-      refreshTeamWorkflow(tab);
-    });
-  }
-
-  // Build-concurrency default (TASK-106 part b): writes skill.concurrencyDefault
-  // into tasks/team-config.json. Independent of the phase cards, so it renders
-  // even when SKILL.md parses to no phases.
-  wrap.appendChild(buildWorkflowConcurrencyControl(tab, rawConfig));
-  return wrap;
 }
 
 // Build a working config object (matching tasksSerializeTeamConfig's shape) from a
@@ -8394,488 +8302,125 @@ function buildWorkflowConcurrencyControl(tab, rawConfig) {
     // toolbar (only when no per-folder override) and re-read the panel so it
     // mirrors the persisted config.
     syncTasksConcurrencyOption(tab);
-    refreshTeamWorkflow(tab);
+    refreshTeamBoard(tab);
   });
 
   return section;
 }
 
-// One phase card: the SKILL.md heading, the dispatched agent, an explicit
-// missing-agent fallback warning when the dedicated agent is absent from
-// .claude/agents/, the always-shown fallback rule, (Phase 1 only) the planning
-// model directive, the per-phase Enabled/reorder controls (TASK-182, via
-// `phaseCtl`), and the "Regenerate this phase's instructions with AI" box
-// (TASK-185, via `skillMdSnapshot`/`skillPath`). All dynamic text uses
-// textContent (no innerHTML). `phaseCtl` is null/undefined when no
-// tasks/team-config.json context is available — the enable/reorder block is
-// skipped in that case (still never a blank card).
-function buildWorkflowPhase(tab, phase, agentNames, agentFiles, phaseCtl, skillMdSnapshot, skillPath) {
-  const card = document.createElement('div');
-  card.className = 'team-workflow-phase';
+// The context-optimisation control (TASK-200): an Enabled checkbox + level
+// <select> seeded from skill.contextOptimization (resolved/clamped via
+// tasksNormalizeContextOptimization) that persists
+// skill.contextOptimization into tasks/team-config.json. Mirrors
+// buildWorkflowConcurrencyControl's structure/Save pattern (re-read fresh with
+// keep-last-good fallback, whole-file write, inline error, refresh on
+// success) and renders independently of the phase cards, so it is present
+// even when SKILL.md parses to no phases. The orchestrate skill itself reads
+// this setting from tasks/team-config.json (see SKILL.md's "Context
+// optimisation" directive) — this control only persists it.
+function buildWorkflowContextOptimizationControl(tab, rawConfig) {
+  const section = document.createElement('div');
+  section.className = 'team-workflow-context-opt';
 
   const title = document.createElement('div');
   title.className = 'team-workflow-phase-title';
-  title.textContent = String(phase.title != null ? phase.title : phase.key);
-  card.appendChild(title);
+  title.textContent = 'Context optimisation';
+  section.appendChild(title);
 
-  const meta = document.createElement('div');
-  meta.className = 'team-workflow-phase-meta';
-  const agentLabel = document.createElement('span');
-  agentLabel.className = 'team-workflow-meta-label';
-  agentLabel.textContent = 'Agent';
-  const agentBadge = document.createElement('span');
-  agentBadge.className = 'team-agent-badge team-workflow-agent';
-  agentBadge.textContent = String(phase.agent);
-  meta.appendChild(agentLabel);
-  meta.appendChild(agentBadge);
-  card.appendChild(meta);
+  const help = document.createElement('div');
+  help.className = 'team-workflow-rule';
+  help.textContent = 'When enabled, /orchestrate drops context it no longer needs at every '
+    + 'phase movement, summarises what it must keep, and carries the minimum forward. '
+    + 'Level tunes how aggressively.';
+  section.appendChild(help);
 
-  // Missing-agent fallback warning (mirror of resolveAgentType/isFallback): the
-  // dedicated agent has no definition in .claude/agents/, so dispatch falls back.
-  const fellBack = wfIsFallback(phase.agent, agentNames);
-  if (fellBack) {
-    const warn = document.createElement('div');
-    warn.className = 'team-workflow-fallback';
-    warn.textContent = phase.agent + ' is not defined in .claude/agents/ — '
-      + 'dispatch falls back to ' + WF_FALLBACK_AGENT + '.';
-    card.appendChild(warn);
-  }
+  const rawSkill = rawConfig && typeof rawConfig.skill === 'object' && rawConfig.skill ? rawConfig.skill : {};
+  const resolved = tasksNormalizeContextOptimization(rawSkill.contextOptimization);
 
-  // The fallback rule, always shown (an acceptance criterion): every phase notes
-  // that a missing dedicated agent degrades to the general-purpose agent.
-  const rule = document.createElement('div');
-  rule.className = 'team-workflow-rule';
-  rule.textContent = 'Falls back to ' + WF_FALLBACK_AGENT
-    + ' when the agent definition is missing.';
-  card.appendChild(rule);
+  const row = document.createElement('div');
+  row.className = 'team-workflow-context-opt-row team-workflow-phase-meta';
 
-  // Per-phase agent-model editor (TASK-106): rewrites ONLY the `model:` scalar of
-  // this phase's agent file. Disabled with a note when that file is missing/
-  // unparseable (the fallback warning above already flags a missing dedicated
-  // agent). Agent DESCRIPTIONS are edited in the Agents panel — not duplicated here.
-  const agentFile = (agentFiles instanceof Map) ? agentFiles.get(phase.agent) : null;
-  if (agentFile) {
-    card.appendChild(buildWorkflowModelEditor(tab, phase, agentFile));
-  } else {
-    const noEdit = document.createElement('div');
-    noEdit.className = 'team-workflow-rule';
-    noEdit.textContent = 'Model editor unavailable — no agent file defines '
-      + phase.agent + ' in .claude/agents/.';
-    card.appendChild(noEdit);
-  }
+  const enabledLabel = document.createElement('label');
+  enabledLabel.className = 'team-workflow-context-opt-enabled-label';
+  const enabledCheckbox = document.createElement('input');
+  enabledCheckbox.type = 'checkbox';
+  enabledCheckbox.className = 'team-workflow-context-opt-enabled';
+  enabledCheckbox.checked = resolved.enabled;
+  const enabledText = document.createElement('span');
+  enabledText.textContent = 'Enabled';
+  enabledLabel.appendChild(enabledCheckbox);
+  enabledLabel.appendChild(enabledText);
+  row.appendChild(enabledLabel);
 
-  // Model directive (Phase 1 / plan only), READ-ONLY: this directive lives in
-  // SKILL.md, which this panel NEVER writes. The precedence note makes clear it
-  // overrides the agent-file model for planning dispatch.
-  if (phase.model && phase.model.primary) {
-    const modelRow = document.createElement('div');
-    modelRow.className = 'team-workflow-phase-meta';
-    const modelLabel = document.createElement('span');
-    modelLabel.className = 'team-workflow-meta-label';
-    modelLabel.textContent = 'SKILL.md model';
-    const modelBadge = document.createElement('span');
-    modelBadge.className = 'team-agent-badge team-workflow-model';
-    modelBadge.textContent = String(phase.model.primary);
-    modelRow.appendChild(modelLabel);
-    modelRow.appendChild(modelBadge);
-    if (phase.model.fallback) {
-      const arrow = document.createElement('span');
-      arrow.className = 'team-workflow-model-fallback';
-      arrow.textContent = '→ falls back to ' + phase.model.fallback;
-      modelRow.appendChild(arrow);
-    }
-    card.appendChild(modelRow);
-
-    const note = document.createElement('div');
-    note.className = 'team-workflow-rule';
-    note.textContent = 'This planning-model directive is defined in SKILL.md '
-      + '(read-only here) and takes precedence over the agent-file model for '
-      + 'planning dispatch.';
-    card.appendChild(note);
-  }
-
-  // Enable/reorder controls (TASK-182): a first-class toggle + up/down reorder
-  // backed by skill.phases.<phase>.{enabled,order} in tasks/team-config.json.
-  // Never touches SKILL.md — only the shared Save in buildWorkflowView does.
-  if (phaseCtl && phaseCtl.workingPhases && phaseCtl.workingPhases[phase.key]) {
-    const cfg = phaseCtl.workingPhases[phase.key];
-    if (!cfg.enabled) {
-      card.classList.add('team-workflow-phase-disabled');
-      const badge = document.createElement('span');
-      badge.className = 'team-workflow-disabled-badge';
-      badge.textContent = 'Disabled';
-      card.appendChild(badge);
-    }
-
-    const toggleWrap = document.createElement('label');
-    toggleWrap.className = 'team-workflow-enabled-toggle';
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.className = 'team-workflow-enabled-checkbox';
-    checkbox.checked = !!cfg.enabled;
-    const toggleLbl = document.createElement('span');
-    toggleLbl.textContent = 'Enabled';
-    toggleWrap.appendChild(checkbox);
-    toggleWrap.appendChild(toggleLbl);
-    checkbox.addEventListener('change', () => {
-      phaseCtl.onToggle(phase.key, checkbox.checked);
-    });
-    card.appendChild(toggleWrap);
-
-    const orderRow = document.createElement('div');
-    orderRow.className = 'team-workflow-order-controls';
-    const orderLbl = document.createElement('span');
-    orderLbl.className = 'team-workflow-meta-label';
-    orderLbl.textContent = 'Order';
-    const orderVal = document.createElement('span');
-    orderVal.className = 'team-workflow-order-value';
-    orderVal.textContent = String(cfg.order);
-    const upBtn = document.createElement('button');
-    upBtn.className = 'team-workflow-order-up small-btn';
-    upBtn.textContent = '↑';
-    upBtn.title = 'Move earlier';
-    upBtn.disabled = !!phaseCtl.isFirst;
-    upBtn.addEventListener('click', () => phaseCtl.onMove(phase.key, -1));
-    const downBtn = document.createElement('button');
-    downBtn.className = 'team-workflow-order-down small-btn';
-    downBtn.textContent = '↓';
-    downBtn.title = 'Move later';
-    downBtn.disabled = !!phaseCtl.isLast;
-    downBtn.addEventListener('click', () => phaseCtl.onMove(phase.key, 1));
-    orderRow.appendChild(orderLbl);
-    orderRow.appendChild(orderVal);
-    orderRow.appendChild(upBtn);
-    orderRow.appendChild(downBtn);
-    card.appendChild(orderRow);
-
-    const orderNote = document.createElement('div');
-    orderNote.className = 'team-workflow-order-note team-workflow-rule';
-    orderNote.textContent = 'Order drives the actual build/dispatch sequence — this is not display-only.';
-    card.appendChild(orderNote);
-
-    if (phaseCtl.orderWarning) {
-      const orderWarn = document.createElement('div');
-      orderWarn.className = 'team-workflow-order-warning team-workflow-fallback';
-      orderWarn.textContent = phaseCtl.orderWarning;
-      card.appendChild(orderWarn);
-    }
-  }
-
-  // "Regenerate this phase's instructions with AI" (TASK-185) — the ONE path in
-  // this panel allowed to write SKILL.md, scoped to this phase's section body
-  // only. Only mounted when a SKILL.md snapshot + its path are available (both
-  // are null on the unreadable/binary degrade path, which never renders phase
-  // cards anyway).
-  if (typeof skillMdSnapshot === 'string' && skillPath) {
-    card.appendChild(buildWorkflowPhaseRegenerator(tab, phase, skillMdSnapshot, skillPath));
-  }
-
-  return card;
-}
-
-// "Regenerate this phase's instructions with AI" (TASK-185): a per-phase-card
-// AI-assisted rewrite of ONE `## Phase <n>` section body in SKILL.md, mirroring
-// the Agents panel's AI-regenerate interaction (preview-then-Save; nothing is
-// ever written automatically). `skillMdSnapshot` is the SKILL.md text captured
-// when the panel last rendered; `skillPath` is its absolute path. Save re-reads
-// SKILL.md fresh from disk (never trusting the snapshot) and writes through
-// writeWithMirror, so assets/skills/orchestrate/SKILL.md stays byte-synced.
-function buildWorkflowPhaseRegenerator(tab, phase, skillMdSnapshot, skillPath) {
-  const wrap = document.createElement('div');
-  wrap.className = 'team-workflow-regen';
-
-  const label = document.createElement('div');
-  label.className = 'team-workflow-meta-label';
-  label.textContent = "Regenerate this phase's instructions with AI";
-  wrap.appendChild(label);
-
-  const instrInput = document.createElement('textarea');
-  instrInput.className = 'team-workflow-regen-input';
-  instrInput.rows = 2;
-  instrInput.spellcheck = false;
-  instrInput.placeholder = "Describe how this phase's instructions should change…";
-  wrap.appendChild(instrInput);
-
-  const actions = document.createElement('div');
-  actions.className = 'team-workflow-regen-actions';
-  const regenBtn = document.createElement('button');
-  regenBtn.className = 'small-btn';
-  regenBtn.textContent = 'Regenerate instructions with AI';
-  actions.appendChild(regenBtn);
-  wrap.appendChild(actions);
-
-  const msg = document.createElement('div');
-  msg.className = 'team-agent-ai-msg hidden';
-  wrap.appendChild(msg);
-
-  const previewWrap = document.createElement('div');
-  previewWrap.className = 'team-workflow-regen-preview hidden';
-  const previewNote = document.createElement('div');
-  previewNote.className = 'team-workflow-regen-note';
-  previewNote.textContent = 'AI proposal pending Save — nothing has been written yet.';
-  const previewBody = document.createElement('div');
-  previewBody.className = 'team-workflow-regen-preview-body';
-  const previewActions = document.createElement('div');
-  previewActions.className = 'team-workflow-regen-actions';
-  const saveBtn = document.createElement('button');
-  saveBtn.className = 'small-btn primary-btn';
-  saveBtn.textContent = 'Save';
-  const cancelBtn = document.createElement('button');
-  cancelBtn.className = 'small-btn';
-  cancelBtn.textContent = 'Cancel';
-  previewActions.appendChild(saveBtn);
-  previewActions.appendChild(cancelBtn);
-  const saveErr = document.createElement('div');
-  saveErr.className = 'team-agent-desc-error hidden';
-  previewWrap.appendChild(previewNote);
-  previewWrap.appendChild(previewBody);
-  previewWrap.appendChild(previewActions);
-  previewWrap.appendChild(saveErr);
-  wrap.appendChild(previewWrap);
-
-  const showMsg = (m) => { msg.textContent = m; msg.classList.remove('hidden'); };
-  const clearMsg = () => { msg.textContent = ''; msg.classList.add('hidden'); };
-  const showSaveErr = (m) => { saveErr.textContent = m; saveErr.classList.remove('hidden'); };
-  const clearSaveErr = () => { saveErr.textContent = ''; saveErr.classList.add('hidden'); };
-  const hidePreview = () => { previewWrap.classList.add('hidden'); previewBody.textContent = ''; };
-
-  regenBtn.addEventListener('click', async () => {
-    clearMsg();
-    clearSaveErr();
-    hidePreview();
-    const instruction = instrInput.value.trim();
-    // Empty instruction → inline message, NO API call.
-    if (instruction === '') {
-      showMsg("Enter an instruction describing how this phase's instructions should change.");
-      return;
-    }
-    const extracted = wfExtractPhaseBody(skillMdSnapshot, phase.key);
-    const currentBody = extracted.ok ? extracted.body : '';
-
-    const bodyAtRequest = tab.els.teamWorkflowBody;
-    const prevLabel = regenBtn.textContent;
-    regenBtn.disabled = true;
-    regenBtn.textContent = 'Regenerating…';
-
-    let res;
-    try {
-      res = await window.api.skill.regeneratePhase(currentBody, instruction);
-    } catch (e) {
-      res = { ok: false, reason: 'error' };
-    }
-
-    // Stale-guard: a folder/tab switch or panel re-render mid-request discards
-    // the response entirely — no DOM update, no write — and this (now-orphaned)
-    // card's button state is left exactly as it was when the guard fired.
-    if (tab.els.teamWorkflowBody !== bodyAtRequest || wrap.isConnected === false) return;
-
-    regenBtn.disabled = false;
-    regenBtn.textContent = prevLabel;
-
-    if (!res || !res.ok) {
-      const reason = res && res.reason;
-      if (reason === 'no-key') {
-        showMsg('Set ANTHROPIC_API_KEY (Settings) to use AI regeneration — no request was sent.');
-      } else {
-        showMsg('AI regeneration failed (' + (reason || 'error') + '). Nothing was written.');
-      }
-      return;
-    }
-
-    const validated = validateRegeneratedPhaseSection(res.content, skillMdSnapshot, phase.key);
-    if (!validated.ok) {
-      showMsg(validated.error || 'AI returned an invalid proposal. Nothing was written.');
-      return;
-    }
-
-    // Preview only — nothing is written until Save.
-    previewBody.textContent = validated.body;
-    previewWrap.classList.remove('hidden');
-  });
-
-  cancelBtn.addEventListener('click', () => {
-    clearSaveErr();
-    hidePreview();
-    instrInput.value = '';
-  });
-
-  saveBtn.addEventListener('click', async () => {
-    clearSaveErr();
-    const bodyAtRequest = tab.els.teamWorkflowBody;
-    const proposedBody = previewBody.textContent;
-    saveBtn.disabled = true;
-    cancelBtn.disabled = true;
-
-    // Re-read SKILL.md fresh from disk (never trusting the build-time snapshot
-    // — a concurrent manual edit is respected); fall back to the captured
-    // snapshot only if the re-read itself fails.
-    let fresh = skillMdSnapshot;
-    try {
-      const r = await window.api.fs.readFile(skillPath);
-      if (r && r.ok && !r.binary && typeof r.content === 'string') fresh = r.content;
-    } catch (_) { /* keep the captured snapshot */ }
-
-    const spliced = wfReplacePhaseBody(fresh, phase.key, proposedBody);
-    if (!spliced.ok) {
-      saveBtn.disabled = false;
-      cancelBtn.disabled = false;
-      showSaveErr('Could not save — the phase section changed shape on disk (' + spliced.reason + '). Regenerate again.');
-      return;
-    }
-
-    let res;
-    try {
-      res = await writeWithMirror(tab, skillPath, spliced.content);
-    } catch (e) {
-      res = { ok: false, error: (e && e.message) || String(e) };
-    }
-    saveBtn.disabled = false;
-    cancelBtn.disabled = false;
-
-    if (!res || !res.ok) {
-      // Mirror-only failure: primary landed, assets copy drifted — name BOTH paths.
-      if (res && res.primaryOk && res.mirrorPath) {
-        showSaveErr('Saved ' + skillPath + ' but its mirror copy ' + res.mirrorPath +
-          ' could NOT be updated — the two copies have drifted: ' +
-          (res.mirrorError || 'mirror write failed'));
-        return;
-      }
-      showSaveErr('Save failed: ' + ((res && res.error) || 'unknown error') +
-        '. Your proposal was kept — try again.');
-      return;
-    }
-
-    hidePreview();
-    // Stale-guard: the write itself already happened either way; only skip the
-    // re-read/re-render when the folder/tab changed mid-save.
-    if (tab.els.teamWorkflowBody !== bodyAtRequest) return;
-    refreshTeamWorkflow(tab);
-  });
-
-  return wrap;
-}
-
-// Curated model suggestions seeding the per-phase editor's datalist. Free text is
-// still accepted (and sanitized on Save); the current value is injected too so it
-// is never lost from the list.
-const WF_MODEL_SUGGESTIONS = ['claude-sonnet-5', 'claude-opus-4-8', 'claude-fable-5'];
-let wfModelDatalistSeq = 0;
-
-// The per-phase model editor: a read view (current model + Edit) and an edit view
-// (free-text input with a curated datalist + Save/Cancel + inline error). Save
-// sanitizes the value (SECURITY: model is an UNFOLDED scalar — reject newlines /
-// control chars / `---` / non-token chars via sanitizeAgentModelField, the
-// TASK-095 approach), rewrites ONLY the `model:` line via serializeAgentModel, and
-// writes through writeWithMirror so assets/agents/ stays byte-synced. A primary
-// write failure or a mirror-only drift surfaces inline (TASK-093 contract).
-function buildWorkflowModelEditor(tab, phase, agentFile) {
-  const wrap = document.createElement('div');
-  wrap.className = 'team-workflow-model-editor';
-  const parsed = agentFile.parsed;
-  const filePath = agentFile.filePath;
-  const currentModel = parsed.fm.model != null ? String(parsed.fm.model).trim() : '';
-
-  // Read view.
-  const view = document.createElement('div');
-  view.className = 'team-workflow-phase-meta';
-  const lbl = document.createElement('span');
-  lbl.className = 'team-workflow-meta-label';
-  lbl.textContent = 'Agent model';
-  const badge = document.createElement('span');
-  badge.className = 'team-agent-badge team-workflow-model';
-  badge.textContent = currentModel || '(default)';
-  const editBtn = document.createElement('button');
-  editBtn.className = 'small-btn';
-  editBtn.textContent = 'Edit';
-  view.appendChild(lbl);
-  view.appendChild(badge);
-  view.appendChild(editBtn);
-  wrap.appendChild(view);
-
-  // Edit view.
-  const editor = document.createElement('div');
-  editor.className = 'team-workflow-model-edit hidden';
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.className = 'team-workflow-model-input';
-  input.spellcheck = false;
-  const listId = 'wfModelList' + (++wfModelDatalistSeq);
-  input.setAttribute('list', listId);
-  const datalist = document.createElement('datalist');
-  datalist.id = listId;
-  const suggestions = WF_MODEL_SUGGESTIONS.slice();
-  if (currentModel && !suggestions.includes(currentModel)) suggestions.unshift(currentModel);
-  for (const s of suggestions) {
+  const levelSelect = document.createElement('select');
+  levelSelect.className = 'team-workflow-context-opt-level';
+  const LEVEL_LABELS = { conservative: 'Conservative', standard: 'Standard', aggressive: 'Aggressive' };
+  for (const key of TASKS_CONTEXT_OPT_LEVELS) {
     const opt = document.createElement('option');
-    opt.value = s;
-    datalist.appendChild(opt);
+    opt.value = key;
+    opt.textContent = LEVEL_LABELS[key] || key;
+    levelSelect.appendChild(opt);
   }
-  const actions = document.createElement('div');
-  actions.className = 'team-agent-desc-actions';
+  levelSelect.value = resolved.level;
+
   const saveBtn = document.createElement('button');
   saveBtn.className = 'small-btn primary-btn';
   saveBtn.textContent = 'Save';
-  const cancelBtn = document.createElement('button');
-  cancelBtn.className = 'small-btn';
-  cancelBtn.textContent = 'Cancel';
+  row.appendChild(levelSelect);
+  row.appendChild(saveBtn);
+  section.appendChild(row);
+
   const err = document.createElement('div');
   err.className = 'team-agent-desc-error hidden';
-  actions.appendChild(saveBtn);
-  actions.appendChild(cancelBtn);
-  editor.appendChild(input);
-  editor.appendChild(datalist);
-  editor.appendChild(actions);
-  editor.appendChild(err);
-  wrap.appendChild(editor);
-
+  section.appendChild(err);
   const showErr = (m) => { err.textContent = m; err.classList.remove('hidden'); };
   const clearErr = () => { err.textContent = ''; err.classList.add('hidden'); };
 
-  editBtn.addEventListener('click', () => {
-    input.value = currentModel;
-    clearErr();
-    view.classList.add('hidden');
-    editor.classList.remove('hidden');
-    input.focus();
-  });
-  cancelBtn.addEventListener('click', () => {
-    clearErr();
-    editor.classList.add('hidden');
-    view.classList.remove('hidden');
-  });
   saveBtn.addEventListener('click', async () => {
     clearErr();
-    // SECURITY: sanitize the scalar model value before it can reach disk.
-    const chk = sanitizeAgentModelField(input.value);
-    if (!chk.ok) { showErr(chk.error); return; }
-    if (chk.value === '') { showErr('Model cannot be empty.'); return; }
-    const content = serializeAgentModel(parsed, chk.value);
-    if (typeof content !== 'string') { showErr('Could not update the agent file.'); return; }
+    const next = tasksNormalizeContextOptimization({
+      enabled: enabledCheckbox.checked,
+      level: levelSelect.value,
+    });
+    enabledCheckbox.checked = next.enabled;
+    levelSelect.value = next.level;
     saveBtn.disabled = true;
-    let res;
     try {
-      res = await writeWithMirror(tab, filePath, content);
-    } catch (e) {
-      res = { ok: false, error: (e && e.message) || String(e) };
-    }
-    saveBtn.disabled = false;
-    if (!res || !res.ok) {
-      // Mirror-only failure: primary landed, assets copy drifted — name BOTH paths.
-      if (res && res.primaryOk && res.mirrorPath) {
-        showErr('Saved ' + filePath + ' but its mirror copy ' + res.mirrorPath +
-          ' could NOT be updated — the two copies have drifted: ' +
-          (res.mirrorError || 'mirror write failed'));
+      const cfgPath = tasksJoin(tab.folder, 'tasks', 'team-config.json');
+      // Re-read for the freshest columns/unknown fields (avoid clobbering a
+      // concurrent Board-panel or concurrency-control save). A missing/
+      // unreadable/corrupt config at Save time falls back to the render-time
+      // rawConfig (keep-last-good) rather than null, so a momentary read/parse
+      // failure can't wipe the user's columns/version/other skill fields.
+      let fresh = rawConfig;
+      try {
+        const r = await window.api.fs.readFile(cfgPath);
+        if (r && r.ok && !r.binary && typeof r.content === 'string' && r.content.trim() !== '') {
+          try { fresh = JSON.parse(r.content); } catch (_) { fresh = rawConfig; }
+        }
+      } catch (_) { fresh = rawConfig; }
+      const working = buildWorkingConfigFromRaw(fresh);
+      working.skill = { ...working.skill, contextOptimization: next };
+      const content = tasksSerializeTeamConfig(working);
+      const tasksDir = tasksJoin(tab.folder, 'tasks');
+      try { await window.api.fs.mkdir(tasksDir); } catch (_) {}
+      const res = await window.api.fs.writeFile(cfgPath, content);
+      if (!res || !res.ok) {
+        showErr('Save failed: ' + ((res && res.error) || 'unknown error') + '. Try again.');
+        saveBtn.disabled = false;
         return;
       }
-      showErr('Save failed: ' + ((res && res.error) || 'unknown error') +
-        '. Your text was kept — try again.');
+      if (tab.tasks) { try { tab.tasks.config = JSON.parse(content); } catch (_) {} }
+    } catch (e) {
+      showErr('Save failed: ' + ((e && e.message) || String(e)) + '. Try again.');
+      saveBtn.disabled = false;
       return;
     }
-    // Success: re-read so the panel reflects disk (last write wins).
-    refreshTeamWorkflow(tab);
+    saveBtn.disabled = false;
+    refreshTeamBoard(tab);
   });
 
-  return wrap;
+  return section;
 }
 
 // ── Team tab · Agents panel (TASK-094) ──────────────────────────────────────
@@ -10190,8 +9735,9 @@ function rebuildTasksLanes(tab, columns) {
 // Build one `.tasks-lane` element for a normalised column. Header shows the label
 // (with the description as a `title` tooltip) and — when the column names an
 // agent — a small display-only agent badge (Q2: metadata, never a dispatch). A
-// user column carries the `.user-lane` accent class; the post-processing lane
-// keeps its `+` Add button; every non-`unknown` lane is a drop target.
+// user column carries the `.user-lane` accent class; every non-`unknown` lane is
+// a drop target. TASK-206 removed the post-processing lane's `+` Add button —
+// no lane has a special Add affordance now.
 //
 // SECURITY: label/description/agent come from an untrusted, user-editable config
 // file, so they are written via textContent / the title property (never
@@ -10233,25 +9779,6 @@ function buildTasksLaneEl(tab, col) {
   countEl.className = 'tasks-lane-count';
   countEl.textContent = '0';
   header.appendChild(countEl);
-
-  // Post-processing lane Add affordance (TASK-028): only this lane has one.
-  // Clicking it opens the new-ticket modal in post-processing mode, creating a
-  // ticket with status AND kind: post-processing. stopPropagation so the click
-  // never bubbles into a lane handler.
-  if (status === TASKS_POST_PROCESSING_STATUS) {
-    const addBtn = document.createElement('button');
-    addBtn.className = 'tasks-lane-add';
-    addBtn.title = 'Add a post-processing ticket';
-    addBtn.textContent = '+';
-    addBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      openNewTaskModal(tab, {
-        status: TASKS_POST_PROCESSING_STATUS,
-        kind: TASKS_POST_PROCESSING_KIND,
-      });
-    });
-    header.appendChild(addBtn);
-  }
 
   laneEl.appendChild(header);
 
@@ -10474,7 +10001,7 @@ function renderTasksBoard(tab) {
     // header and the title, encoding the ticket's type from persisted frontmatter
     // only. Red (.bug) for a bug ticket (non-empty `bug-of`), yellow (.review) for
     // a PR-review ticket (non-empty `review-of`), green (default, no modifier) for
-    // everything else — including post-processing and unknown-status cards. Bug
+    // everything else — including unknown-status cards. Bug
     // wins when both markers are present. Rendered on every card in every lane
     // (the same construction path feeds the Done lane's Archived expander and
     // unknown-status cards), so the bar is universal.
@@ -10641,9 +10168,10 @@ function renderTasksBoard(tab) {
 // (every project board contributes) because the wake-lock is one app-wide
 // resource — reporting only the current tab would let another tab's active build
 // be forgotten. The status set mirrors lib/keep-awake.js's KEEP_AWAKE_STATUSES
-// (the board's active statuses PLUS post-processing). Cheap enough to run on every
-// board render; main.js de-dupes (start/stop are no-ops when already in state).
-const TASKS_KEEP_AWAKE_STATUSES = ['defining', 'in-progress', 'testing', 'post-processing'];
+// (exactly the board's active statuses; TASK-206 removed post-processing from
+// this set). Cheap enough to run on every board render; main.js de-dupes
+// (start/stop are no-ops when already in state).
+const TASKS_KEEP_AWAKE_STATUSES = ['defining', 'in-progress', 'testing'];
 function reportTasksActivity() {
   if (!window.api || !window.api.tasks || !window.api.tasks.reportActivity) return;
   let active = 0;
@@ -10809,7 +10337,7 @@ function openTaskModal(tab, ticket) {
       runsEl.classList.toggle('hidden', lines.length === 0);
     }
     // Per-activity cost view (TASK-070): a read-only breakdown of the complete
-    // ticket cost by activity (ba/code/test/review/post-processing/…). Each row
+    // ticket cost by activity (ba/code/test/review/…). Each row
     // shows the activity, model, duration, tokens up/down and cost (absent
     // fragments dropped), followed by a totals row. Hidden entirely when the
     // ticket carries no activity data.
@@ -11030,8 +10558,8 @@ async function installOrchestrateSkill(tab) {
         // .install-banner-text is a static element from index.html with
         // pre-existing children; clear it before appending so repeated failures
         // don't stack duplicate nodes. Build via textContent (mirrors
-        // buildWorkflowInstallHint/buildAgentsInstallHint) so an error string
-        // containing HTML-like markup renders literally, never parsed as HTML.
+        // buildAgentsInstallHint) so an error string containing HTML-like markup
+        // renders literally, never parsed as HTML.
         textEl.textContent = '';
         const strong = document.createElement('strong');
         strong.textContent = 'Install failed.';
@@ -11202,19 +10730,12 @@ function onTasksConcurrencyChange(tab) {
   } catch (_) {}
 }
 
-// Counts of tickets per status, from the last poll snapshot. `post-processing`
-// is tracked (TASK-028) but deliberately NOT part of the Build pending count
-// (todo + failed-testing) — post-processing tickets are never built by the swarm.
+// Counts of tickets per status, from the last poll snapshot (TASK-206: purely
+// status-driven now that the post-processing bucket/exclusion is removed; any
+// status without its own bucket falls into `other`).
 function taskStatusCounts(tab) {
-  const counts = { todo: 0, defining: 0, 'in-progress': 0, testing: 0, 'failed-testing': 0, 'post-processing': 0, done: 0, other: 0 };
+  const counts = { todo: 0, defining: 0, 'in-progress': 0, testing: 0, 'failed-testing': 0, done: 0, other: 0 };
   for (const tk of tab.tasks.tickets.values()) {
-    // A ticket with `kind: post-processing` is never built by the swarm
-    // (lib/ticket-queue.js refuses to dispatch it), so keep it out of the
-    // buildable `todo`/`failed-testing` buckets even if its status was tampered
-    // to one of those — otherwise the Build pending count and maybeContinueBuild
-    // would treat it as pending work and spin forever. Lane placement (which is
-    // status-driven, elsewhere) is unaffected by this counting-only exclusion.
-    if (isTasksPostProcessingTicket(tk.fm)) { counts['post-processing']++; continue; }
     const s = tk.fm.status;
     if (counts[s] === undefined) counts.other++; else counts[s]++;
   }
@@ -11591,16 +11112,14 @@ function writeBugWarnText(el, text) {
 }
 
 // New-ticket modal. Writes a fresh ticket following the skill's file contract so
-// the orchestrator (and the build loop) can pick it up. `opts` selects the mode
-// (TASK-028): with no opts the toolbar "New ticket" button creates a `todo`
-// ticket with NO kind field; the post-processing lane's Add button passes
-// { status: 'post-processing', kind: 'post-processing' } to create a
-// post-processing ticket (status AND kind: post-processing) in tasks/post-processing/.
-function openNewTaskModal(tab, opts) {
+// the orchestrator (and the build loop) can pick it up. The toolbar "New ticket"
+// button is the only caller (TASK-206 removed the post-processing lane's Add
+// button, the modal's only other mode); it always creates a `todo` ticket with
+// no `kind` field. There is no UI path left to create a `kind: post-processing`
+// ticket.
+function openNewTaskModal(tab) {
   if (!tab.folder) return;
-  const mode = opts || {};
-  const status = mode.status || 'todo';
-  const kind = mode.kind || null;
+  const status = 'todo';
   const modal = document.getElementById('newTaskModal');
   if (!modal) return;
   const idEl = modal.querySelector('.newtask-id');
@@ -11631,9 +11150,8 @@ function openNewTaskModal(tab, opts) {
   const NORMAL_CREATE_LABEL = 'Create ticket';
   const BUG_CREATE_LABEL = 'Create bug ticket';
 
-  // Only the plain toolbar "New ticket" path (no opts) offers Bug mode; the
-  // post-processing Add path passes { status/kind } and keeps Bug hidden.
-  const allowBug = !!bugBtn && !kind && status === 'todo';
+  // Bug mode is always offered (the toolbar path is the only caller now).
+  const allowBug = !!bugBtn;
   if (bugBtn) bugBtn.classList.toggle('hidden', !allowBug);
 
   // Populate the original-ticket selector from the live board (tab.tasks.tickets
@@ -11759,8 +11277,8 @@ function openNewTaskModal(tab, opts) {
     armBug();
   };
 
-  // Normal create path (unchanged behaviour): a plain `todo`/post-processing
-  // ticket with NO bug-of link.
+  // Normal create path (unchanged behaviour): a plain `todo` ticket with NO
+  // bug-of link and no `kind` field.
   const onCreateNormal = async () => {
     const title = titleInput.value.trim();
     if (!title) { errEl.textContent = 'Title is required.'; titleInput.focus(); armCreate(); return; }
@@ -11768,14 +11286,10 @@ function openNewTaskModal(tab, opts) {
     try {
       const now = new Date().toISOString();
       const fm = { id, title, status, created: now, updated: now };
-      // Post-processing tickets carry kind: post-processing (TASK-028) so the
-      // swarm excludes them; serializeTicket keeps it after the leading keys.
-      if (kind) fm.kind = kind;
       // Route the user's description through the shared heading-escape mirror
       // (TASK-033) so a line like `## Additional Context` can't forge a section
       // boundary and hijack a user-owned section on the next parse. Same helper
-      // the bug-report path uses; covers both the toolbar New-ticket path and the
-      // post-processing Add path since both flow through here.
+      // the bug-report path uses.
       const description = neutralizeBugText(bodyArea.value.trim()) || 'What needs doing and why.';
       const body = [
         '',
@@ -11790,8 +11304,9 @@ function openNewTaskModal(tab, opts) {
         ''
       ].join('\n');
       // Folder-per-status layout (TASK-008): write the new ticket straight into
-      // its status subfolder (tasks/todo/ or tasks/post-processing/) rather than
-      // the top level, avoiding an immediate reconciliation move on the next poll.
+      // its status subfolder (tasks/todo/, the only target now that
+      // post-processing is removed) rather than the top level, avoiding an
+      // immediate reconciliation move on the next poll.
       const tasksDir = tasksJoin(tab.folder, 'tasks');
       const subfolder = ticketFolderForStatus(status);
       const destDir = subfolder ? tasksJoin(tasksDir, subfolder) : tasksDir;
@@ -11812,8 +11327,7 @@ function openNewTaskModal(tab, opts) {
       clearTasksSearch(tab);
       pollTasksOnce(tab, true);
       // TASK-079 Part A: a newly created buildable ticket auto-starts a build run.
-      // Post-processing tickets are never built by the swarm, so skip those.
-      if (status === 'todo') autoQueueBuildOnCreate(tab);
+      autoQueueBuildOnCreate(tab);
     } catch (err) {
       errEl.textContent = 'Create failed: ' + (err.message || err);
       createBtn.disabled = false;

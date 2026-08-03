@@ -3,7 +3,7 @@
 ## What it does and why
 
 The **Workflow** panel on the [Team tab](team-tab.md) visualises the project's
-orchestrate build pipeline and exposes the two settings that shape a build
+orchestrate build pipeline and exposes the settings that shape a build
 without hand-editing files:
 
 - A **read-only** view of the four ordered phases (plan → build → test → review),
@@ -16,6 +16,9 @@ without hand-editing files:
   TASK-182).
 - A **build concurrency default** control (writes `skill.concurrencyDefault` into
   `tasks/team-config.json`).
+- A **context optimisation** control — an Enabled checkbox plus a
+  conservative/standard/aggressive level select (writes
+  `skill.contextOptimization` into `tasks/team-config.json`, TASK-200).
 - A guided **"Regenerate this phase's instructions"** AI action (TASK-185) that
   DOES write `SKILL.md` — see below; it is the one deliberate exception to the
   read-only rule.
@@ -147,6 +150,27 @@ The clamp authority is `resolveConcurrency` in
 [`lib/ticket-queue.js`](../lib/ticket-queue.js): `[1, MAX_CONCURRENCY]`,
 `DEFAULT_CONCURRENCY = 3`, `MAX_CONCURRENCY = 8`.
 
+### Context optimisation control — `buildWorkflowContextOptimizationControl` (TASK-200)
+
+An **Enabled** checkbox plus a `conservative` / `standard` / `aggressive`
+**level** `<select>`, seeded from `skill.contextOptimization` (resolved/clamped
+through `tasksNormalizeContextOptimization`, the renderer mirror of
+`lib/team-config.js`'s `normalizeContextOptimization`). Renders directly below
+the build concurrency control and independently of the phase cards, so it is
+present even when SKILL.md parses to no phases. **Save**:
+
+- Re-reads `tasks/team-config.json` first (falling back to the render-time
+  config on a bad re-read, never to defaults — the same keep-last-good pattern
+  as the concurrency control above), so a concurrent Board-panel or
+  concurrency-default save is not clobbered.
+- Writes `skill.contextOptimization` (`{ enabled, level }`) through
+  `tasksSerializeTeamConfig`, then re-reads (`refreshTeamWorkflow`) on success.
+
+This control only **persists** the setting — the orchestrate skill itself reads
+`skill.contextOptimization` at every phase movement (see SKILL.md's "Context
+optimisation" section) to decide whether, and how aggressively, to trim context
+before the next phase's dispatch.
+
 ### "Regenerate this phase's instructions" — the one write path to SKILL.md (TASK-185)
 
 Each phase card also gets a **Regenerate this phase's instructions** AI box —
@@ -228,23 +252,33 @@ SKILL.md snapshot to validate/splice against.
   Read and written by this Workflow panel's per-phase enable/reorder editor
   (TASK-182, above); `order` also drives the live build dispatch sequence
   (a separate, already-shipped behaviour ticket).
+- **`tasks/team-config.json` → `skill.contextOptimization`** — `{ enabled,
+  level }` (TASK-200). `enabled` (default `true`) gates whether the
+  orchestrator trims context at every phase movement; `level` is one of
+  `conservative` / `standard` / `aggressive` (default `standard`), tuning how
+  aggressively. Normalised by `lib/team-config.js`'s
+  `normalizeContextOptimization` and the renderer's
+  `tasksNormalizeContextOptimization` mirror. Read and written by this Workflow
+  panel's context optimisation control (above); the orchestrate skill itself
+  reads the persisted value at dispatch time (see SKILL.md's "Context
+  optimisation" section).
 
 ## Inputs and outputs
 
 - **Reads:** `SKILL.md`, `.claude/agents/*.md`, `tasks/team-config.json`.
 - **Writes:** an agent file's `model:` line (mirror-synced),
-  `skill.concurrencyDefault` / `skill.phases` in `tasks/team-config.json`, and —
-  only via the guided "Regenerate this phase's instructions" Save — one phase's
-  `## Phase <n>` section body in `SKILL.md` (mirror-synced). No other part of
-  `SKILL.md` is ever written from this panel.
+  `skill.concurrencyDefault` / `skill.phases` / `skill.contextOptimization` in
+  `tasks/team-config.json`, and — only via the guided "Regenerate this phase's
+  instructions" Save — one phase's `## Phase <n>` section body in `SKILL.md`
+  (mirror-synced). No other part of `SKILL.md` is ever written from this panel.
 
 ## Edge cases and limitations
 
 - **No polling.** The panel refreshes on activation and on **Refresh** only.
 - **SKILL.md writes are scoped to one phase-section body.** Every other write
-  path in this panel (model editor, enable/reorder, concurrency default) is
-  config-only and never touches `SKILL.md`; only the AI-regenerate Save does,
-  and only that one phase's section.
+  path in this panel (model editor, enable/reorder, concurrency default,
+  context optimisation) is config-only and never touches `SKILL.md`; only the
+  AI-regenerate Save does, and only that one phase's section.
 - **Missing dedicated agent** → a fallback warning on the phase card *and* no
   model editor for that phase (there is no file to rewrite).
 - **Partially parseable SKILL.md** → warnings render above whatever phases parsed;

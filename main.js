@@ -16,6 +16,7 @@ const slackOAuth = require('./lib/slack-oauth');
 const slackSummarize = require('./lib/slack-summarize');
 const agentRegenerate = require('./lib/agent-regenerate');
 const skillRegenerate = require('./lib/skill-regenerate');
+const teamColumnRegenerate = require('./lib/team-column-regenerate');
 const { redactSecrets } = require('./lib/slack-proxy');
 const { createTelemetryReceiver } = require('./lib/telemetry-receiver');
 const claudeUsage = require('./lib/claude-usage');
@@ -120,6 +121,7 @@ function createWindow() {
     height: 860,
     backgroundColor: '#1e1e1e',
     title: 'Claude CMD UI',
+    icon: path.join(__dirname, 'images', 'code_squad.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -237,7 +239,7 @@ app.on('window-all-closed', () => {
 
 // ── Keep-awake wake-lock (TASK-036) ──────────────────────────────────────────
 // While at least one orchestrate ticket is actively being worked (defining /
-// in-progress / testing / post-processing) the OS must not sleep or suspend. The
+// in-progress / testing) the OS must not sleep or suspend. The
 // renderer owns the board state, so it reports the live app-wide active count
 // over the fire-and-forget 'tasks:activity' channel; we translate that into a
 // single Electron powerSaveBlocker. We use 'prevent-display-sleep' (keep the
@@ -621,6 +623,31 @@ function createUsageForWindowHandler(telemetryReceiverArg) {
 
 ipcMain.handle('telemetry:usageForWindow', (_evt, windowArg) =>
   createUsageForWindowHandler(telemetryReceiver)(_evt, windowArg));
+
+// Per-prompt cost correlation (TASK-195): like createUsageForWindowHandler
+// above, but scoped to ONE project's own telemetry bucket, so a different,
+// concurrently-running project's api_request rows are never folded into a
+// prompt's total even when their timestamps fall inside the same window.
+// `arg` is `{ project, window: { startedAt, finishedAt, model? } }`. Extracted
+// to a requireable factory (TASK-158/164 precedent) so tests exercise this
+// EXACT logic instead of a hand-rolled mirror. Best-effort — no receiver
+// (telemetry off/never started) or a thrown lookup yields `usage: null`,
+// never a thrown error or a fabricated figure.
+function createUsageForWindowInProjectHandler(telemetryReceiverArg) {
+  return async (_evt, arg) => {
+    if (!telemetryReceiverArg) return { ok: true, usage: null };
+    const a = arg && typeof arg === 'object' ? arg : {};
+    const project = typeof a.project === 'string' ? a.project : '';
+    try {
+      return { ok: true, usage: telemetryReceiverArg.usageForWindowInProject(project, a.window) };
+    } catch (_) {
+      return { ok: true, usage: null };
+    }
+  };
+}
+
+ipcMain.handle('telemetry:usageForWindowInProject', (_evt, arg) =>
+  createUsageForWindowInProjectHandler(telemetryReceiver)(_evt, arg));
 
 ipcMain.handle('telemetry:clear', async () => {
   if (telemetryReceiver) telemetryReceiver.clear();
@@ -2245,6 +2272,53 @@ ipcMain.handle('skill:regeneratePhase', async (_evt, { content, instruction } = 
   }
 });
 
+// Upper bounds on the text handed to the Board column instructions
+// regenerator, mirroring AGENT_REGEN_MAX_*/SKILL_REGEN_MAX_*. `instructions`
+// may legitimately be empty (a brand-new column has none yet); the context
+// fields (label/description/agent) are short by construction but still
+// clamped defensively.
+const COLUMN_REGEN_MAX_CONTENT_CHARS = 8000;
+const COLUMN_REGEN_MAX_INSTRUCTION_CHARS = 4000;
+const COLUMN_REGEN_MAX_CONTEXT_CHARS = 500;
+
+// Draft/rewrite one Board column's "instructions" text from its current text
+// (possibly empty) plus label/description/agent context and a user
+// instruction. Reads ANTHROPIC_API_KEY from the .env store (never logged,
+// never returned), clamps all inputs, and delegates to the Electron-free lib
+// module, which never throws and returns a structured { ok, content, reason }.
+// This handler likewise never throws into the renderer and never returns the
+// key. The renderer previews `content` in the instructions textarea and only
+// persists it via the normal Board Save — this handler performs no write.
+ipcMain.handle('team:regenerateColumnInstructions', async (_evt, {
+  instructions, label, description, agent, instruction
+} = {}) => {
+  const clamp = (v, max) => {
+    const s = typeof v === 'string' ? v : '';
+    return s.length > max ? s.slice(0, max) : s;
+  };
+  const clampedInstructions = clamp(instructions, COLUMN_REGEN_MAX_CONTENT_CHARS);
+  const clampedLabel = clamp(label, COLUMN_REGEN_MAX_CONTEXT_CHARS);
+  const clampedDescription = clamp(description, COLUMN_REGEN_MAX_CONTEXT_CHARS);
+  const clampedAgent = clamp(agent, COLUMN_REGEN_MAX_CONTEXT_CHARS);
+  const clampedInstruction = clamp(instruction, COLUMN_REGEN_MAX_INSTRUCTION_CHARS);
+  try {
+    const apiKey = (envStore.get('ANTHROPIC_API_KEY') || '').trim();
+    const res = await teamColumnRegenerate.regenerateColumnInstructions({
+      apiKey,
+      instructions: clampedInstructions,
+      label: clampedLabel,
+      description: clampedDescription,
+      agent: clampedAgent,
+      instruction: clampedInstruction
+    });
+    return { ok: res.ok, content: res.content, reason: res.reason };
+  } catch (err) {
+    // Belt-and-braces: the lib swallows its own errors, but a thrown error here
+    // must still degrade to a structured failure, never crash the renderer.
+    return { ok: false, content: '', reason: 'error', error: err && err.message };
+  }
+});
+
 // Open a Socket Mode WebSocket URL for the renderer to connect to. The renderer
 // owns the WebSocket itself (Chromium has a native WebSocket); the main process
 // only performs the authenticated apps.connections.open round-trip.
@@ -2315,4 +2389,5 @@ ipcMain.handle('git:abortMerge', async (_evt, { cwd }) => {
 module.exports = {
   augmentDarwinPath, createUsageForWindowHandler, buildOtelProjectEnv,
   createGetUsageHandler, createSetProjectConfigHandler,
+  createUsageForWindowInProjectHandler,
 };

@@ -102,9 +102,11 @@ test('Scenario: renderer registers Stats els and switchSubTab routes "stats" -> 
 // ===========================================================================
 // Scenario: telemetry moved OUT of the Workflow panel INTO the Stats tab
 // ===========================================================================
-test('Scenario: buildWorkflowView no longer mounts telemetry; initStatsTab does', () => {
-  const wf = extractFnBody(rendererSrc, 'function buildWorkflowView(tab, model, agentNames, agentFiles, rawConfig)');
-  assert.ok(!/buildTelemetryControl\(/.test(wf), 'buildWorkflowView no longer calls buildTelemetryControl');
+test('Scenario: buildWorkflowView no longer mounts telemetry (it no longer exists at all); initStatsTab does', () => {
+  // TASK-203 removed buildWorkflowView entirely along with the Workflow panel —
+  // there is no render path left that could mount buildTelemetryControl from it.
+  assert.equal(rendererSrc.indexOf('function buildWorkflowView('), -1,
+    'buildWorkflowView no longer exists in renderer.js');
 
   const stats = extractFnBody(rendererSrc, 'function initStatsTab(tab)');
   assert.match(stats, /buildTelemetryControl\(tab\)/, 'initStatsTab mounts buildTelemetryControl(tab) with tab argument');

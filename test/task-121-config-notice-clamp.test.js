@@ -10,7 +10,7 @@
 //       string / boolean / array / null) OR is an object whose `columns` key is
 //       present but not an array. It must NOT fire for a missing / unreadable /
 //       empty file, an object with `columns` absent, or a valid `columns` array
-//       (the ordinary six-default fallback). The JSON.parse-throw notice
+//       (the ordinary five-default fallback). The JSON.parse-throw notice
 //       (/not valid JSON/) is preserved.
 //
 //   F2  tasksSerializeTeamConfig now clamps skill.concurrencyDefault through
@@ -60,23 +60,23 @@ function loadBoard(window, document, console) {
     extractConst(rendererSrc, 'TASKS_RESERVED_SLUGS'),
     extractConst(rendererSrc, 'TASKS_MAX_SLUG_LENGTH'),
     extractConst(rendererSrc, 'TASKS_SLUG_RE'),
-    // TASK-180 - tasksBuildColumn normalises a column's optional `phase` link
-    // via tasksNormalizeColumnPhase, which reads TASKS_PHASE_KEYS.
-    extractConst(rendererSrc, 'TASKS_PHASE_KEYS'),
-    // TASK-183 - refreshTeamBoard's baseline phase-link snapshot uses
-    // tasksPhaseLinkCounts (which reads TASKS_PHASE_KEYS above).
-    extractConst(rendererSrc, 'TASKS_PHASE_ENABLED_DEFAULTS'),
-    extractFn(rendererSrc, 'tasksPhaseLinkCounts'),
-    extractFn(rendererSrc, 'tasksApplyPhaseAutoEnable'),
+    // TASK-180's `phase` link and TASK-183's auto-enable machinery
+    // (TASKS_PHASE_KEYS/TASKS_PHASE_ENABLED_DEFAULTS/tasksPhaseLinkCounts/
+    // tasksApplyPhaseAutoEnable/tasksNormalizeColumnPhase) were fully removed by
+    // TASK-201/203 — none of these symbols exist in renderer.js any more.
     extractConst(rendererSrc, 'TASKS_MAX_CONCURRENCY'),
     extractConst(rendererSrc, 'TASKS_DEFAULT_CONCURRENCY'),
     extractFn(rendererSrc, 'resolveTasksConcurrency'),
     extractFn(rendererSrc, 'tasksPrettifyLabel'),
-    extractFn(rendererSrc, 'tasksNormalizeColumnPhase'),
     extractFn(rendererSrc, 'tasksBuildColumn'),
     extractFn(rendererSrc, 'normalizeTasksColumns'),
     extractFn(rendererSrc, 'tasksSlugForLabel'),
     extractFn(rendererSrc, 'tasksValidateNewColumn'),
+    // TASK-200 — tasksSerializeTeamConfig now normalises skill.contextOptimization
+    // via tasksNormalizeContextOptimization, so these must be in scope too.
+    extractConst(rendererSrc, 'TASKS_CONTEXT_OPT_LEVELS'),
+    extractConst(rendererSrc, 'TASKS_CONTEXT_OPT_DEFAULT'),
+    extractFn(rendererSrc, 'tasksNormalizeContextOptimization'),
     extractFn(rendererSrc, 'tasksSerializeTeamConfig'),
     extractFn(rendererSrc, 'inferSep'),
     extractFn(rendererSrc, 'appendPath'),
@@ -85,6 +85,10 @@ function loadBoard(window, document, console) {
     extractFn(rendererSrc, 'readTeamAgentNames'),
     extractFn(rendererSrc, 'countTeamTicketsForStatus'),
     extractFn(rendererSrc, 'refreshTeamBoard'),
+    // TASK-202 — renderTeamBoard now calls these two workflow controls directly
+    // (relocated into the Board panel), so they must be in scope too.
+    extractFn(rendererSrc, 'buildWorkflowConcurrencyControl'),
+    extractFn(rendererSrc, 'buildWorkflowContextOptimizationControl'),
     extractFn(rendererSrc, 'renderTeamBoard'),
     extractFn(rendererSrc, 'canSwapTeamColumns'),
     extractFn(rendererSrc, 'buildTeamColumnRow'),
@@ -99,7 +103,7 @@ function loadBoard(window, document, console) {
   return new Function('window', 'document', 'console', body)(window, document, console);
 }
 
-const SIX_DEFAULTS = ['todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done'];
+const FIVE_DEFAULTS = ['todo', 'defining', 'in-progress', 'testing', 'done'];
 
 // A fully in-memory window.api.fs mock. `content` (a string) is what readFile
 // returns for the team-config.json path; `readOk` false models an unreadable
@@ -154,11 +158,11 @@ function makeSerializer() {
 
 // ── F1: the corrupt-config classification predicate ─────────────────────────
 
-test('unit F1: a valid-JSON non-object (number/string/boolean/array/null) sets the "not a valid board config" notice and loads the six defaults', async () => {
+test('unit F1: a valid-JSON non-object (number/string/boolean/array/null) sets the "not a valid board config" notice and loads the five defaults', async () => {
   for (const raw of ['42', '"hello"', 'true', '[1,2,3]', 'null']) {
     const { notice, statuses } = await loadWith(raw);
     assert.match(notice || '', /not a valid board config/i, `notice for ${raw}`);
-    assert.deepEqual(statuses, SIX_DEFAULTS, `defaults loaded for ${raw}`);
+    assert.deepEqual(statuses, FIVE_DEFAULTS, `defaults loaded for ${raw}`);
   }
 });
 
@@ -166,14 +170,14 @@ test('unit F1: an object whose `columns` key is present but not an array sets th
   for (const raw of ['{"columns":"not-array"}', '{"columns":42}', '{"columns":{"a":1}}']) {
     const { notice, statuses } = await loadWith(raw);
     assert.match(notice || '', /not a valid board config/i, `notice for ${raw}`);
-    assert.deepEqual(statuses, SIX_DEFAULTS, `defaults for ${raw}`);
+    assert.deepEqual(statuses, FIVE_DEFAULTS, `defaults for ${raw}`);
   }
 });
 
 test('unit F1: an object with `columns` ABSENT loads defaults with NO notice (ordinary first-run fallback)', async () => {
   const { notice, statuses } = await loadWith('{"version":1,"skill":{}}');
   assert.equal(notice, null, 'no notice when columns is simply absent');
-  assert.deepEqual(statuses, SIX_DEFAULTS);
+  assert.deepEqual(statuses, FIVE_DEFAULTS);
 });
 
 test('unit F1: an object with a valid `columns` array loads with NO notice', async () => {
@@ -188,27 +192,27 @@ test('unit F1: an object with a valid `columns` array loads with NO notice', asy
 test('unit F1: `columns: null` is treated as absent (== null) — NO notice', async () => {
   const { notice, statuses } = await loadWith('{"columns":null}');
   assert.equal(notice, null, 'columns:null is the absent case (raw.columns != null is false)');
-  assert.deepEqual(statuses, SIX_DEFAULTS);
+  assert.deepEqual(statuses, FIVE_DEFAULTS);
 });
 
 test('unit F1: unparseable JSON preserves the /not valid JSON/ notice (not the config-shape one)', async () => {
   const { notice, statuses } = await loadWith('{ not : valid json ]]');
   assert.match(notice || '', /not valid JSON/i);
   assert.doesNotMatch(notice || '', /not a valid board config/i);
-  assert.deepEqual(statuses, SIX_DEFAULTS);
+  assert.deepEqual(statuses, FIVE_DEFAULTS);
 });
 
 test('unit F1: a missing/unreadable file loads defaults with NO notice', async () => {
   const { notice, statuses } = await loadWith(undefined, { readOk: false });
   assert.equal(notice, null, 'no notice for a missing/unreadable file');
-  assert.deepEqual(statuses, SIX_DEFAULTS);
+  assert.deepEqual(statuses, FIVE_DEFAULTS);
 });
 
 test('unit F1: an empty / whitespace-only file loads defaults with NO notice', async () => {
   for (const raw of ['', '   ', '\n\t ']) {
     const { notice, statuses } = await loadWith(raw);
     assert.equal(notice, null, `no notice for empty content ${JSON.stringify(raw)}`);
-    assert.deepEqual(statuses, SIX_DEFAULTS);
+    assert.deepEqual(statuses, FIVE_DEFAULTS);
   }
 });
 

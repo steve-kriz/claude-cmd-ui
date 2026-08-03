@@ -2,7 +2,7 @@
 
 // Unit tests for lib/ticket-cost.js (TASK-070) — the Electron-free helper the
 // orchestrator uses to keep a per-ACTIVITY cost/accounting LOG on a ticket:
-// every time a phase's subagent (ba/code/test/review/post-processing) completes,
+// every time a phase's subagent (ba/code/test/review) completes,
 // one { activity, model, startedAt, finishedAt, durationMs, tokensIn, tokensOut,
 // costUsd } entry is APPENDED to the flat frontmatter field `activities` (a
 // one-line JSON array). The module is pure (no disk/network/Electron and NO DB
@@ -35,7 +35,7 @@ test('exports the documented surface', () => {
   assert.equal(typeof totalActivities, 'function');
   assert.equal(typeof computeDurationMs, 'function');
   assert.equal(ACTIVITIES_KEY, 'activities');
-  assert.deepEqual(KNOWN_ACTIVITIES, ['ba', 'code', 'test', 'review', 'post-processing']);
+  assert.deepEqual(KNOWN_ACTIVITIES, ['ba', 'code', 'test', 'review']);
 });
 
 // ---------------------------------------------------------------------------
@@ -244,6 +244,9 @@ test('appendActivity: unknown activity strings are stored as-is (open-ended list
 });
 
 test('appendActivity: legacy tokens/costUsd/runs keys are left untouched (additive)', () => {
+  // 'post-processing' is no longer a KNOWN_ACTIVITIES member (TASK-206), but a
+  // legacy cost-log entry carrying it must still append/display as an unknown
+  // activity string (open-ended list) rather than being rejected.
   const fm = {
     id: 'T', title: 't', status: 'done',
     tokens: 12345, costUsd: 0.42, runs: '[{"minutes":3}]',

@@ -140,13 +140,13 @@ test('ux-review is still a user status with its own lane and folder', () => {
   const cols = [
     col('todo', true), col('defining', true), col('in-progress', true),
     col('testing', true), col('ux-review', false),
-    col('post-processing', true), col('done', true),
+    col('done', true),
   ];
   assert.equal(isUserStatus('ux-review', cols), true);
   assert.equal(isKnownStatusFor('ux-review', cols), true);
   assert.equal(laneForStatusFor('ux-review', cols), 'ux-review');
   assert.deepEqual(laneStatusesFor(cols), [
-    'todo', 'defining', 'in-progress', 'testing', 'ux-review', 'post-processing', 'done',
+    'todo', 'defining', 'in-progress', 'testing', 'ux-review', 'done',
   ]);
   assert.equal(folderForStatusWith('ux-review', cols), 'ux-review');
 });
@@ -216,8 +216,8 @@ test('lib/ticket-lanes.js does not require lib/team-config.js (no cycle)', () =>
 test('export surface is unchanged (TASK-098 export guard still holds)', () => {
   const expected = [
     'LANE_STATUSES', 'VALID_STATUSES', 'ACTIVE_STATUSES', 'FAILED_STATUS',
-    'POST_PROCESSING_STATUS', 'POST_PROCESSING_KIND', 'UNKNOWN_STATUS',
-    'isKnownStatus', 'isActiveStatus', 'isFailedStatus', 'isPostProcessingTicket',
+    'UNKNOWN_STATUS',
+    'isKnownStatus', 'isActiveStatus', 'isFailedStatus',
     'laneForStatus', 'laneStatusesFor', 'isKnownStatusFor', 'laneForStatusFor',
     'isUserStatus', 'isFsSafeSlug',
   ];
@@ -226,4 +226,8 @@ test('export surface is unchanged (TASK-098 export guard still holds)', () => {
   }
   // WONT_DO_SLUG stays module-local (not exported).
   assert.ok(!('WONT_DO_SLUG' in lanes), 'WONT_DO_SLUG is module-local, not exported');
+  // TASK-206: post-processing was removed from the module and its exports entirely.
+  assert.ok(!('POST_PROCESSING_STATUS' in lanes), 'POST_PROCESSING_STATUS is gone');
+  assert.ok(!('POST_PROCESSING_KIND' in lanes), 'POST_PROCESSING_KIND is gone');
+  assert.ok(!('isPostProcessingTicket' in lanes), 'isPostProcessingTicket is gone');
 });

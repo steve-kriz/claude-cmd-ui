@@ -1,9 +1,10 @@
 ---
 id: TASK-159
 title: Atlassian integrtion
-status: todo
+status: done
 created: 2026-07-26T22:28:38.548Z
-updated: 2026-07-27T20:42:08.063Z
+updated: 2026-07-31T22:20:23.899Z
+resolution: wont-do
 ---
 
 ## Description

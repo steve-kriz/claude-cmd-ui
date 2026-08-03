@@ -165,6 +165,16 @@ contextBridge.exposeInMainWorld('api', {
     regeneratePhase: (content, instruction) => ipcRenderer.invoke('skill:regeneratePhase', { content, instruction })
   },
 
+  team: {
+    // Ask the main process to draft/rewrite one Board column's "instructions"
+    // text from its current text (may be empty) plus label/description/agent
+    // context and a natural-language instruction. Main reads
+    // ANTHROPIC_API_KEY (never returned) and clamps the inputs; the returned
+    // { ok, content, reason } is previewed by the renderer in the
+    // instructions textarea and only persisted via the normal Board Save.
+    regenerateColumnInstructions: (payload) => ipcRenderer.invoke('team:regenerateColumnInstructions', payload)
+  },
+
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', { url }),
 
   gitops: {
@@ -201,6 +211,13 @@ contextBridge.exposeInMainWorld('api', {
     // { ok: true, usage: <totals>|null }. usage is null when telemetry is off/no
     // receiver; never throws.
     usageForWindow: (w) => ipcRenderer.invoke('telemetry:usageForWindow', w),
+    // Per-prompt cost correlation (TASK-195): like usageForWindow above, but
+    // scoped to ONE project's own telemetry bucket, so a different,
+    // concurrently-running project's calls are never folded into a prompt's
+    // total even if their timestamps fall inside the same window. `w` is
+    // { startedAt, finishedAt, model? }; leave `model` empty/omitted to sum a
+    // sequence that spans multiple models. -> { ok: true, usage: <totals>|null }.
+    usageForWindowInProject: (project, w) => ipcRenderer.invoke('telemetry:usageForWindowInProject', { project, window: w }),
     // Tag forwarded summaries with the folder the user is currently focused on;
     // the renderer calls this as tabs are switched. Fire-and-forget.
     setActiveProject: (name) => ipcRenderer.invoke('telemetry:setActiveProject', name),

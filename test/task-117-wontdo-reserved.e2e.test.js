@@ -102,16 +102,16 @@ test('Scenario: __wont-do__ never appears as a board lane', () => {
   // Given the system columns plus a non-system "__wont-do__" column
   const columns = [...systemColumns(), col(WONT_DO, false)];
 
-  // Then laneStatusesFor(columns) equals exactly the six fixed LANE_STATUSES
+  // Then laneStatusesFor(columns) equals exactly the five fixed LANE_STATUSES
   assert.deepEqual(laneStatusesFor(columns), LANE_STATUSES);
   assert.equal(laneStatusesFor(columns).includes(WONT_DO), false);
 
-  // And placing __wont-do__ mid-board (between testing and post-processing)
+  // And placing __wont-do__ mid-board (between testing and done)
   // still omits it — the first-occurrence dedupe must not resurrect it.
   const midCols = [
     col('todo', true), col('defining', true), col('in-progress', true),
     col('testing', true), col(WONT_DO, false), col(WONT_DO, false),
-    col('post-processing', true), col('done', true),
+    col('done', true),
   ];
   assert.deepEqual(laneStatusesFor(midCols), LANE_STATUSES);
 });
@@ -148,7 +148,7 @@ test('Scenario: Regression — ux-review unaffected', () => {
   const columns = [
     col('todo', true), col('defining', true), col('in-progress', true),
     col('testing', true), col('ux-review', false),
-    col('post-processing', true), col('done', true),
+    col('done', true),
   ];
 
   // Then isUserStatus true, laneForStatusFor "ux-review"
@@ -156,9 +156,9 @@ test('Scenario: Regression — ux-review unaffected', () => {
   assert.equal(isKnownStatusFor('ux-review', columns), true);
   assert.equal(laneForStatusFor('ux-review', columns), 'ux-review');
 
-  // And it is listed between testing and post-processing (anchored placement).
+  // And it is listed between testing and done (anchored placement).
   assert.deepEqual(laneStatusesFor(columns), [
-    'todo', 'defining', 'in-progress', 'testing', 'ux-review', 'post-processing', 'done',
+    'todo', 'defining', 'in-progress', 'testing', 'ux-review', 'done',
   ]);
 
   // And it owns its own folder / reconciles like a system status.

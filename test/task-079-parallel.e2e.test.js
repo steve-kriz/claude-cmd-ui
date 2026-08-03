@@ -191,14 +191,19 @@ test('DRIFT GUARD (Part A): the real autoQueueBuildOnCreate exists, reuses the s
   assert.match(body, /queueBuild\(tab\);/, 'reuses queueBuild rather than a new mechanism');
 });
 
-test('DRIFT GUARD (Part A): autoQueueBuildOnCreate is wired into the three creation paths (New-ticket todo-only, bug, Slack)', () => {
-  // New-ticket create is todo-only (post-processing tickets are never built).
-  assert.match(rendererSrc, /if \(status === 'todo'\) autoQueueBuildOnCreate\(tab\);/,
-    'onCreateNormal calls it only for a todo ticket');
-  // Bug create (a plain todo) and Slack create both call it unconditionally.
+test('DRIFT GUARD (Part A): autoQueueBuildOnCreate is wired into the three creation paths (New-ticket, bug, Slack)', () => {
+  // New-ticket create is unconditionally todo (TASK-206 removed the only other
+  // status openNewTaskModal could ever create — post-processing — so the old
+  // `if (status === 'todo')` guard is gone; every created ticket is a todo, and
+  // onCreateNormal calls autoQueueBuildOnCreate unconditionally too).
+  const normalIdx = rendererSrc.indexOf('const onCreateNormal');
   const bugIdx = rendererSrc.indexOf('const onCreateBug');
   const slackIdx = rendererSrc.indexOf('async function handleCreateTicketReply');
-  assert.ok(bugIdx !== -1 && slackIdx !== -1, 'both bug-create and Slack-create paths present');
+  assert.ok(normalIdx !== -1 && bugIdx !== -1 && slackIdx !== -1,
+    'new-ticket, bug-create, and Slack-create paths are all present');
+  assert.match(rendererSrc.slice(normalIdx, bugIdx), /autoQueueBuildOnCreate\(tab\);/,
+    'onCreateNormal calls autoQueueBuildOnCreate for the (always-todo) new ticket');
+  // Bug create (a plain todo) and Slack create both call it unconditionally.
   assert.match(rendererSrc.slice(bugIdx, slackIdx), /autoQueueBuildOnCreate\(tab\);/,
     'onCreateBug calls autoQueueBuildOnCreate');
   assert.match(rendererSrc.slice(slackIdx, slackIdx + 4000), /autoQueueBuildOnCreate\(tab\);/,
@@ -284,40 +289,54 @@ test('Scenario: a defined ticket waits when the slot-occupancy count equals the 
 // ===========================================================================
 // Scenario: The SKILL routes undefined new tickets through the BA first
 // ===========================================================================
+// TASK-204 rewrote SKILL.md around a generic, column-driven dispatch loop,
+// replacing the fixed Phase 1->2->3->4 pipeline this scenario originally
+// pinned prose against. The underlying guarantees this scenario protects are
+// unchanged (undefined tickets route through defining + orchestrate-ba
+// first, BA runs before any claim/build, model ids stay confined to Model
+// routing, already-defined tickets skip the BA, post-processing is excluded,
+// and a BA question parks only its own ticket) — only the wording/anchors
+// moved, so this test now checks the NEW wording for each of those.
 test('Scenario: both SKILL copies route undefined new tickets to defining + orchestrate-ba first, and are byte-identical', () => {
   // Given both copies of the orchestrate SKILL
   const projectSrc = fs.readFileSync(PROJECT_SKILL, 'utf8');
   const assetsSrc = fs.readFileSync(ASSETS_SKILL, 'utf8');
   for (const [label, src] of [['.claude', projectSrc], ['assets', assetsSrc]]) {
-    // Then Phase 2's intake instructs setting status defining and dispatching orchestrate-ba
-    assert.match(src, /Set `status: defining`/, `${label}: intake sets status defining`);
-    assert.match(src, /Task tool,\s*`orchestrate-ba`;\s*fall back to[\s\S]*?`general-purpose`/,
-      `${label}: dispatches orchestrate-ba with the general-purpose fallback wording`);
-    // And it references isTicketDefined in lib/ticket-definition.js
-    assert.match(src, /isTicketDefined\(body\)/, `${label}: references isTicketDefined(body)`);
+    // Then the `defining` column dispatches orchestrate-ba (with the generic
+    // fallback-and-report wording that now covers every column uniformly,
+    // not a per-agent "Task tool, `orchestrate-ba`; fall back to..." line).
+    assert.match(src, /\*\*`defining`\*\*\s*\(agent:\s*`orchestrate-ba`/,
+      `${label}: the defining column dispatches orchestrate-ba`);
+    assert.match(src, /fall back to\s*`general-purpose`\s*and continue[\s\S]{0,200}report[\s\S]{0,80}named agent was missing/i,
+      `${label}: the generic fallback-and-report wording still covers every column's agent`);
+    // And it references isTicketDefined in lib/ticket-definition.js.
+    assert.match(src, /isTicketDefined/, `${label}: references isTicketDefined`);
     assert.match(src, /lib\/ticket-definition\.js/, `${label}: names lib/ticket-definition.js`);
-    // And define happens BEFORE any claim/build of it.
-    assert.match(src, /define it FIRST \(BA before any claim\/build\)/i, `${label}: BA before claim/build`);
-    // And the mid-build BA dispatch references the routing directive INDIRECTLY —
-    // it must NOT name a literal model id in Phase 2 (TASK-051 invariant: the
-    // sonnet-5/opus-4-8 routing directive lives ONLY before Phase 2).
-    assert.match(src, /dispatched on the BA's premium tier/i,
-      `${label}: Phase 2 BA dispatch references the routed premium tier indirectly`);
-    assert.match(src, /see \*\*Model\s+routing\*\*/i,
-      `${label}: Phase 2 points back to the Model routing directive`);
-    // And NO literal model id appears at/after the `## Phase 2 — Build` heading.
-    const phase2Idx = src.indexOf('## Phase 2 — Build');
-    assert.ok(phase2Idx !== -1, `${label}: the "## Phase 2 — Build" heading is present`);
-    assert.doesNotMatch(src.slice(phase2Idx), /claude-sonnet-5|claude-opus-4-8/,
-      `${label}: no literal model id (claude-sonnet-5/claude-opus-4-8) at/after the Phase 2 heading`);
-    // And the literal sonnet-5/opus-4-8 routing directive still lives before Phase 2.
-    assert.match(src.slice(0, phase2Idx), /claude-sonnet-5[\s\S]*?claude-opus-4-8/,
-      `${label}: the literal sonnet-5/opus-4-8 model routing directive remains before Phase 2`);
-    // And already-defined tickets skip the BA; post-processing is excluded.
-    assert.match(src, /Already-defined `todo` ticket → skip the BA/, `${label}: already-defined skips BA`);
-    assert.match(src, /kind: post-processing` ticket is \*\*never\*\* defined or\s*dispatched/, `${label}: post-processing excluded`);
+    // And define happens BEFORE any claim/build of it: a defined ticket
+    // returns to `todo` — never straight into `in-progress` — so the build
+    // column's claim is what actually picks it up next.
+    assert.match(src, /ticket returns to[\s\S]{0,20}todo[\s\S]{0,80}never straight into[\s\S]{0,20}in-progress/i,
+      `${label}: BA-before-claim/build ordering preserved`);
+    // And model ids stay confined to the "## Model routing" section — never
+    // spliced into any column's own dispatch prose (TASK-051 invariant,
+    // generalised from the old per-phase anchor).
+    const routingIdx = src.indexOf('## Model routing');
+    assert.ok(routingIdx !== -1, `${label}: Model routing heading present`);
+    const nextHeadingIdx = src.indexOf('\n## ', routingIdx + 1);
+    const outsideRouting = src.slice(0, routingIdx) + src.slice(nextHeadingIdx);
+    assert.doesNotMatch(outsideRouting, /claude-sonnet-5|claude-opus-4-8/,
+      `${label}: no literal model id outside Model routing`);
+    assert.match(src.slice(routingIdx, nextHeadingIdx), /claude-sonnet-5[\s\S]*?claude-opus-4-8/,
+      `${label}: the literal sonnet-5/opus-4-8 model routing directive lives inside Model routing`);
+    // And already-defined tickets skip the BA (pass through unchanged);
+    // post-processing is excluded entirely (TASK-206).
+    assert.match(src, /already\s+defined[\s\S]{0,400}pass it through unchanged rather than redefining it/i,
+      `${label}: an already-defined ticket passes through unchanged (skips the BA's redefinition work)`);
+    assert.match(src, /no `?post-processing`? (status|column|lane)/i,
+      `${label}: post-processing is excluded`);
     // And a BA question parks only that ticket while the swarm continues.
-    assert.match(src, /That ticket alone\*\* stays in `defining`/, `${label}: question parks only that ticket`);
+    assert.match(src, /A BA clarifying question parks only that ticket/i,
+      `${label}: question parks only that ticket`);
   }
   // And the two copies are byte-identical
   assert.ok(fs.readFileSync(PROJECT_SKILL).equals(fs.readFileSync(ASSETS_SKILL)),
@@ -374,24 +393,24 @@ test('Scenario (edge): a BA question parks only that ticket; other todo tickets 
 });
 
 // ===========================================================================
-// Scenario: Edge - post-processing ticket is never defined or dispatched
+// Scenario: Edge - a leftover kind:post-processing ticket is claimable (TASK-206)
 // ===========================================================================
-test('Scenario (edge): a post-processing ticket is never defined or dispatched', () => {
-  // Given a newly created ticket with kind post-processing
+test('Scenario (edge): a leftover kind:post-processing ticket with todo status is claimable (TASK-206)', () => {
+  // Given a ticket with kind:post-processing but status todo (legacy from before removal)
   const pp = { fm: { id: 'TASK-8', status: 'todo', kind: 'post-processing' } };
   const board = [pp];
   // When the intake rules are applied
-  // Then no BA dispatch occurs (it is excluded from selectNextBatch) ...
+  // Then it IS selected (kind no longer excludes it) ...
   const batch = selectNextBatch(board, { limit: 3 });
-  assert.ok(!batch.some((t) => t.fm.id === 'TASK-8'), 'post-processing ticket never selected');
-  // ... and canRunInParallel reports post-processing
+  assert.ok(batch.some((t) => t.fm.id === 'TASK-8'), 'post-processing kind with todo status is now selected');
+  // ... and canRunInParallel allows it (no more 'post-processing' reason)
   const r = canRunInParallel([], pp, { limit: 3 });
-  assert.equal(r.ok, false);
-  assert.equal(r.reason, 'post-processing');
-  // And claimTicket likewise refuses it as post-processing.
+  assert.equal(r.ok, true);
+  assert.equal(r.reason, 'ok');
+  // And claimTicket accepts it.
   const claim = claimTicket(pp.fm, 'coder-1');
-  assert.equal(claim.ok, false);
-  assert.equal(claim.reason, 'post-processing');
+  assert.equal(claim.ok, true);
+  assert.equal(claim.fm.status, 'in-progress');
 });
 
 // ===========================================================================

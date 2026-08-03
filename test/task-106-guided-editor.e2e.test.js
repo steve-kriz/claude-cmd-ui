@@ -5,27 +5,33 @@
 // `node --test` cases. NO `cucumber` npm package is installed or required; these
 // are scenario-style node:test cases in Given/When/Then form.
 //
-// Feature: the Q3 GUIDED skill-settings editor mounted on the Team tab Workflow
-// panel — (a) a per-phase AGENT MODEL editor that rewrites ONLY the `model:` line
-// of that phase's agent file via a whole-file round-trip + writeWithMirror so
-// assets/agents/ stays byte-synced, and (b) a build-CONCURRENCY-default control
-// that writes skill.concurrencyDefault into tasks/team-config.json and seeds the
-// Tasks toolbar dropdown / the `/orchestrate build --concurrency N` command.
+// Feature: the build-CONCURRENCY-default control that writes
+// skill.concurrencyDefault into tasks/team-config.json and seeds the Tasks
+// toolbar dropdown / the `/orchestrate build --concurrency N` command.
+//
+// TASK-203: the per-phase AGENT MODEL editor this file originally also covered
+// (buildWorkflowModelEditor, mounted per-phase on the now-removed Workflow
+// panel's phase cards) was removed as dead code once its only caller
+// (buildWorkflowPhase) was deleted. Agent model/description/tools editing now
+// lives exclusively in the Agents panel's full editor (see
+// test/task-094-agents-panel.e2e.test.js, test/task-130-agent-regenerate.test.js,
+// test/task-130-agent-setup.e2e.test.js), so that coverage is not lost — it is
+// just no longer duplicated here. buildWorkflowConcurrencyControl is UNCHANGED
+// in behaviour (TASK-202 only relocated its mount point to the Board panel), so
+// its scenarios below are kept as-is.
 //
 // The subject under test is the REAL shipped renderer code (renderer/renderer.js,
-// a browser script with no module.exports): buildWorkflowModelEditor,
-// serializeAgentModel, sanitizeAgentModelField, writeWithMirror,
-// buildWorkflowConcurrencyControl, buildWorkingConfigFromRaw,
-// tasksSerializeTeamConfig, resolveTasksConcurrency, currentTasksConcurrency,
-// syncTasksConcurrencyOption, initTasksConcurrency, buildCommandFor — extracted
-// headless by brace-matching (the task-094/task-105 convention) and driven with
-// an injected window/document/console/localStorage + a minimal in-memory mock DOM.
+// a browser script with no module.exports): buildWorkflowConcurrencyControl,
+// buildWorkingConfigFromRaw, tasksSerializeTeamConfig, resolveTasksConcurrency,
+// currentTasksConcurrency, syncTasksConcurrencyOption, initTasksConcurrency,
+// buildCommandFor — extracted headless by brace-matching (the task-094/task-105
+// convention) and driven with an injected window/document/console/localStorage +
+// a minimal in-memory mock DOM.
 //
 // ALL filesystem access goes through a STUBBED window.api.fs that operates on a
 // per-test TEMP DIR (real node:fs, but only ever inside os.tmpdir()) so byte-
-// preservation and mirror byte-identity can be asserted against actual files.
-// The four bundled .claude/agents/*.md + assets/agents/*.md and SKILL.md are used
-// READ-ONLY as fixtures (copied into the temp dir; the originals are NEVER
+// preservation can be asserted against actual files. A real SKILL.md is used
+// READ-ONLY as a fixture (copied into the temp dir; the original is NEVER
 // modified). localStorage is an in-memory stub. NO real DB / Electron / network.
 // ===========================================================================
 
@@ -57,16 +63,12 @@ function extractConst(src, name) {
   return m[0];
 }
 
-// Load the REAL guided-editor render + save path headless. Injects window /
-// document / console / localStorage so nothing accidentally reaches a real global.
+// Load the REAL concurrency-control render + save path headless. Injects
+// window / document / console / localStorage so nothing accidentally reaches a
+// real global.
 function loadEditor(window, document, console, localStorage) {
   const body = [
     // --- constants (ordered so cross-references resolve) ---
-    extractConst(rendererSrc, 'AGENT_KEY_RE'),
-    extractConst(rendererSrc, 'AGENT_BLOCK_RE'),
-    extractConst(rendererSrc, 'AGENT_FENCE_RE'),
-    extractConst(rendererSrc, 'WF_MODEL_SUGGESTIONS'),
-    extractConst(rendererSrc, 'ASSETS_MIRRORED_SUBTREES'),
     extractConst(rendererSrc, 'BUILD_COMMAND'),
     extractConst(rendererSrc, 'TASKS_MAX_CONCURRENCY'),
     extractConst(rendererSrc, 'TASKS_DEFAULT_CONCURRENCY'),
@@ -77,25 +79,13 @@ function loadEditor(window, document, console, localStorage) {
     extractConst(rendererSrc, 'TASKS_RESERVED_SLUGS'),
     extractConst(rendererSrc, 'TASKS_MAX_SLUG_LENGTH'),
     extractConst(rendererSrc, 'TASKS_SLUG_RE'),
-    // TASK-180 - tasksBuildColumn normalises a column's optional `phase` link
-    // via tasksNormalizeColumnPhase, which reads TASKS_PHASE_KEYS.
-    extractConst(rendererSrc, 'TASKS_PHASE_KEYS'),
-    'let wfModelDatalistSeq = 0;',
-    // --- path + mirror helpers ---
+    // TASK-180's `phase` link (TASKS_PHASE_KEYS/tasksNormalizeColumnPhase) was
+    // fully removed by TASK-201/203 — tasksBuildColumn no longer has one.
+    // --- path helpers ---
     extractFn(rendererSrc, 'inferSep'),
     extractFn(rendererSrc, 'appendPath'),
     extractFn(rendererSrc, 'tasksJoin'),
     extractFn(rendererSrc, 'tasksBasename'),
-    extractFn(rendererSrc, 'relFromFolder'),
-    extractFn(rendererSrc, 'mirrorRelPath'),
-    extractFn(rendererSrc, 'writeWithMirror'),
-    // --- agent-file round-trip + sanitiser (per-phase model editor) ---
-    extractFn(rendererSrc, 'resolveAgentBlockScalar'),
-    extractFn(rendererSrc, 'parseAgentFileRenderer'),
-    extractFn(rendererSrc, 'serializeAgentModel'),
-    extractFn(rendererSrc, 'sanitizeAgentScalarField'),
-    extractFn(rendererSrc, 'sanitizeAgentModelField'),
-    extractFn(rendererSrc, 'buildWorkflowModelEditor'),
     // --- concurrency: resolve chain + config serialize + control ---
     extractFn(rendererSrc, 'resolveTasksConcurrency'),
     extractFn(rendererSrc, 'readStoredTasksConcurrency'),
@@ -107,9 +97,13 @@ function loadEditor(window, document, console, localStorage) {
     extractFn(rendererSrc, 'initTasksConcurrency'),
     extractFn(rendererSrc, 'buildCommandFor'),
     extractFn(rendererSrc, 'tasksPrettifyLabel'),
-    extractFn(rendererSrc, 'tasksNormalizeColumnPhase'),
     extractFn(rendererSrc, 'tasksBuildColumn'),
     extractFn(rendererSrc, 'normalizeTasksColumns'),
+    // TASK-200 — tasksSerializeTeamConfig now normalises skill.contextOptimization
+    // via tasksNormalizeContextOptimization, so these must be in scope too.
+    extractConst(rendererSrc, 'TASKS_CONTEXT_OPT_LEVELS'),
+    extractConst(rendererSrc, 'TASKS_CONTEXT_OPT_DEFAULT'),
+    extractFn(rendererSrc, 'tasksNormalizeContextOptimization'),
     extractFn(rendererSrc, 'tasksSerializeTeamConfig'),
     // TASK-128: buildWorkingConfigFromRaw / tasksSerializeTeamConfig now skip
     // prototype-poisoning keys via tasksIsUnsafeKey, so the headless harness must
@@ -118,11 +112,12 @@ function loadEditor(window, document, console, localStorage) {
     extractFn(rendererSrc, 'tasksIsUnsafeKey'),
     extractFn(rendererSrc, 'buildWorkingConfigFromRaw'),
     extractFn(rendererSrc, 'buildWorkflowConcurrencyControl'),
-    // refreshTeamWorkflow is fire-and-forget from the Save handlers; stub it so a
-    // save does not re-drive the whole (unmounted) panel in these targeted tests.
-    'function refreshTeamWorkflow(){}',
-    'return { buildWorkflowModelEditor, buildWorkflowConcurrencyControl,',
-    '  serializeAgentModel, parseAgentFileRenderer, sanitizeAgentModelField,',
+    // TASK-202: buildWorkflowConcurrencyControl's Save handler now calls
+    // refreshTeamBoard(tab) (the panel it is mounted in), not the removed
+    // refreshTeamWorkflow. Stub it so a save does not re-drive the whole
+    // (unmounted) panel in these targeted tests.
+    'function refreshTeamBoard(){}',
+    'return { buildWorkflowConcurrencyControl,',
     '  resolveTasksConcurrency, currentTasksConcurrency, syncTasksConcurrencyOption,',
     '  initTasksConcurrency, buildCommandFor, tasksSerializeTeamConfig,',
     '  buildWorkingConfigFromRaw, tasksJoin };',
@@ -202,16 +197,14 @@ async function click(el) {
 }
 
 // ---------------------------------------------------------------------------
-// A window.api.fs stub backed by REAL node:fs, but scoped to a temp dir. `failOn`
-// (a normalized absolute path) makes writeFile to that one path fail (the mirror-
-// unwritable scenario). Every call is recorded so a test can assert exactly what
-// was (and was NOT) written. NO real project file is ever touched.
+// A window.api.fs stub backed by REAL node:fs, but scoped to a temp dir. Every
+// call is recorded so a test can assert exactly what was (and was NOT) written.
+// NO real project file is ever touched.
 // ---------------------------------------------------------------------------
 function norm(p) { return String(p).replace(/\\/g, '/').toLowerCase(); }
 
 function makeWindow(opts) {
   const o = opts || {};
-  const failOn = o.failOn ? norm(o.failOn) : null;
   const calls = { writeFile: [], readFile: [], exists: [], mkdir: [] };
   const window = {
     api: {
@@ -223,7 +216,6 @@ function makeWindow(opts) {
         },
         async writeFile(p, content) {
           calls.writeFile.push({ p, content });
-          if (failOn && norm(p) === failOn) return { ok: false, error: 'EACCES' };
           try {
             fs.mkdirSync(path.dirname(p), { recursive: true });
             fs.writeFileSync(p, content);
@@ -255,28 +247,16 @@ function makeLocalStorage(seed) {
   };
 }
 
-// Build a temp project dir; copy the requested bundled agent files into BOTH
-// .claude/agents/ and assets/agents/ (byte-for-byte), returning their paths.
-function seedProject(agentNames, opts) {
+function cleanup(root) {
+  try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}
+}
+
+// Build a temp project dir, optionally seeding a real SKILL.md so a "SKILL.md
+// untouched" assertion can Buffer-compare a genuine file before/after a save.
+function seedProject(opts) {
   const o = opts || {};
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 't106-'));
-  const claudeAgents = path.join(root, '.claude', 'agents');
-  const assetsAgents = path.join(root, 'assets', 'agents');
-  fs.mkdirSync(claudeAgents, { recursive: true });
-  fs.mkdirSync(assetsAgents, { recursive: true });
   const paths = {};
-  for (const name of (agentNames || [])) {
-    const bytes = (o.contentByName && o.contentByName[name] != null)
-      ? Buffer.from(o.contentByName[name], 'utf8')
-      : fs.readFileSync(path.join(REPO, 'assets', 'agents', name));
-    const claudePath = path.join(claudeAgents, name);
-    const assetsPath = path.join(assetsAgents, name);
-    fs.writeFileSync(claudePath, bytes);
-    if (!o.noMirror) fs.writeFileSync(assetsPath, bytes);
-    paths[name] = { claudePath, assetsPath, original: bytes };
-  }
-  // Optionally seed a real SKILL.md so the "SKILL.md untouched" assertion can
-  // Buffer-compare a genuine file before/after a save.
   if (o.skill) {
     const skillDir = path.join(root, '.claude', 'skills', 'orchestrate');
     fs.mkdirSync(skillDir, { recursive: true });
@@ -284,143 +264,8 @@ function seedProject(agentNames, opts) {
     fs.copyFileSync(path.join(REPO, '.claude', 'skills', 'orchestrate', 'SKILL.md'), skillPath);
     paths.__skill = skillPath;
   }
-  return { root, claudeAgents, assetsAgents, paths };
+  return { root, paths };
 }
-
-function cleanup(root) {
-  try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}
-}
-
-// Mount the per-phase model editor on a freshly-parsed agent file and enter its
-// edit view, returning { wrap, input, saveBtn, cancelBtn, errEl }.
-function mountModelEditor(mod, tab, claudePath, phase) {
-  const content = fs.readFileSync(claudePath, 'utf8');
-  const parsed = mod.parseAgentFileRenderer(content);
-  assert.ok(parsed, 'the agent file parses');
-  const agentFile = { filePath: claudePath, parsed };
-  const wrap = mod.buildWorkflowModelEditor(tab, phase, agentFile);
-  return { wrap, parsed };
-}
-async function enterEdit(wrap) {
-  await click(findButton(wrap, 'Edit'));
-  return {
-    input: findByClass(wrap, 'team-workflow-model-input'),
-    saveBtn: findButton(wrap, 'Save'),
-    cancelBtn: findButton(wrap, 'Cancel'),
-    errEl: findByClass(wrap, 'team-agent-desc-error'),
-  };
-}
-
-const OPUS = 'claude-opus-4-8';    // ba.md + tech-lead.md pin the premium tier
-const SONNET = 'claude-sonnet-5';  // coder.md pins the swarm default
-
-// A synthetic read-only agent def with NO `model:` key, used to drive the
-// serializer's "insert a model key in canonical position" path now that every
-// bundled orchestrate agent pins a model in its frontmatter.
-const NO_MODEL_AGENT = [
-  '---',
-  'name: orchestrate-sample',
-  'description: >-',
-  '  A sample read-only agent used as a fixture; it declares no model key.',
-  'tools: Read, Grep, Glob',
-  '---',
-  '',
-  'Sample agent body.',
-  '',
-].join('\n');
-
-// ===========================================================================
-// Scenario: Editing the coder phase model
-//   When the user sets the build phase model to "claude-opus-4-8" and saves
-//   Then .claude/agents/coder.md has model: claude-opus-4-8 with all other bytes
-//        preserved  And assets/agents/coder.md is byte-identical
-// ===========================================================================
-test('Scenario: editing the build/coder phase model to claude-opus-4-8 rewrites ONLY the model line and byte-syncs the mirror', async () => {
-  // Given a project with the bundled coder.md installed in .claude/agents/ AND
-  // mirrored under assets/agents/ (coder.md ships with model: claude-sonnet-5).
-  const { root, paths } = seedProject(['coder.md']);
-  try {
-    const { window, calls } = makeWindow();
-    const mod = loadEditor(window, makeDocument(), console, makeLocalStorage());
-    const tab = { folder: root, els: {} };
-    const coder = paths['coder.md'];
-    const orig = coder.original.toString('utf8');
-    const eol = /\r\n/.test(orig) ? '\r\n' : '\n';
-
-    // When the user opens the build phase's model editor, types claude-opus-4-8
-    // and clicks Save.
-    const { wrap } = mountModelEditor(mod, tab, coder.claudePath,
-      { key: 'build', title: 'Phase 2', agent: 'orchestrate-coder' });
-    const { input, saveBtn, errEl } = await enterEdit(wrap);
-    input.value = OPUS;
-    await click(saveBtn);
-
-    // Then no inline error surfaced.
-    assert.ok(errEl.classList.contains('hidden'), 'no error on a clean save');
-
-    // And .claude/agents/coder.md now declares model: claude-opus-4-8 — the
-    // existing model line (claude-sonnet-5) is rewritten in place with EVERY OTHER
-    // byte preserved — verified by reconstructing the exact expected file.
-    const after = fs.readFileSync(coder.claudePath, 'utf8');
-    const expected = orig.replace('model: ' + SONNET + eol, 'model: ' + OPUS + eol);
-    assert.notEqual(after, orig, 'the file actually changed');
-    assert.equal(after, expected, 'ONLY the model VALUE was rewritten; all other bytes preserved');
-
-    // And assets/agents/coder.md is byte-identical to the .claude copy (mirror sync).
-    const claudeBytes = fs.readFileSync(coder.claudePath);
-    const assetsBytes = fs.readFileSync(coder.assetsPath);
-    assert.ok(claudeBytes.equals(assetsBytes), 'assets mirror is byte-identical after the save');
-
-    // And exactly the two agent copies were written — never SKILL.md or anything else.
-    const written = calls.writeFile.map((w) => norm(w.p));
-    assert.deepEqual(written, [norm(coder.claudePath), norm(coder.assetsPath)],
-      'wrote the .claude copy then its assets mirror, nothing else');
-    assert.ok(!written.some((p) => p.endsWith('skill.md')), 'never wrote SKILL.md');
-  } finally { cleanup(root); }
-});
-
-// ===========================================================================
-// Scenario: An agent file WITHOUT a model key gains one in canonical position
-//   (round-trip guarantee from TASK-092) — other bytes preserved.
-// ===========================================================================
-test('Scenario: a phase agent file with no model key gains one in canonical position, all other bytes preserved', async () => {
-  // Given a synthetic agent file with name/description/tools and NO model key
-  // (every bundled orchestrate agent now pins a model, so this path is exercised
-  // with a fixture that still lacks one).
-  const { root, paths } = seedProject(['sample.md'], { contentByName: { 'sample.md': NO_MODEL_AGENT } });
-  try {
-    const { window, calls } = makeWindow();
-    const mod = loadEditor(window, makeDocument(), console, makeLocalStorage());
-    const tab = { folder: root, els: {} };
-    const sample = paths['sample.md'];
-    const orig = sample.original.toString('utf8');
-    const eol = /\r\n/.test(orig) ? '\r\n' : '\n';
-    assert.ok(!/\nmodel:/.test(orig), 'fixture precondition: the sample agent has no model key');
-
-    // When the phase model is set to claude-opus-4-8 and saved.
-    const { wrap } = mountModelEditor(mod, tab, sample.claudePath,
-      { key: 'test', title: 'Phase 3', agent: 'orchestrate-sample' });
-    const { input, saveBtn } = await enterEdit(wrap);
-    input.value = OPUS;
-    await click(saveBtn);
-
-    // Then the model line is inserted right after the `tools:` line (canonical
-    // name→description→tools→model order) and nothing else changes.
-    const after = fs.readFileSync(sample.claudePath, 'utf8');
-    const toolsLine = 'tools: Read, Grep, Glob';
-    const expected = orig.replace(toolsLine + eol, toolsLine + eol + 'model: ' + OPUS + eol);
-    assert.equal(after, expected, 'model inserted after tools; every other byte preserved');
-
-    // And removing exactly that one inserted line yields the original file back.
-    const restored = after.replace('model: ' + OPUS + eol, '');
-    assert.equal(restored, orig, 'the change is exactly one added model line');
-
-    // And the assets mirror matches.
-    assert.ok(fs.readFileSync(sample.claudePath).equals(fs.readFileSync(sample.assetsPath)),
-      'assets mirror byte-identical');
-    assert.equal(calls.writeFile.length, 2, 'primary + mirror only');
-  } finally { cleanup(root); }
-});
 
 // ===========================================================================
 // Scenario: Concurrency default seeds the Tasks dropdown
@@ -469,36 +314,28 @@ test('Scenario: skill.concurrencyDefault 5 with no localStorage seeds the Tasks 
 
 // ===========================================================================
 // Scenario: SKILL.md stays read-only (edge)
-//   When any workflow setting is saved
+//   When a concurrency default is saved
 //   Then SKILL.md bytes on disk are unchanged (no write ever targets SKILL.md)
 // ===========================================================================
-test('Scenario (edge): saving a model AND a concurrency default never writes SKILL.md; its bytes stay identical', async () => {
-  // Given a project with coder.md installed + mirrored AND a real SKILL.md on disk.
-  const { root, paths } = seedProject(['coder.md'], { skill: true });
+test('Scenario (edge): saving a concurrency default never writes SKILL.md; its bytes stay identical', async () => {
+  // Given a project with a real SKILL.md on disk.
+  const { root, paths } = seedProject({ skill: true });
   try {
     const { window, calls } = makeWindow();
     const mod = loadEditor(window, makeDocument(), console, makeLocalStorage());
     const tab = { folder: root, els: {} };
     const skillBefore = fs.readFileSync(paths.__skill);
 
-    // When a model save happens ...
-    const coder = paths['coder.md'];
-    const me = mountModelEditor(mod, tab, coder.claudePath,
-      { key: 'build', title: 'Phase 2', agent: 'orchestrate-coder' });
-    const edit = await enterEdit(me.wrap);
-    edit.input.value = OPUS;
-    await click(edit.saveBtn);
-
-    // ... and a concurrency-default save happens.
+    // When a concurrency-default save happens.
     const control = mod.buildWorkflowConcurrencyControl(tab, { skill: { concurrencyDefault: 4 } });
     await click(findButton(control, 'Save'));
 
     // Then NO write ever targeted SKILL.md ...
     const written = calls.writeFile.map((w) => norm(w.p));
-    assert.ok(written.length >= 2, 'the saves did write (agent + config)');
+    assert.ok(written.length >= 1, 'the save did write (config)');
     assert.ok(!written.some((p) => p.endsWith('skill.md')), 'no write ever targeted SKILL.md');
     // ... and the SKILL.md bytes on disk are unchanged.
-    assert.ok(fs.readFileSync(paths.__skill).equals(skillBefore), 'SKILL.md bytes unchanged after both saves');
+    assert.ok(fs.readFileSync(paths.__skill).equals(skillBefore), 'SKILL.md bytes unchanged after the save');
   } finally { cleanup(root); }
 });
 
@@ -511,7 +348,7 @@ test('Scenario (edge): saving a model AND a concurrency default never writes SKI
 test('Scenario (failure): an out-of-range concurrencyDefault 99 clamps to MAX and Save persists the normalized value, preserving columns', async () => {
   // Given a team-config.json whose skill.concurrencyDefault is an out-of-range 99,
   // with a user column, an explicit version and an unknown top-level field.
-  const { root } = seedProject([]);
+  const { root } = seedProject();
   const tasksDir = path.join(root, 'tasks');
   const cfgPath = path.join(tasksDir, 'team-config.json');
   fs.mkdirSync(tasksDir, { recursive: true });
@@ -543,91 +380,18 @@ test('Scenario (failure): an out-of-range concurrencyDefault 99 clamps to MAX an
     assert.equal(persisted.skill.concurrencyDefault, 8, 'Save rewrote the normalized clamped value');
     // ... and the ux-review column, version, other skill keys and the unknown
     // top-level field all survive (a concurrency-only save never drops them).
+    // TASK-201/203: the phase system is fully retired, so the normalized column
+    // shape carries no `phase` key at all (TASK-202 added `instructions`).
     assert.deepEqual(persisted.columns.find((c) => c.status === 'ux-review'),
-      { status: 'ux-review', label: 'UX Review', description: 'design pass', agent: null, system: false, phase: null },
+      { status: 'ux-review', label: 'UX Review', description: 'design pass', agent: null, instructions: '', system: false },
       'the user column is preserved (normalized shape)');
     assert.equal(persisted.version, 2, 'version preserved');
     assert.equal(persisted.skill.planningModel, 'claude-fable-5', 'other skill keys preserved');
     assert.deepEqual(persisted.someUnknownField, { keep: true }, 'unknown top-level field preserved');
-    // And the six system lanes are all present in the normalized columns.
-    for (const s of ['todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done']) {
+    // And the five system lanes are all present in the normalized columns
+    // (post-processing was removed in TASK-206, so there are five, not six).
+    for (const s of ['todo', 'defining', 'in-progress', 'testing', 'done']) {
       assert.ok(persisted.columns.some((c) => c.status === s), `system column ${s} present`);
     }
   } finally { cleanup(root); }
-});
-
-// ===========================================================================
-// Scenario: Mirror write fails (failure)
-//   Given assets/agents/coder.md is unwritable
-//   When the model is saved
-//   Then the .claude copy is written and a drift warning names both paths
-// ===========================================================================
-test('Scenario (failure): when the assets mirror is unwritable, the .claude copy still lands and a drift warning names BOTH paths', async () => {
-  // Given coder.md installed + mirrored, but the assets mirror is unwritable.
-  const { root, paths } = seedProject(['coder.md']);
-  try {
-    const coder = paths['coder.md'];
-    const { window, calls } = makeWindow({ failOn: coder.assetsPath });
-    const mod = loadEditor(window, makeDocument(), console, makeLocalStorage());
-    const tab = { folder: root, els: {} };
-    const assetsBefore = fs.readFileSync(coder.assetsPath);
-
-    // When the model is saved.
-    const { wrap } = mountModelEditor(mod, tab, coder.claudePath,
-      { key: 'build', title: 'Phase 2', agent: 'orchestrate-coder' });
-    const { input, saveBtn, errEl } = await enterEdit(wrap);
-    input.value = OPUS;
-    await click(saveBtn);
-
-    // Then the .claude copy WAS written (primary landed) ...
-    const claudeAfter = fs.readFileSync(coder.claudePath, 'utf8');
-    assert.match(claudeAfter, /\nmodel: claude-opus-4-8\n/, '.claude copy got the new model');
-    // ... the assets mirror did NOT change (its write failed) ...
-    assert.ok(fs.readFileSync(coder.assetsPath).equals(assetsBefore), 'assets mirror unchanged (drifted)');
-    // ... a drift warning is shown inline naming BOTH the primary and mirror paths ...
-    assert.ok(!errEl.classList.contains('hidden'), 'a drift warning is shown');
-    assert.match(errEl.textContent, /drift/i, 'the warning explains the two copies drifted');
-    assert.ok(errEl.textContent.includes(coder.claudePath), 'warning names the .claude path');
-    assert.ok(errEl.textContent.includes(coder.assetsPath), 'warning names the assets mirror path');
-    // ... and both writes were attempted (primary ok, mirror failed).
-    assert.equal(calls.writeFile.length, 2, 'primary + mirror writes attempted');
-  } finally { cleanup(root); }
-});
-
-// ===========================================================================
-// Scenario: INJECTION (failure)
-//   A model value with a newline / `---` / `key:` is rejected — no write.
-// ===========================================================================
-test('Scenario (failure): a model value with a newline, a leading ---, or an embedded key: is rejected with NO write', async () => {
-  const injections = [
-    { label: 'newline', value: 'claude-opus-4-8\nmalicious: true' },
-    { label: 'CR', value: 'claude\r\nname: evil' },
-    { label: 'leading ---', value: '---\nname: evil' },
-    { label: 'embedded key:', value: 'foo: bar' },
-    { label: 'YAML injection token', value: 'x\ntools: Bash' },
-  ];
-  for (const inj of injections) {
-    const { root, paths } = seedProject(['coder.md']);
-    try {
-      const coder = paths['coder.md'];
-      const { window, calls } = makeWindow();
-      const mod = loadEditor(window, makeDocument(), console, makeLocalStorage());
-      const tab = { folder: root, els: {} };
-
-      // When the user tries to save a malicious model value.
-      const { wrap } = mountModelEditor(mod, tab, coder.claudePath,
-        { key: 'build', title: 'Phase 2', agent: 'orchestrate-coder' });
-      const { input, saveBtn, errEl } = await enterEdit(wrap);
-      input.value = inj.value;
-      await click(saveBtn);
-
-      // Then it is rejected inline and NOTHING is written to disk.
-      assert.ok(!errEl.classList.contains('hidden'), `${inj.label}: an error is shown`);
-      assert.equal(calls.writeFile.length, 0, `${inj.label}: no write happened`);
-      assert.ok(fs.readFileSync(coder.claudePath).equals(coder.original), `${inj.label}: coder.md untouched`);
-      assert.ok(fs.readFileSync(coder.assetsPath).equals(coder.original), `${inj.label}: assets mirror untouched`);
-      // And the sanitiser itself rejects the value (defence in depth).
-      assert.equal(mod.sanitizeAgentModelField(inj.value).ok, false, `${inj.label}: sanitizer rejects`);
-    } finally { cleanup(root); }
-  }
 });

@@ -44,6 +44,16 @@ const COLUMN_CASES = {
     { status: 'defining', system: true },
     { status: 'in-progress', system: true },
     { status: 'testing', system: true },
+    { status: 'done', system: true },
+  ],
+  // A legacy system column carrying the removed post-processing slug (TASK-206):
+  // system:true excludes it from userStatusSetFor, and it is not one of the five
+  // LANE_STATUSES, so both sides must silently drop it rather than resurrect a lane.
+  'legacy-post-processing-system': [
+    { status: 'todo', system: true },
+    { status: 'defining', system: true },
+    { status: 'in-progress', system: true },
+    { status: 'testing', system: true },
     { status: 'post-processing', system: true },
     { status: 'done', system: true },
   ],
@@ -134,34 +144,43 @@ for (const [name, columns] of Object.entries(COLUMN_CASES)) {
   });
 }
 
-test('tasksLaneStatusesFor re-injects all six system lanes for a PARTIAL array', () => {
-  // The core TASK-122 fix: a partial system-columns array must yield all six lanes
+test('tasksLaneStatusesFor re-injects all five system lanes for a PARTIAL array', () => {
+  // The core TASK-122 fix: a partial system-columns array must yield all five lanes
   // in canonical order, not just the supplied ones.
   assert.deepEqual(
     tasksLaneStatusesFor(COLUMN_CASES['partial-system']),
-    ['todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done'],
+    ['todo', 'defining', 'in-progress', 'testing', 'done'],
   );
 });
 
-test('tasksLaneStatusesFor null/junk degrade to the six system lanes', () => {
-  const SIX = ['todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done'];
-  assert.deepEqual(tasksLaneStatusesFor(null), SIX);
-  assert.deepEqual(tasksLaneStatusesFor('nope'), SIX);
-  assert.deepEqual(tasksLaneStatusesFor(COLUMN_CASES['junk-entries']), SIX);
+test('tasksLaneStatusesFor null/junk degrade to the five system lanes', () => {
+  const FIVE = ['todo', 'defining', 'in-progress', 'testing', 'done'];
+  assert.deepEqual(tasksLaneStatusesFor(null), FIVE);
+  assert.deepEqual(tasksLaneStatusesFor('nope'), FIVE);
+  assert.deepEqual(tasksLaneStatusesFor(COLUMN_CASES['junk-entries']), FIVE);
 });
 
 test('tasksLaneStatusesFor interleaves a user column at its anchored position', () => {
   assert.deepEqual(
     tasksLaneStatusesFor(COLUMN_CASES['partial+user']),
-    ['todo', 'defining', 'in-progress', 'review', 'testing', 'post-processing', 'done'],
+    ['todo', 'defining', 'in-progress', 'review', 'testing', 'done'],
   );
 });
 
 test('tasksLaneStatusesFor sorts a pre-todo user column ahead of todo', () => {
   assert.deepEqual(
     tasksLaneStatusesFor(COLUMN_CASES['user-before-todo']),
-    ['review', 'todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done'],
+    ['review', 'todo', 'defining', 'in-progress', 'testing', 'done'],
   );
+});
+
+test('tasksLaneStatusesFor silently drops a legacy system:true post-processing column (TASK-206)', () => {
+  // Neither re-injected as a system lane (it is not in LANE_STATUSES) nor treated
+  // as a user column (system:true excludes it from userStatusSetFor) — it simply
+  // does not appear, and no "post-processing" lane is resurrected.
+  const lanes = tasksLaneStatusesFor(COLUMN_CASES['legacy-post-processing-system']);
+  assert.deepEqual(lanes, ['todo', 'defining', 'in-progress', 'testing', 'done']);
+  assert.ok(!lanes.includes('post-processing'), 'post-processing is never resurrected as a lane');
 });
 
 // ---------------------------------------------------------------------------

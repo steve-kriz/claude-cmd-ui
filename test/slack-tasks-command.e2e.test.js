@@ -178,7 +178,7 @@ test('Scenario: active work is reported from the live board — and nothing is w
   assert.ok(reply.includes('TASK-102 — UI (testing)'), 'lists the testing ticket');
   // And the counts line reports todo 1, in-progress 1, testing 1
   assert.ok(
-    reply.includes('todo 1 · defining 0 · in-progress 1 · testing 1 · post-processing 0 · done 0'),
+    reply.includes('todo 1 · defining 0 · in-progress 1 · testing 1 · done 0'),
     `counts line present, got:\n${reply}`,
   );
   // And nothing is written to the Claude pty (command intercepted, not forwarded)

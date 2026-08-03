@@ -26,19 +26,19 @@ const {
 
 // The canonical status enum this module derives from — used to prove the
 // keep-awake set stays in lockstep rather than hardcoding strings.
-const { ACTIVE_STATUSES, POST_PROCESSING_STATUS } = require('../lib/ticket-lanes');
+const { ACTIVE_STATUSES } = require('../lib/ticket-lanes');
 
 // ---------------------------------------------------------------------------
-// KEEP_AWAKE_STATUSES — derived set: active statuses PLUS post-processing.
+// KEEP_AWAKE_STATUSES — derived set: active statuses (post-processing removed).
 // ---------------------------------------------------------------------------
-test('KEEP_AWAKE_STATUSES is ACTIVE_STATUSES plus post-processing (derived, not hardcoded)', () => {
-  assert.deepEqual(KEEP_AWAKE_STATUSES, [...ACTIVE_STATUSES, POST_PROCESSING_STATUS]);
+test('KEEP_AWAKE_STATUSES is ACTIVE_STATUSES exactly (derived, not hardcoded)', () => {
+  assert.deepEqual(KEEP_AWAKE_STATUSES, [...ACTIVE_STATUSES]);
   // The documented literal value.
-  assert.deepEqual(KEEP_AWAKE_STATUSES, ['defining', 'in-progress', 'testing', 'post-processing']);
+  assert.deepEqual(KEEP_AWAKE_STATUSES, ['defining', 'in-progress', 'testing']);
 });
 
-test('KEEP_AWAKE_STATUSES includes every active status and post-processing', () => {
-  for (const s of ['defining', 'in-progress', 'testing', 'post-processing']) {
+test('KEEP_AWAKE_STATUSES includes every active status', () => {
+  for (const s of ['defining', 'in-progress', 'testing']) {
     assert.ok(KEEP_AWAKE_STATUSES.includes(s), `${s} keeps the machine awake`);
   }
 });
@@ -56,13 +56,13 @@ test('isKeepAwakeStatus is true for keep-awake statuses', () => {
   assert.equal(isKeepAwakeStatus('defining'), true);
   assert.equal(isKeepAwakeStatus('in-progress'), true);
   assert.equal(isKeepAwakeStatus('testing'), true);
-  assert.equal(isKeepAwakeStatus('post-processing'), true);
 });
 
-test('isKeepAwakeStatus is false for idle / unknown / junk statuses', () => {
+test('isKeepAwakeStatus is false for idle / unknown / post-processing / junk statuses', () => {
   assert.equal(isKeepAwakeStatus('todo'), false);
   assert.equal(isKeepAwakeStatus('done'), false);
   assert.equal(isKeepAwakeStatus('failed-testing'), false);
+  assert.equal(isKeepAwakeStatus('post-processing'), false, 'post-processing no longer kept awake');
   assert.equal(isKeepAwakeStatus('unknown'), false);
   assert.equal(isKeepAwakeStatus(''), false);
   assert.equal(isKeepAwakeStatus(undefined), false);
@@ -78,21 +78,21 @@ test('keepAwakeCount counts bare-fm tickets in keep-awake statuses', () => {
     { status: 'defining' },
     { status: 'in-progress' },
     { status: 'testing' },
-    { status: 'post-processing' },
+    { status: 'post-processing' },  // no longer kept awake
     { status: 'todo' },
     { status: 'done' },
     { status: 'failed-testing' },
   ];
-  assert.equal(keepAwakeCount(tickets), 4);
+  assert.equal(keepAwakeCount(tickets), 3);
 });
 
 test('keepAwakeCount unwraps the board\'s { fm } wrapper idiom', () => {
   const tickets = [
-    { fm: { status: 'in-progress' } },
-    { fm: { status: 'done' } },
-    { fm: { status: 'post-processing' } },
+    { fm: { status: 'in-progress' } },     // active, kept awake
+    { fm: { status: 'done' } },            // idle, not kept awake
+    { fm: { status: 'post-processing' } }, // not kept awake
   ];
-  assert.equal(keepAwakeCount(tickets), 2);
+  assert.equal(keepAwakeCount(tickets), 1);
 });
 
 test('keepAwakeCount tolerates mixed wrapped/bare entries and null/holey members', () => {
@@ -148,12 +148,16 @@ test('shouldKeepAwake(non-number junk) never throws and is false', () => {
 
 test('shouldKeepAwake(ticket array): any keep-awake status -> true', () => {
   assert.equal(shouldKeepAwake([{ status: 'todo' }, { status: 'testing' }]), true);
-  assert.equal(shouldKeepAwake([{ fm: { status: 'post-processing' } }]), true);
 });
 
 test('shouldKeepAwake(ticket array): all idle or empty -> false', () => {
   assert.equal(shouldKeepAwake([{ status: 'todo' }, { status: 'done' }, { status: 'failed-testing' }]), false);
   assert.equal(shouldKeepAwake([]), false);
+});
+
+test('shouldKeepAwake(ticket array): post-processing (TASK-206, removed as a status) never holds the wake-lock', () => {
+  assert.equal(shouldKeepAwake([{ fm: { status: 'post-processing' } }]), false,
+    'a post-processing ticket no longer keeps the machine awake');
 });
 
 test('shouldKeepAwake never throws on hostile input', () => {

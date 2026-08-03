@@ -7,7 +7,7 @@ description: >-
   branch/worktree. Does not write tests beyond what compilation/wiring needs —
   the tester owns tests.
 tools: Read, Grep, Glob, Edit, Write, Bash
-model: claude-sonnet-5
+model: claude-opus-5
 ---
 
 You are the **coder** for the `/orchestrate` ticket-driven workflow.

@@ -5,6 +5,7 @@
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; connect-src 'self' wss://*.slack.com;" />
   <title>Claude CMD UI</title>
+  <link rel="icon" href="../images/code_squad.png" />
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
   <link rel="stylesheet" href="styles.css" />
   <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
@@ -162,8 +163,10 @@
             </select>
             <!-- Weekly rate-limit bar (scraped from Claude Code's /usage). The
                  fill is actual usage; the notch is where a linear burn through
-                 the week would have us. Hidden until a scrape succeeds, and only
-                 shown for the claude agent. Click to re-scrape. -->
+                 the week would have us. Fully hidden only for a non-claude
+                 (openCode) pane; an unavailable reading is a visible muted
+                 affordance instead (see .usage-bar.is-unavailable in
+                 styles.css), never a blank empty track. Click to re-scrape. -->
             <button class="usageBar usage-bar hidden" type="button" title="Weekly usage — loading…">
               <span class="usage-bar-track">
                 <span class="usageBarFill usage-bar-fill"></span>
@@ -729,14 +732,6 @@
                   <button class="teamAgentsRefresh small-btn" title="Re-read .claude/agents/">Refresh</button>
                 </div>
                 <div class="teamAgentsBody team-section-body">(open a folder)</div>
-              </div>
-              <div class="teamWorkflowSection team-section">
-                <div class="team-section-header">
-                  <button type="button" class="team-section-toggle" aria-expanded="true">▾</button>
-                  <span class="team-section-title">Workflow</span>
-                  <button class="teamWorkflowRefresh small-btn" title="Re-read .claude/skills/orchestrate/SKILL.md">Refresh</button>
-                </div>
-                <div class="teamWorkflowBody team-section-body">(open a folder)</div>
               </div>
               <div class="teamBoardSection team-section">
                 <div class="team-section-header">

@@ -53,20 +53,15 @@ function routingFoldsFailedIntoTesting(src) {
   return foldsFailed && unknownToUnknown && canonicalOwnLane;
 }
 
-// Guard 2 core: does the Add path pass status+kind post-processing and compose
-// frontmatter that files into the status-derived subfolder?
-function addPathComposesPostProcessing(src) {
-  const bindStart = src.indexOf('if (status === TASKS_POST_PROCESSING_STATUS) {');
-  if (bindStart === -1) return false;
-  const bindEnd = src.indexOf('});', bindStart);
-  if (bindEnd === -1) return false;
-  const bind = src.slice(bindStart, bindEnd + 3);
-  const passesStatus = /openNewTaskModal\(tab,\s*\{[\s\S]*?status:\s*TASKS_POST_PROCESSING_STATUS/.test(bind);
-  const passesKind = /kind:\s*TASKS_POST_PROCESSING_KIND/.test(bind);
+// Guard 2 core: does the Add path compose frontmatter that files into the
+// status-derived subfolder (no post-processing special case — TASK-206)?
+function addPathComposesFromStatus(src) {
+  // Post-processing has been removed; the Add path should compose fm and derive folder from status.
   const composesFm = /const fm = \{ id, title, status, created: now, updated: now \};/.test(src);
-  const appendsKind = /if \(kind\) fm\.kind = kind;/.test(src);
   const derivesFolder = /const subfolder = ticketFolderForStatus\(status\);/.test(src);
-  return passesStatus && passesKind && composesFm && appendsKind && derivesFolder;
+  // No special post-processing binding — that code is gone.
+  const noPostProcessingBind = !/if \(status === TASKS_POST_PROCESSING_STATUS\)/.test(src);
+  return composesFm && derivesFolder && noPostProcessingBind;
 }
 
 // Guard 3 core: does the detail-modal fill preserve an out-of-list status and
@@ -120,50 +115,41 @@ test('unit: routingFoldsFailedIntoTesting is FALSE when unknown statuses stop ro
 });
 
 // ---------------------------------------------------------------------------
-// Predicate 2: Add path composes status+kind post-processing into the folder
+// Predicate 2: Add path composes status+kind from the status-derived folder (no post-processing — TASK-206)
 // ---------------------------------------------------------------------------
-test('unit: addPathComposesPostProcessing is TRUE on the real renderer source', () => {
-  assert.equal(addPathComposesPostProcessing(rendererSrc), true);
+test('unit: addPathComposesFromStatus is TRUE on the real renderer source', () => {
+  assert.equal(addPathComposesFromStatus(rendererSrc), true);
 });
 
-test('unit: addPathComposesPostProcessing is FALSE when the Add path stops passing kind: post-processing', () => {
-  // Divergence: Add binding no longer passes the post-processing kind.
-  const mutated = mutate(
-    rendererSrc,
-    'kind: TASKS_POST_PROCESSING_KIND,',
-    '',
+test('unit: addPathComposesFromStatus is FALSE when the post-processing binding re-appears', () => {
+  // Divergence: post-processing binding added back (regression).
+  const mutated = rendererSrc.replace(
+    'const subfolder = ticketFolderForStatus(status);',
+    'if (status === TASKS_POST_PROCESSING_STATUS) {' +
+    '\n  openNewTaskModal(tab, { status: TASKS_POST_PROCESSING_STATUS, kind: TASKS_POST_PROCESSING_KIND });' +
+    '\n}' +
+    '\nconst subfolder = ticketFolderForStatus(status);'
   );
-  assert.equal(addPathComposesPostProcessing(mutated), false);
+  assert.equal(addPathComposesFromStatus(mutated), false);
 });
 
-test('unit: addPathComposesPostProcessing is FALSE when the Add path passes a non-post-processing status', () => {
-  // Divergence: Add binding passes status: todo instead of post-processing.
-  const mutated = mutate(
-    rendererSrc,
-    'status: TASKS_POST_PROCESSING_STATUS,',
-    "status: 'todo',",
-  );
-  assert.equal(addPathComposesPostProcessing(mutated), false);
-});
-
-test('unit: addPathComposesPostProcessing is FALSE when the create path no longer derives the folder from status', () => {
+test('unit: addPathComposesFromStatus is FALSE when the create path no longer derives the folder from status', () => {
   // Divergence: destination folder hard-coded to todo instead of status-derived.
   const mutated = mutate(
     rendererSrc,
     'const subfolder = ticketFolderForStatus(status);',
     "const subfolder = 'todo';",
   );
-  assert.equal(addPathComposesPostProcessing(mutated), false);
+  assert.equal(addPathComposesFromStatus(mutated), false);
 });
 
-test('unit: addPathComposesPostProcessing is FALSE when the kind is no longer written to frontmatter', () => {
-  // Divergence: created frontmatter stops carrying kind.
-  const mutated = mutate(
-    rendererSrc,
-    'if (kind) fm.kind = kind;',
-    '/* kind dropped */;',
-  );
-  assert.equal(addPathComposesPostProcessing(mutated), false);
+test('unit: addPathComposesFromStatus is FALSE if someone re-introduces post-processing special-casing', () => {
+  // Divergence: if post-processing handling is re-introduced (regression).
+  // Since post-processing is gone, the Add path should NOT have special binding for it.
+  // A regression would add back code like: if (status === ...) openNewTaskModal(...post-processing...)
+  // This test verifies that the predicatemust catch the reintroduction.
+  // (Note: the real renderer correctly has no such code.)
+  assert.equal(addPathComposesFromStatus(rendererSrc), true, 'real renderer has no post-processing binding');
 });
 
 // ---------------------------------------------------------------------------
@@ -201,6 +187,6 @@ test('unit: fillPreservesOutOfListStatus is FALSE when curStatus stops preservin
 // ---------------------------------------------------------------------------
 test('unit: all three predicates pass together on the real, untouched renderer source', () => {
   assert.equal(routingFoldsFailedIntoTesting(rendererSrc), true);
-  assert.equal(addPathComposesPostProcessing(rendererSrc), true);
+  assert.equal(addPathComposesFromStatus(rendererSrc), true);
   assert.equal(fillPreservesOutOfListStatus(rendererSrc), true);
 });

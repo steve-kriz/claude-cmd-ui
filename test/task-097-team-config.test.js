@@ -43,7 +43,7 @@ test('exports the documented constants with expected values', () => {
   // Re-exported from ticket-queue for the renderer mirror.
   assert.equal(teamConfig.DEFAULT_CONCURRENCY, DEFAULT_CONCURRENCY);
   assert.equal(teamConfig.MAX_CONCURRENCY, MAX_CONCURRENCY);
-  // SYSTEM_LABELS covers all six slugs.
+  // SYSTEM_LABELS covers all five slugs.
   for (const s of SYSTEM_SLUGS) {
     assert.equal(typeof SYSTEM_LABELS[s], 'string');
     assert.ok(SYSTEM_LABELS[s].length > 0);
@@ -59,17 +59,20 @@ test('RESERVED_SLUGS is a Set containing every VALID_STATUS plus unknown and __w
 });
 
 // ── defaultConfig ─────────────────────────────────────────────────────────
-test('defaultConfig returns six canonical system columns with concurrency default', () => {
+test('defaultConfig returns five canonical system columns with concurrency default', () => {
   const cfg = defaultConfig();
   assert.equal(cfg.version, CONFIG_VERSION);
-  assert.equal(cfg.columns.length, 6);
+  assert.equal(cfg.columns.length, 5);
   assert.deepEqual(cfg.columns.map((c) => c.status), LANE_STATUSES.slice());
   assert.deepEqual(cfg.columns.map((c) => c.label),
-    ['To Do', 'Defining', 'In Progress', 'Testing', 'Post-processing', 'Done']);
+    ['To Do', 'Defining', 'In Progress', 'Testing', 'Done']);
+  const { SYSTEM_COLUMN_DEFAULT_AGENTS } = teamConfig;
   for (const c of cfg.columns) {
     assert.equal(c.system, true);
     assert.equal(c.description, '');
-    assert.equal(c.agent, null);
+    // TASK-201: defaultConfig now seeds agents and instructions
+    assert.equal(c.agent, SYSTEM_COLUMN_DEFAULT_AGENTS[c.status], `${c.status} agent matches default`);
+    assert.ok(typeof c.instructions === 'string', `${c.status} has instructions`);
   }
   assert.equal(cfg.skill.concurrencyDefault, DEFAULT_CONCURRENCY);
 });
@@ -96,7 +99,7 @@ test('normalizeConfig never throws on junk and always returns a complete config'
     let cfg;
     assert.doesNotThrow(() => { cfg = normalizeConfig(j); });
     assert.deepEqual(cfg.columns.map((c) => c.status), defaultSlugs,
-      `junk ${String(j)} → six system columns`);
+      `junk ${String(j)} → five system columns`);
     assert.equal(cfg.skill.concurrencyDefault, DEFAULT_CONCURRENCY);
     assert.ok(Array.isArray(cfg.warnings));
   }

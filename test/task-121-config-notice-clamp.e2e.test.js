@@ -9,7 +9,7 @@
 // manager over <folder>/tasks/team-config.json.
 //   F1  A valid-JSON-but-non-config file (a bare number / string / array /
 //       null, or an object whose `columns` is present but not an array) loads
-//       the six default lanes AND now raises the non-blocking "not a valid
+//       the five default lanes AND now raises the non-blocking "not a valid
 //       board config" notice, so the user is warned before a Save overwrites
 //       their file. An object with `columns` absent, or a valid `columns`
 //       array, stays notice-free. The JSON.parse-throw /not valid JSON/ notice
@@ -64,23 +64,23 @@ function loadBoard(window, document, console) {
     extractConst(rendererSrc, 'TASKS_RESERVED_SLUGS'),
     extractConst(rendererSrc, 'TASKS_MAX_SLUG_LENGTH'),
     extractConst(rendererSrc, 'TASKS_SLUG_RE'),
-    // TASK-180 - tasksBuildColumn normalises a column's optional `phase` link
-    // via tasksNormalizeColumnPhase, which reads TASKS_PHASE_KEYS.
-    extractConst(rendererSrc, 'TASKS_PHASE_KEYS'),
-    // TASK-183 - refreshTeamBoard's baseline phase-link snapshot uses
-    // tasksPhaseLinkCounts (which reads TASKS_PHASE_KEYS above).
-    extractConst(rendererSrc, 'TASKS_PHASE_ENABLED_DEFAULTS'),
-    extractFn(rendererSrc, 'tasksPhaseLinkCounts'),
-    extractFn(rendererSrc, 'tasksApplyPhaseAutoEnable'),
+    // TASK-180's `phase` link and TASK-183's auto-enable machinery
+    // (TASKS_PHASE_KEYS/TASKS_PHASE_ENABLED_DEFAULTS/tasksPhaseLinkCounts/
+    // tasksApplyPhaseAutoEnable/tasksNormalizeColumnPhase) were fully removed by
+    // TASK-201/203 — none of these symbols exist in renderer.js any more.
     extractConst(rendererSrc, 'TASKS_MAX_CONCURRENCY'),
     extractConst(rendererSrc, 'TASKS_DEFAULT_CONCURRENCY'),
     extractFn(rendererSrc, 'resolveTasksConcurrency'),
     extractFn(rendererSrc, 'tasksPrettifyLabel'),
-    extractFn(rendererSrc, 'tasksNormalizeColumnPhase'),
     extractFn(rendererSrc, 'tasksBuildColumn'),
     extractFn(rendererSrc, 'normalizeTasksColumns'),
     extractFn(rendererSrc, 'tasksSlugForLabel'),
     extractFn(rendererSrc, 'tasksValidateNewColumn'),
+    // TASK-200 — tasksSerializeTeamConfig now normalises skill.contextOptimization
+    // via tasksNormalizeContextOptimization, so these must be in scope too.
+    extractConst(rendererSrc, 'TASKS_CONTEXT_OPT_LEVELS'),
+    extractConst(rendererSrc, 'TASKS_CONTEXT_OPT_DEFAULT'),
+    extractFn(rendererSrc, 'tasksNormalizeContextOptimization'),
     extractFn(rendererSrc, 'tasksSerializeTeamConfig'),
     extractFn(rendererSrc, 'inferSep'),
     extractFn(rendererSrc, 'appendPath'),
@@ -89,6 +89,10 @@ function loadBoard(window, document, console) {
     extractFn(rendererSrc, 'readTeamAgentNames'),
     extractFn(rendererSrc, 'countTeamTicketsForStatus'),
     extractFn(rendererSrc, 'refreshTeamBoard'),
+    // TASK-202 — renderTeamBoard now calls these two workflow controls directly
+    // (relocated into the Board panel), so they must be in scope too.
+    extractFn(rendererSrc, 'buildWorkflowConcurrencyControl'),
+    extractFn(rendererSrc, 'buildWorkflowContextOptimizationControl'),
     extractFn(rendererSrc, 'renderTeamBoard'),
     extractFn(rendererSrc, 'canSwapTeamColumns'),
     extractFn(rendererSrc, 'buildTeamColumnRow'),
@@ -103,7 +107,7 @@ function loadBoard(window, document, console) {
   return new Function('window', 'document', 'console', body)(window, document, console);
 }
 
-const SIX_DEFAULTS = ['todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done'];
+const FIVE_DEFAULTS = ['todo', 'defining', 'in-progress', 'testing', 'done'];
 const CFG_PATH = 'C:\\proj\\tasks\\team-config.json';
 
 // A fully in-memory window.api.fs mock: `content` is the team-config.json body
@@ -155,9 +159,9 @@ function rowSlugs(body) {
 // Scenario: a valid-JSON non-config value warns before it silently resets
 //   Given tasks/team-config.json holds valid JSON that is NOT a board config
 //   When the Board panel loads
-//   Then the six default lanes load AND a "not a valid board config" notice shows
+//   Then the five default lanes load AND a "not a valid board config" notice shows
 // ===========================================================================
-test('Scenario (F1): a bare number / string / array / null each load the six defaults WITH the "not a valid board config" notice', async () => {
+test('Scenario (F1): a bare number / string / array / null each load the five defaults WITH the "not a valid board config" notice', async () => {
   for (const raw of ['42', '"a-string"', '[1,2,3]', 'null']) {
     // Given a valid-JSON but non-config file on (mocked) disk
     const env = makeEnv({ content: raw });
@@ -167,8 +171,8 @@ test('Scenario (F1): a bare number / string / array / null each load the six def
     // When the Board panel loads
     await B.refreshTeamBoard(tab);
 
-    // Then the six default lanes load...
-    assert.deepEqual(rowSlugs(tab.els.teamBoardBody), SIX_DEFAULTS, `defaults for ${raw}`);
+    // Then the five default lanes load...
+    assert.deepEqual(rowSlugs(tab.els.teamBoardBody), FIVE_DEFAULTS, `defaults for ${raw}`);
     // ...and the config-shape notice is set on the model AND rendered in the panel
     assert.match(tab.teamBoard.notice || '', /not a valid board config/i, `notice set for ${raw}`);
     const noticeEl = findByClass(tab.els.teamBoardBody, 'team-board-notice');
@@ -187,7 +191,7 @@ test('Scenario (F1): an object whose `columns` is present but NOT an array loads
   await B.refreshTeamBoard(tab);
 
   // Then defaults load and the notice fires
-  assert.deepEqual(rowSlugs(tab.els.teamBoardBody), SIX_DEFAULTS);
+  assert.deepEqual(rowSlugs(tab.els.teamBoardBody), FIVE_DEFAULTS);
   assert.match(tab.teamBoard.notice || '', /not a valid board config/i);
   const noticeEl = findByClass(tab.els.teamBoardBody, 'team-board-notice');
   assert.ok(noticeEl && /not a valid board config/i.test(noticeEl.textContent));
@@ -206,7 +210,7 @@ test('Scenario (F1): an object with `columns` ABSENT loads defaults with NO noti
   await B.refreshTeamBoard(tab);
 
   // Then defaults load and NO notice is shown
-  assert.deepEqual(rowSlugs(tab.els.teamBoardBody), SIX_DEFAULTS);
+  assert.deepEqual(rowSlugs(tab.els.teamBoardBody), FIVE_DEFAULTS);
   assert.equal(tab.teamBoard.notice, null, 'no notice when columns is absent');
   assert.equal(findByClass(tab.els.teamBoardBody, 'team-board-notice'), null, 'no notice element rendered');
 });
@@ -222,8 +226,8 @@ test('Scenario (F1): a valid `columns` array loads with NO notice', async () => 
   // When it loads
   await B.refreshTeamBoard(tab);
 
-  // Then the defaults render (normalize re-injects the six) with NO notice
-  assert.deepEqual(rowSlugs(tab.els.teamBoardBody), SIX_DEFAULTS);
+  // Then the defaults render (normalize re-injects the five) with NO notice
+  assert.deepEqual(rowSlugs(tab.els.teamBoardBody), FIVE_DEFAULTS);
   assert.equal(tab.teamBoard.notice, null, 'a valid columns array is notice-free');
 });
 
@@ -240,7 +244,7 @@ test('Scenario (F1 failure): unparseable JSON preserves the /not valid JSON/ not
   await B.refreshTeamBoard(tab);
 
   // Then defaults load with the JSON-parse notice — and NOT the config-shape one
-  assert.deepEqual(rowSlugs(tab.els.teamBoardBody), SIX_DEFAULTS);
+  assert.deepEqual(rowSlugs(tab.els.teamBoardBody), FIVE_DEFAULTS);
   assert.match(tab.teamBoard.notice || '', /not valid JSON/i);
   assert.doesNotMatch(tab.teamBoard.notice || '', /not a valid board config/i);
   const noticeEl = findByClass(tab.els.teamBoardBody, 'team-board-notice');
@@ -260,17 +264,17 @@ test('Scenario (F1): a valid config loads with no notice and Saves unchanged', a
   // When it loads
   await B.refreshTeamBoard(tab);
   assert.equal(tab.teamBoard.notice, null, 'valid config → no notice');
-  assert.deepEqual(rowSlugs(tab.els.teamBoardBody), SIX_DEFAULTS);
+  assert.deepEqual(rowSlugs(tab.els.teamBoardBody), FIVE_DEFAULTS);
 
   // When the user Saves
   await B.saveTeamBoardConfig(tab);
   await flush();
 
-  // Then exactly one write to team-config.json holding the six columns
+  // Then exactly one write to team-config.json holding the five columns
   assert.equal(env.writes.length, 1, 'exactly one file written');
   assert.equal(env.writes[0].path, CFG_PATH);
   const written = JSON.parse(env.writes[0].content);
-  assert.deepEqual(written.columns.map((c) => c.status), SIX_DEFAULTS);
+  assert.deepEqual(written.columns.map((c) => c.status), FIVE_DEFAULTS);
   // The lib authority accepts it without column repairs.
   const libNorm = teamConfig.normalizeConfig(written);
   assert.deepEqual((libNorm.warnings || []).filter((w) => /column/i.test(w)), []);

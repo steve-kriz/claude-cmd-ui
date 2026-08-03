@@ -141,8 +141,6 @@ function loadLaneModule(window, document, console) {
     extractConst(rendererSrc, 'TASKS_VALID_STATUSES'),
     extractConst(rendererSrc, 'TASKS_ACTIVE_STATUSES'),
     extractConst(rendererSrc, 'TASKS_FAILED_STATUS'),
-    extractConst(rendererSrc, 'TASKS_POST_PROCESSING_STATUS'),
-    extractConst(rendererSrc, 'TASKS_POST_PROCESSING_KIND'),
     extractConst(rendererSrc, 'TASKS_UNKNOWN_STATUS'),
     extractConst(rendererSrc, 'TASKS_SYSTEM_LABELS'),
     extractConst(rendererSrc, 'TASKS_RESERVED_SLUGS'),
@@ -150,13 +148,11 @@ function loadLaneModule(window, document, console) {
     extractConst(rendererSrc, 'TASKS_SLUG_RE'),
     extractConst(rendererSrc, 'TASKS_ARCHIVE_AFTER_DAYS'),
     extractConst(rendererSrc, 'TASKS_ARCHIVE_AFTER_MS'),
-    // TASK-180 — tasksBuildColumn now normalises a column's optional `phase`
-    // link via tasksNormalizeColumnPhase, which reads TASKS_PHASE_KEYS. Extract
-    // both or normalizeTasksColumns/tasksBuildColumn throw ReferenceError.
-    extractConst(rendererSrc, 'TASKS_PHASE_KEYS'),
+    // TASK-180's column `phase` link (TASKS_PHASE_KEYS/tasksNormalizeColumnPhase)
+    // was fully removed by TASK-201/203 — tasksBuildColumn no longer has a phase
+    // field, so neither symbol is extracted here any more.
     // --- real functions under test + their pure helpers ---
     extractFn(rendererSrc, 'tasksPrettifyLabel'),
-    extractFn(rendererSrc, 'tasksNormalizeColumnPhase'),
     extractFn(rendererSrc, 'tasksBuildColumn'),
     extractFn(rendererSrc, 'normalizeTasksColumns'),
     extractFn(rendererSrc, 'tasksUserStatusSet'),

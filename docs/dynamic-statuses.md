@@ -69,7 +69,19 @@ name a nonexistent agent; that is warned about at render time, never dispatched)
   The [Workflow panel](workflow-settings.md) is the authoring UI (enable/reorder,
   TASK-182); the live phase-skipping behaviour it drives is TASK-181.
 
-Both round-trip through `normalizeConfig`/`serializeConfig`.
+**Schema addition (TASK-200).** A third field, also normalised by
+`lib/team-config.js`:
+
+- **`skill.contextOptimization`** — `{ enabled, level }`. `enabled` (default
+  `true`) gates whether the orchestrator trims context at every phase
+  movement; `level` is one of `conservative`/`standard`/`aggressive` (default
+  `standard`). `normalizeContextOptimization` repairs a missing/malformed
+  value back to these defaults. The [Workflow panel](workflow-settings.md) is
+  the authoring UI (an Enabled checkbox + level select); the orchestrate skill
+  itself reads the persisted value to decide whether/how aggressively to trim
+  context (SKILL.md's "Context optimisation" section).
+
+All three round-trip through `normalizeConfig`/`serializeConfig`.
 
 Public API of `lib/team-config.js`: `defaultConfig()`, `normalizeConfig(raw)`
 (returns a complete config with a `warnings` list of every repair),
@@ -213,7 +225,8 @@ produces the historic six-lane summary. It reuses the already-loaded
 ## Configuration
 
 `tasks/team-config.json` — see the shape above. Also editable:
-`skill.concurrencyDefault` from the [Workflow panel](workflow-settings.md).
+`skill.concurrencyDefault`, `skill.phases`, and `skill.contextOptimization`
+from the [Workflow panel](workflow-settings.md).
 
 Slug rules: `[a-z0-9-]`, ≤ 30 chars, not reserved
 (`VALID_STATUSES` / `unknown` / `__wont-do__`), not a duplicate.
