@@ -42,13 +42,12 @@ function columnsWithUxReview() {
     col('in-progress', true),
     col('testing', true),
     col('ux-review', false),
-    col('post-processing', true),
     col('done', true),
   ];
 }
 
 test('Scenario: Default config equals the fixed board', () => {
-  // Given the default team config (only the six system columns)
+  // Given the default team config (only the five system columns)
   const columns = defaultConfig().columns;
   // When we resolve the ordered lane statuses
   const resolved = laneStatusesFor(columns);
@@ -66,9 +65,9 @@ test('Scenario: User column gets its own lane', () => {
   assert.equal(isUserStatus(status, columns), true);
   // And laneForStatusFor("ux-review") is "ux-review" (its own lane)
   assert.equal(laneForStatusFor(status, columns), 'ux-review');
-  // And that lane appears in the ordered board between testing and post-processing
+  // And that lane appears in the ordered board between testing and done
   assert.deepEqual(laneStatusesFor(columns), [
-    'todo', 'defining', 'in-progress', 'testing', 'ux-review', 'post-processing', 'done',
+    'todo', 'defining', 'in-progress', 'testing', 'ux-review', 'done',
   ]);
   // And a user status is never "active" (slot math untouched)
   assert.equal(isActiveStatus('ux-review'), false);

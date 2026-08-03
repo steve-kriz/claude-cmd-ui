@@ -64,9 +64,9 @@ function loadRenderer() {
     extractConst(rendererSrc, 'TASKS_RESERVED_SLUGS'),
     extractConst(rendererSrc, 'TASKS_MAX_SLUG_LENGTH'),
     extractConst(rendererSrc, 'TASKS_SLUG_RE'),
-    // TASK-180 - tasksBuildColumn normalises a column's optional `phase` link
-    // via tasksNormalizeColumnPhase, which reads TASKS_PHASE_KEYS.
-    extractConst(rendererSrc, 'TASKS_PHASE_KEYS'),
+    // TASK-180's `phase` link (and TASKS_PHASE_KEYS/tasksNormalizeColumnPhase)
+    // was fully removed by TASK-201/203 — tasksBuildColumn no longer has a
+    // phase field, so neither symbol is extracted here any more.
     // TASK-121 (F2): tasksSerializeTeamConfig now clamps skill.concurrencyDefault
     // through resolveTasksConcurrency, so the serializer needs these three symbols
     // in scope or it throws ReferenceError. Function declarations hoist, so the
@@ -75,7 +75,6 @@ function loadRenderer() {
     extractConst(rendererSrc, 'TASKS_DEFAULT_CONCURRENCY'),
     extractFn(rendererSrc, 'resolveTasksConcurrency'),
     extractFn(rendererSrc, 'tasksPrettifyLabel'),
-    extractFn(rendererSrc, 'tasksNormalizeColumnPhase'),
     extractFn(rendererSrc, 'tasksBuildColumn'),
     extractFn(rendererSrc, 'normalizeTasksColumns'),
     extractFn(rendererSrc, 'tasksSlugForLabel'),
@@ -161,10 +160,15 @@ test('tasksValidateNewColumn: rejects reserved slugs (testing / todo / failed-te
 });
 
 test('tasksValidateNewColumn: the reserved set carries every protected slug incl. __wont-do__', () => {
-  for (const slug of ['todo', 'defining', 'in-progress', 'testing', 'post-processing',
+  // TASK-206: post-processing was removed from the valid-statuses enum entirely,
+  // so it is no longer a reserved slug (a user column named "post-processing" is
+  // no longer structurally blocked purely by reservation — see the ticket's
+  // legacy-migration guard in lib/team-config.js for the drop-on-normalize path).
+  for (const slug of ['todo', 'defining', 'in-progress', 'testing',
     'done', 'failed-testing', 'unknown', '__wont-do__']) {
     assert.ok(R.TASKS_RESERVED_SLUGS.has(slug), `reserved set has ${slug}`);
   }
+  assert.ok(!R.TASKS_RESERVED_SLUGS.has('post-processing'), 'post-processing is no longer reserved');
 });
 
 test('tasksValidateNewColumn: rejects a slug that duplicates an existing column', () => {
@@ -283,24 +287,33 @@ test('tasksSerializeTeamConfig: drops invalid/reserved/duplicate user columns an
   const parsed = JSON.parse(R.tasksSerializeTeamConfig(workingModel()));
   const statuses = parsed.columns.map((c) => c.status);
   assert.deepEqual(statuses, [
-    'todo', 'defining', 'in-progress', 'testing', 'ux-review', 'post-processing', 'done',
-  ], 'the one valid user column survives after Testing; every invalid one is dropped');
+    'todo', 'defining', 'in-progress', 'testing', 'ux-review', 'done',
+  ], 'the one valid user column survives after Testing; every invalid one is dropped, ' +
+    'including the legacy post-processing lane');
   const ux = parsed.columns.find((c) => c.status === 'ux-review');
   assert.equal(ux.system, false);
   assert.equal(ux.label, 'UX Review');
   assert.equal(ux.agent, 'ba');
 });
 
-test('tasksSerializeTeamConfig: re-injects missing system columns (never fewer than the six)', () => {
+test('tasksSerializeTeamConfig: re-injects missing system columns (never fewer than the five)', () => {
   const sparse = { version: 1, skill: {}, columns: [
     { status: 'todo', system: true },
     { status: 'ux-review', label: 'UX Review', system: false },
   ] };
   const parsed = JSON.parse(R.tasksSerializeTeamConfig(sparse));
   const systemSlugs = parsed.columns.filter((c) => c.system).map((c) => c.status);
-  assert.deepEqual(systemSlugs, ['todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done']);
+  assert.deepEqual(systemSlugs, ['todo', 'defining', 'in-progress', 'testing', 'done']);
 });
 
+// FIXED (TASK-206): workingModel() includes a legacy `post-processing` column
+// with `system: true` (representing an old in-memory/on-disk model from before
+// this ticket). lib/team-config.js's normalizeConfig DROPS a legacy
+// post-processing column per the ticket's "Legacy-config migration" decision,
+// and renderer/renderer.js's normalizeTasksColumns (which tasksSerializeTeamConfig
+// calls) now carries the matching legacy-drop, so it is dropped there too instead
+// of being resurrected as a demoted user column. This assertion stays strict —
+// lib and renderer must agree that no "Post-processing" user lane reappears.
 test('tasksSerializeTeamConfig: round-trips through lib/team-config.js normalizeConfig (the authority)', () => {
   const out = R.tasksSerializeTeamConfig(workingModel());
   const parsed = JSON.parse(out);
@@ -315,11 +328,11 @@ test('tasksSerializeTeamConfig: round-trips through lib/team-config.js normalize
   assert.deepEqual(structuralWarnings, [], 'no column repairs needed: ' + JSON.stringify(structuralWarnings));
 });
 
-test('tasksSerializeTeamConfig: tolerates junk input and still yields the six system columns', () => {
+test('tasksSerializeTeamConfig: tolerates junk input and still yields the five system columns', () => {
   for (const junk of [null, undefined, 42, 'nope', { columns: 'not-array' }]) {
     const parsed = JSON.parse(R.tasksSerializeTeamConfig(junk));
-    assert.equal(parsed.columns.length, 6);
+    assert.equal(parsed.columns.length, 5);
     assert.deepEqual(parsed.columns.map((c) => c.status),
-      ['todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done']);
+      ['todo', 'defining', 'in-progress', 'testing', 'done']);
   }
 });

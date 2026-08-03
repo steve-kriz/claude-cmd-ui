@@ -61,11 +61,13 @@ test('folderForStatus maps each canonical status to a subfolder named for it', (
   }
 });
 
-test('folderForStatus gives post-processing and failed-testing their own subfolders (TASK-028)', () => {
-  // Both are driven by the valid-statuses set, not just the lane list: failed-testing
-  // has no lane but still owns tasks/failed-testing/, and post-processing owns its own.
-  assert.equal(folderForStatus('post-processing'), 'post-processing');
+test('folderForStatus gives failed-testing its own subfolder (TASK-028); post-processing owns none (TASK-206)', () => {
+  // failed-testing is driven by the valid-statuses set, not just the lane list:
+  // it has no lane but still owns tasks/failed-testing/. post-processing was
+  // removed from the enum entirely (TASK-206) so it now owns no folder — a
+  // ticket found on disk with that legacy status is left in place, never moved.
   assert.equal(folderForStatus('failed-testing'), 'failed-testing');
+  assert.equal(folderForStatus('post-processing'), null, 'post-processing owns no folder (removed)');
   for (const s of VALID_STATUSES) {
     assert.equal(folderForStatus(s), s, `${s} owns the tasks/${s} subfolder`);
   }
@@ -198,8 +200,9 @@ test('dedupeByFolder: distinct ids all survive (no false collapsing)', () => {
 // ===========================================================================
 
 test('renderer.js mirrors folderForStatus off TASKS_VALID_STATUSES (null for unknown)', () => {
-  // TASK-028: driven by the valid-statuses set so failed-testing (no lane) and
-  // post-processing both own their own subfolders; unknown statuses still get null.
+  // TASK-028: driven by the valid-statuses set so failed-testing (no lane) still
+  // owns its own subfolder; TASK-206 removed post-processing from the enum, so
+  // it (and any other out-of-enum status) resolves to null.
   assert.match(rendererSrc, /function\s+ticketFolderForStatus\(status\)/);
   assert.match(rendererSrc,
     /return\s+TASKS_VALID_STATUSES\.includes\(status\)\s*\?\s*status\s*:\s*null/);

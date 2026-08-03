@@ -450,10 +450,11 @@ test('TASK-081: two-click semantics are identical for a NORMAL save (won\'t-do m
 // PART 4 — Status enum unchanged (locked decision: no wont-do status)
 // ===========================================================================
 
-test('lib/ticket-lanes VALID_STATUSES does NOT contain wont-do', () => {
+test('lib/ticket-lanes VALID_STATUSES does NOT contain wont-do or post-processing', () => {
   assert.ok(!ticketLanes.VALID_STATUSES.includes('wont-do'), 'wont-do is not a status');
+  assert.ok(!ticketLanes.VALID_STATUSES.includes('post-processing'), 'post-processing is not a status (TASK-206)');
   assert.deepEqual(ticketLanes.VALID_STATUSES,
-    ['todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done', 'failed-testing']);
+    ['todo', 'defining', 'in-progress', 'testing', 'done', 'failed-testing']);
 });
 
 test('a literal status: wont-do routes to the unknown lane, never done', () => {

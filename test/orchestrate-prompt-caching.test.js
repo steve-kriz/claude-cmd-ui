@@ -35,10 +35,12 @@ const skillCopies = [['assets', ASSETS_SKILL], ['.claude', PROJECT_SKILL]];
 
 // --- SKILL.md: the Prompt caching subsection --------------------------------
 
-test('SKILL.md has a "Prompt caching" subsection in both copies', () => {
+// TASK-204: the fixed Phase pipeline is gone, so "Prompt caching" is now a
+// top-level "## " section (not a "### " subsection nested under a phase).
+test('SKILL.md has a "Prompt caching" section in both copies', () => {
   for (const [label, p] of skillCopies) {
-    assert.match(fs.readFileSync(p, 'utf8'), /### Prompt caching/,
-      `${label}/SKILL.md has a Prompt caching subsection`);
+    assert.match(fs.readFileSync(p, 'utf8'), /## Prompt caching/,
+      `${label}/SKILL.md has a Prompt caching section`);
   }
 });
 
@@ -48,8 +50,8 @@ test('SKILL.md states the stable-prefix / volatile-suffix caching rule in both c
     for (const phrase of [
       'stable content first, volatile content last',
       'always-cached prefix',
-      'Build every dispatch prompt as a fixed preamble',
-      'at the very end',
+      'Build every dispatch prompt as: fixed preamble',
+      'last of all',
       'same wording and order',
       'Keep the volatile tail small',
     ]) {
@@ -79,14 +81,16 @@ test('both SKILL.md copies are byte-identical after the caching edit', () => {
 
 // --- SKILL.md: caching prose introduces no model id after Phase 2 -----------
 
-test('the caching guidance introduces no model id after the Phase 2 heading', () => {
+test('the caching guidance introduces no model id outside the Model routing section', () => {
   for (const [label, p] of skillCopies) {
     const src = fs.readFileSync(p, 'utf8');
-    const phase2Idx = src.indexOf('## Phase 2 — Build');
-    assert.ok(phase2Idx !== -1, `${label}: Phase 2 heading present`);
-    const tail = src.slice(phase2Idx);
-    assert.ok(!tail.includes('claude-sonnet-5') && !tail.includes('claude-opus-4-8'),
-      `${label}: no model id at/after Phase 2 (caching prose stays before it)`);
+    const routingIdx = src.indexOf('## Model routing');
+    assert.ok(routingIdx !== -1, `${label}: Model routing heading present`);
+    const nextHeadingIdx = src.indexOf('\n## ', routingIdx + 1);
+    assert.ok(nextHeadingIdx !== -1, `${label}: a heading follows Model routing`);
+    const outsideRouting = src.slice(0, routingIdx) + src.slice(nextHeadingIdx);
+    assert.ok(!outsideRouting.includes('claude-sonnet-5') && !outsideRouting.includes('claude-opus-4-8'),
+      `${label}: no model id outside Model routing (caching prose never restates one)`);
   }
 });
 

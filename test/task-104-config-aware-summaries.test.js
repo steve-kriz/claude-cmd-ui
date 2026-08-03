@@ -41,7 +41,7 @@ test('user column is counted under its configured LABEL and system lanes keep ra
   // System lanes render as raw slugs; the user column renders its label.
   assert.equal(
     counts,
-    'todo 1 · defining 0 · in-progress 0 · testing 0 · UX Review 2 · post-processing 0 · done 0',
+    'todo 1 · defining 0 · in-progress 0 · testing 0 · UX Review 2 · done 0',
   );
 });
 
@@ -52,7 +52,7 @@ test('lane pieces follow configured board order (user column between its anchor 
   });
   const counts = countsLine(formatTasksSummary([wrap({ id: 'T', title: 't', status: 'triage' })], cfg.columns));
   const pieces = counts.split(' · ').map((p) => p.replace(/ \d+$/, ''));
-  assert.deepEqual(pieces, ['todo', 'Triage', 'defining', 'in-progress', 'testing', 'post-processing', 'done']);
+  assert.deepEqual(pieces, ['todo', 'Triage', 'defining', 'in-progress', 'testing', 'done']);
 });
 
 // ---------------------------------------------------------------------------
@@ -139,7 +139,7 @@ test('a board with ONLY user-column tickets reports the idle sentinel (no system
 // tolerance / never-throws
 // ---------------------------------------------------------------------------
 
-test('junk columns degrade to the six fixed system lanes (never throws)', () => {
+test('junk columns degrade to the five fixed system lanes (never throws)', () => {
   const board = [wrap({ id: 'T1', title: 'a', status: 'todo' })];
   for (const junk of [null, undefined, 42, 'nope', [null, 7, {}]]) {
     let out;
@@ -148,7 +148,7 @@ test('junk columns degrade to the six fixed system lanes (never throws)', () => 
     });
     assert.equal(
       countsLine(out),
-      'todo 1 · defining 0 · in-progress 0 · testing 0 · post-processing 0 · done 0',
+      'todo 1 · defining 0 · in-progress 0 · testing 0 · done 0',
       `junk columns (${JSON.stringify(junk)}) → fixed system lanes`,
     );
   }
@@ -162,9 +162,8 @@ test('a hand-built raw column with system:true renders its raw slug, not its lab
     { status: 'defining', label: 'Defining', system: true },
     { status: 'in-progress', label: 'In Progress', system: true },
     { status: 'testing', label: 'Testing', system: true },
-    { status: 'post-processing', label: 'Post-processing', system: true },
     { status: 'done', label: 'Done', system: true },
   ];
   const counts = countsLine(formatTasksSummary([wrap({ id: 'T', title: 't', status: 'todo' })], cols));
-  assert.equal(counts, 'todo 1 · defining 0 · in-progress 0 · testing 0 · post-processing 0 · done 0');
+  assert.equal(counts, 'todo 1 · defining 0 · in-progress 0 · testing 0 · done 0');
 });

@@ -5,27 +5,32 @@
 // `node --test` cases. NO cucumber npm package is installed or required; these
 // are scenario-style node:test cases in Given/When/Then form.
 //
-// Feature: installing the orchestrate skill from any of the three UI surfaces
-// (Tasks banner, Workflow panel, Agents hint) copies the files AND then offers
-// an inline "Restart the Claude session to register the skill" notice with a
+// Feature: installing the orchestrate skill from either of the two remaining UI
+// surfaces (Tasks banner, Agents hint) copies the files AND then offers an
+// inline "Restart the Claude session to register the skill" notice with a
 // Restart button. The app NEVER auto-relaunches; the restart is user-initiated
 // and reuses the existing launchCmdAgent kill-and-respawn path.
 //
+// TASK-203: the Workflow panel (and its install surface,
+// buildWorkflowInstallHint) was removed entirely — installing the skill is
+// still available via the Tasks banner and the Agents hint, so those two
+// surfaces' scenarios are kept as-is; the Workflow-surface scenario/blocks are
+// removed below (there is nothing left to test — the function no longer exists).
+//
 // The subject under test is the REAL renderer code (renderer/renderer.js, a
 // browser script with no module.exports): the shared helper
-// promptSkillRegistration plus the three install-surface functions
-// installOrchestrateSkill / buildWorkflowInstallHint / buildAgentsInstallHint
-// are EXTRACTED headless by brace-matching the source (the convention of
+// promptSkillRegistration plus the two install-surface functions
+// installOrchestrateSkill / buildAgentsInstallHint are EXTRACTED headless by
+// brace-matching the source (the convention of
 // test/task-105-workflow-panel.e2e.test.js and test/task-095-add-agent.e2e.test.js)
 // and driven with an INJECTED window + a minimal in-memory mock document.
 //
 // ALL side-effecting collaborators are STUBBED — window.api.tasks.installSkill
 // (the install IPC), and the heavy renderer dependencies launchCmdAgent (the
-// PTY kill-and-respawn / session relaunch), refreshTeamWorkflow,
-// refreshTeamAgents and pollTasksOnce are injected as recording stubs. NO real
-// DB / Electron / network / PTY spawn / session relaunch ever happens; every
-// scenario asserts launchCmdAgent is invoked ONLY when the Restart button is
-// clicked.
+// PTY kill-and-respawn / session relaunch), refreshTeamAgents and
+// pollTasksOnce are injected as recording stubs. NO real DB / Electron /
+// network / PTY spawn / session relaunch ever happens; every scenario asserts
+// launchCmdAgent is invoked ONLY when the Restart button is clicked.
 // ===========================================================================
 
 const { test } = require('node:test');
@@ -57,15 +62,13 @@ function extractFn(src, name) {
 function loadSurfaces(window, document, console, deps) {
   const body = [
     'const launchCmdAgent = deps.launchCmdAgent;',
-    'const refreshTeamWorkflow = deps.refreshTeamWorkflow;',
     'const refreshTeamAgents = deps.refreshTeamAgents;',
     'const pollTasksOnce = deps.pollTasksOnce;',
     extractFn(rendererSrc, 'promptSkillRegistration'),
     extractFn(rendererSrc, 'installOrchestrateSkill'),
-    extractFn(rendererSrc, 'buildWorkflowInstallHint'),
     extractFn(rendererSrc, 'buildAgentsInstallHint'),
     'return { promptSkillRegistration, installOrchestrateSkill,'
-      + ' buildWorkflowInstallHint, buildAgentsInstallHint };',
+      + ' buildAgentsInstallHint };',
   ].join('\n');
   // eslint-disable-next-line no-new-func
   return new Function('window', 'document', 'console', 'deps', body)(window, document, console, deps);
@@ -173,7 +176,7 @@ async function flush() {
 function makeHarness(opts) {
   const o = opts || {};
   const calls = {
-    installSkill: [], launchCmdAgent: [], refreshTeamWorkflow: [],
+    installSkill: [], launchCmdAgent: [],
     refreshTeamAgents: [], pollTasksOnce: [],
   };
   const document = makeDocument();
@@ -199,7 +202,6 @@ function makeHarness(opts) {
       // kill-and-respawn: a brand new session id (the OLD one is gone).
       if (tab.cmd) tab.cmd.id = 'new-session-' + (++seq);
     },
-    async refreshTeamWorkflow(tab) { calls.refreshTeamWorkflow.push(tab); },
     async refreshTeamAgents(tab) { calls.refreshTeamAgents.push(tab); },
     pollTasksOnce(tab, flag) { calls.pollTasksOnce.push({ tab, flag }); },
   };
@@ -229,7 +231,6 @@ function makeClaudeTab(document, folder) {
       tasksSkillBanner,
       tasksInstallSkillBtn: (() => { const b = document.createElement('button'); b.textContent = 'Install orchestration skill'; return b; })(),
       tasksBuildBtn: (() => { const b = document.createElement('button'); b.disabled = true; return b; })(),
-      teamWorkflowBody: document.createElement('div'),
       teamAgentsBody: document.createElement('div'),
       _tasksView: tasksView,
       _tasksBoard: tasksBoard,
@@ -312,33 +313,10 @@ test('Scenario: clicking Restart relaunches the Claude session via the kill-and-
   assert.equal(tab.tasks.skillInstalled, true, 'skillInstalled remains true after restart');
 });
 
-// ===========================================================================
-// Scenario: Installing from the Workflow panel uses the same registration step
-// ===========================================================================
-test('Scenario: installing from the Workflow panel re-reads the pipeline then shows the SAME shared restart notice', async () => {
-  // Given the Workflow panel shows the install banner and the tab's agent is claude.
-  const { window, document, console, deps, calls } = makeHarness();
-  const { buildWorkflowInstallHint } = loadSurfaces(window, document, console, deps);
-  const tab = makeClaudeTab(document, 'C:\\proj');
-  const banner = buildWorkflowInstallHint(tab);
-  const installBtn = findByClass(banner, 'teamWorkflowInstallBtn');
-  assert.ok(installBtn, 'the Workflow panel shows an Install button');
-
-  // When the user installs the skill from the Workflow panel.
-  await fire(installBtn, 'click');
-  await flush();
-
-  // Then the install IPC ran, the panel re-read/rendered the pipeline, and the SAME
-  // shared helper placed the restart notice into the Workflow body.
-  assert.deepEqual(calls.installSkill, ['C:\\proj'], 'install IPC ran for the folder');
-  assert.equal(calls.refreshTeamWorkflow.length, 1, 'the Workflow panel re-reads and renders the pipeline');
-  const n = notice(tab.els.teamWorkflowBody);
-  assert.ok(n, 'the shared restart notice appears on the Workflow body');
-  assert.ok(findByClass(n, 'skillRestartBtn'), 'the notice carries the shared Restart button');
-
-  // And still no auto-relaunch.
-  assert.equal(calls.launchCmdAgent.length, 0, 'no auto-relaunch from the Workflow surface');
-});
+// TASK-203: the Workflow panel (and its install surface, buildWorkflowInstallHint)
+// was removed entirely — there is nothing left to test on that surface. Installing
+// the skill is still available via the Tasks banner and the Agents hint, covered
+// by the surrounding scenarios.
 
 // ===========================================================================
 // Scenario: Installing from the Agents panel uses the same registration step
@@ -493,19 +471,8 @@ test('Scenario (failure): an OUTSIDE_ROOT_ERROR confinement rejection shows the 
     assert.equal(tab.tasks.skillInstalled, false, 'Tasks: no state flip on OUTSIDE_ROOT_ERROR');
     assert.equal(calls.launchCmdAgent.length, 0, 'Tasks: no relaunch');
   }
-  // Workflow surface.
-  {
-    const { window, document, console, deps, calls } = makeHarness({ installOk: false, installError: OUTSIDE });
-    const { buildWorkflowInstallHint } = loadSurfaces(window, document, console, deps);
-    const tab = makeClaudeTab(document, 'C:\\evil');
-    const banner = buildWorkflowInstallHint(tab);
-    await fire(findByClass(banner, 'teamWorkflowInstallBtn'), 'click');
-    await flush();
-    assert.match(findByClass(banner, 'install-banner-text').textContent, /outside the approved project root/, 'Workflow surface surfaces the confinement error');
-    assert.equal(notice(tab.els.teamWorkflowBody), null, 'Workflow: no notice on OUTSIDE_ROOT_ERROR');
-    assert.equal(calls.refreshTeamWorkflow.length, 0, 'Workflow: no re-render on failure');
-    assert.equal(calls.launchCmdAgent.length, 0, 'Workflow: no relaunch');
-  }
+  // TASK-203: the Workflow surface (buildWorkflowInstallHint) was removed
+  // entirely — only the Tasks and Agents surfaces remain to check.
   // Agents surface.
   {
     const { window, document, console, deps, calls } = makeHarness({ installOk: false, installError: OUTSIDE });

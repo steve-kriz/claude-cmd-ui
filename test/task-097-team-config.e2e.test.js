@@ -27,19 +27,19 @@ const {
   SYSTEM_SLUGS,
 } = teamConfig;
 
-const TODAYS_LABELS = ['To Do', 'Defining', 'In Progress', 'Testing', 'Post-processing', 'Done'];
+const TODAYS_LABELS = ['To Do', 'Defining', 'In Progress', 'Testing', 'Done'];
 
 // ---------------------------------------------------------------------------
 // Scenario: Defaults mirror the fixed board
-//   Then defaultConfig returns six system columns in LANE_STATUSES order with
+//   Then defaultConfig returns five system columns in LANE_STATUSES order with
 //   today's labels
 // ---------------------------------------------------------------------------
 test('Scenario: Defaults mirror the fixed board', () => {
   // When the default config is built
   const cfg = defaultConfig();
 
-  // Then it has exactly six columns in LANE_STATUSES order
-  assert.equal(cfg.columns.length, 6, 'six system columns');
+  // Then it has exactly five columns in LANE_STATUSES order
+  assert.equal(cfg.columns.length, 5, 'five system columns');
   assert.deepEqual(cfg.columns.map((c) => c.status), LANE_STATUSES.slice(),
     'columns follow LANE_STATUSES order');
 
@@ -58,11 +58,11 @@ test('Scenario: Defaults mirror the fixed board', () => {
 
 // ---------------------------------------------------------------------------
 // Scenario: User column between system columns survives normalize
-//   Given a config with "ux-review" between testing and post-processing
+//   Given a config with "ux-review" between testing and done
 //   Then normalizeConfig keeps it in place with system:false
 // ---------------------------------------------------------------------------
 test('Scenario: User column between system columns survives normalize', () => {
-  // Given a config with a user column "ux-review" between testing and post-processing
+  // Given a config with a user column "ux-review" between testing and done
   const raw = {
     version: 1,
     columns: [
@@ -71,7 +71,6 @@ test('Scenario: User column between system columns survives normalize', () => {
       { status: 'in-progress', label: 'In Progress', system: true },
       { status: 'testing', label: 'Testing', system: true },
       { status: 'ux-review', label: 'UX Review', description: 'peer review', agent: 'orchestrate-tech-lead', system: false },
-      { status: 'post-processing', label: 'Post-processing', system: true },
       { status: 'done', label: 'Done', system: true },
     ],
     skill: { concurrencyDefault: DEFAULT_CONCURRENCY },
@@ -80,14 +79,14 @@ test('Scenario: User column between system columns survives normalize', () => {
   // When the config is normalized
   const cfg = normalizeConfig(raw);
 
-  // Then ux-review is preserved in place (between testing and post-processing)
+  // Then ux-review is preserved in place (between testing and done)
   const slugs = cfg.columns.map((c) => c.status);
   const tIdx = slugs.indexOf('testing');
   const uIdx = slugs.indexOf('ux-review');
-  const pIdx = slugs.indexOf('post-processing');
+  const dIdx = slugs.indexOf('done');
   assert.ok(uIdx !== -1, 'ux-review is present');
   assert.equal(uIdx, tIdx + 1, 'ux-review sits immediately after testing');
-  assert.equal(pIdx, uIdx + 1, 'post-processing sits immediately after ux-review');
+  assert.equal(dIdx, uIdx + 1, 'done sits immediately after ux-review');
 
   // And it is system:false with its metadata preserved
   const ux = cfg.columns[uIdx];
@@ -96,10 +95,11 @@ test('Scenario: User column between system columns survives normalize', () => {
   assert.equal(ux.description, 'peer review');
   assert.equal(ux.agent, 'orchestrate-tech-lead');
 
-  // And all six system columns are still present
+  // And all five system columns are still present, with no post-processing (TASK-206)
   for (const s of SYSTEM_SLUGS) {
     assert.ok(slugs.includes(s), `system column ${s} present`);
   }
+  assert.ok(!slugs.includes('post-processing'), 'post-processing is never resurrected');
 });
 
 // ---------------------------------------------------------------------------
@@ -118,7 +118,6 @@ test('Scenario: Tampered system column repaired (failure/edge)', () => {
       { status: 'defining', label: 'Defining', system: true },
       // in-progress deleted
       { status: 'testing', label: 'Testing', system: true },
-      { status: 'post-processing', label: 'Post-processing', system: true },
       { status: 'finished', label: 'Finished', system: true }, // renamed from done, still flagged system
     ],
     skill: { concurrencyDefault: DEFAULT_CONCURRENCY },
@@ -128,7 +127,7 @@ test('Scenario: Tampered system column repaired (failure/edge)', () => {
   const cfg = normalizeConfig(raw);
   const bySlug = new Map(cfg.columns.map((c) => [c.status, c]));
 
-  // Then all six canonical system slugs survive as system:true
+  // Then all five canonical system slugs survive as system:true
   for (const s of SYSTEM_SLUGS) {
     assert.ok(bySlug.has(s), `canonical system slug ${s} survives`);
     assert.equal(bySlug.get(s).system, true, `${s} is repaired to system:true`);
@@ -197,7 +196,7 @@ test('Scenario: Junk input returns a complete default config without throwing (e
     // Then a complete default config is returned
     assert.equal(cfg.version, teamConfig.CONFIG_VERSION);
     assert.deepEqual(cfg.columns.map((c) => c.status), defaultSlugs,
-      `junk ${JSON.stringify(junk)} yields the six default system columns`);
+      `junk ${JSON.stringify(junk)} yields the five default system columns`);
     for (const c of cfg.columns) assert.equal(c.system, true);
     assert.equal(cfg.skill.concurrencyDefault, DEFAULT_CONCURRENCY);
     assert.ok(Array.isArray(cfg.warnings), 'warnings list present');
@@ -212,7 +211,7 @@ test('Scenario (guard): lib/ticket-lanes.js and lib/ticket-queue.js exports stil
   const queue = require('../lib/ticket-queue.js');
 
   assert.deepEqual(lanes.LANE_STATUSES,
-    ['todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done'],
+    ['todo', 'defining', 'in-progress', 'testing', 'done'],
     'LANE_STATUSES unchanged');
   assert.deepEqual(lanes.VALID_STATUSES,
     [...lanes.LANE_STATUSES, 'failed-testing'],

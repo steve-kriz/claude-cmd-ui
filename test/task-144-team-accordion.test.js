@@ -98,17 +98,9 @@ test('unit: Agents section starts expanded — no .collapsed class in HTML', () 
   assert.match(startTag, /class="[^"]*team-section[^"]*"/, 'Agents has team-section class');
 });
 
-test('unit: Workflow section starts expanded — no .collapsed class in HTML', () => {
-  const idx = htmlSrc.indexOf('teamWorkflowSection');
-  assert.notEqual(idx, -1, 'Workflow section exists');
-
-  const startTag = htmlSrc.slice(
-    htmlSrc.lastIndexOf('<div', idx),
-    idx + 150
-  );
-
-  assert.ok(!startTag.includes('collapsed'), 'Workflow section has no collapsed class');
-});
+// TASK-203: the Workflow section was removed entirely (phase system retired);
+// its "starts expanded" test is gone with it — there is no teamWorkflowSection
+// left to assert against.
 
 test('unit: Board section starts expanded — no .collapsed class in HTML', () => {
   const idx = htmlSrc.indexOf('teamBoardSection');
@@ -132,9 +124,10 @@ test('unit: Each section has a toggle button with aria-expanded="true"', () => {
     htmlSrc.indexOf('</template>', htmlSrc.indexOf('data-view="team"'))
   );
 
-  // Count toggle buttons
+  // Count toggle buttons (TASK-203: Workflow section removed, so only the
+  // Agents and Board sections ship a toggle now).
   const toggleMatches = [...teamPanel.matchAll(/class="team-section-toggle"/g)];
-  assert.equal(toggleMatches.length, 3, 'Exactly three toggle buttons in Team panel');
+  assert.equal(toggleMatches.length, 2, 'Exactly two toggle buttons in Team panel');
 
   // Each should be type="button" and have aria-expanded="true"
   assert.match(teamPanel, /type="button"[^>]*class="team-section-toggle"[^>]*aria-expanded="true"/);
@@ -366,7 +359,8 @@ test('unit: initTeamTab does not rebuild section elements', () => {
 });
 
 // ===========================================================================
-// Unit: The three refresher functions have stale-guards unaffected by hidden state
+// Unit: The two surviving refresher functions have stale-guards unaffected by
+// hidden state (TASK-203: refreshTeamWorkflow removed with the Workflow panel)
 // ===========================================================================
 
 test('unit: refreshTeamAgents has node-identity stale-guard', () => {
@@ -381,17 +375,8 @@ test('unit: refreshTeamAgents has node-identity stale-guard', () => {
     'refreshTeamAgents compares node identity');
 });
 
-test('unit: refreshTeamWorkflow has node-identity stale-guard', () => {
-  assert.match(rendererSrc, /function refreshTeamWorkflow/,
-    'refreshTeamWorkflow function exists');
-
-  const refStart = rendererSrc.indexOf('function refreshTeamWorkflow');
-  const refEnd = rendererSrc.indexOf('\n}', refStart) + 100;
-  const refBody = rendererSrc.slice(refStart, refEnd);
-
-  assert.match(refBody, /tab\.els\.teamWorkflowBody\s*!==\s*body/,
-    'refreshTeamWorkflow compares node identity');
-});
+// TASK-203: refreshTeamWorkflow was removed entirely along with the Workflow
+// panel — there is no node-identity stale-guard left to assert against.
 
 test('unit: refreshTeamBoard has node-identity stale-guard', () => {
   assert.match(rendererSrc, /function refreshTeamBoard/,
@@ -415,17 +400,17 @@ test('unit: All Team action buttons carry .small-btn class', () => {
     htmlSrc.indexOf('</template>', htmlSrc.indexOf('data-view="team"'))
   );
 
-  // Verify each action button has .small-btn
+  // Verify each action button has .small-btn (TASK-203: the Workflow section's
+  // Refresh button no longer exists — it was removed with the Workflow panel).
   assert.match(teamPanel, /teamAgentsAddBtn.*small-btn|small-btn.*teamAgentsAddBtn/,
     'Add agent button has small-btn class');
   assert.match(teamPanel, /teamAgentsRefresh.*small-btn|small-btn.*teamAgentsRefresh/,
     'Agents Refresh button has small-btn class');
-  assert.match(teamPanel, /teamWorkflowRefresh.*small-btn|small-btn.*teamWorkflowRefresh/,
-    'Workflow Refresh button has small-btn class');
   assert.match(teamPanel, /teamBoardSaveBtn.*small-btn|small-btn.*teamBoardSaveBtn/,
     'Board Save button has small-btn class');
   assert.match(teamPanel, /teamBoardRefresh.*small-btn|small-btn.*teamBoardRefresh/,
     'Board Refresh button has small-btn class');
+  assert.ok(!/teamWorkflowRefresh/.test(teamPanel), 'the Workflow Refresh control no longer exists (TASK-203)');
 });
 
 // ===========================================================================
@@ -453,10 +438,11 @@ test('unit: Drift guard — no .claude/ instruction files were modified by this 
 });
 
 // ===========================================================================
-// Unit: HTML structure — all three sections have headers with toggles
+// Unit: HTML structure — both surviving sections have headers with toggles
+// (TASK-203: the Workflow section is gone; only Agents + Board remain)
 // ===========================================================================
 
-test('unit: All three sections have .team-section-header with toggle button', () => {
+test('unit: Both surviving sections have .team-section-header with toggle button', () => {
   const teamPanel = htmlSrc.slice(
     htmlSrc.indexOf('data-view="team"'),
     htmlSrc.indexOf('</template>', htmlSrc.indexOf('data-view="team"'))
@@ -469,15 +455,13 @@ test('unit: All three sections have .team-section-header with toggle button', ()
   assert.match(agentsSection, /class="team-section-header"[\s\S]*?team-section-toggle/,
     'Agents header has toggle button');
 
-  const workflowSection = teamPanel.slice(teamPanel.indexOf('teamWorkflowSection'),
-    teamPanel.indexOf('teamWorkflowSection') + 500);
-  assert.match(workflowSection, /class="team-section-header"[\s\S]*?team-section-toggle/,
-    'Workflow header has toggle button');
-
   const boardSection = teamPanel.slice(teamPanel.indexOf('teamBoardSection'),
     teamPanel.indexOf('teamBoardSection') + 500);
   assert.match(boardSection, /class="team-section-header"[\s\S]*?team-section-toggle/,
     'Board header has toggle button');
+
+  // And the Workflow section no longer exists at all (TASK-203).
+  assert.ok(!teamPanel.includes('teamWorkflowSection'), 'Workflow section removed');
 });
 
 // ===========================================================================

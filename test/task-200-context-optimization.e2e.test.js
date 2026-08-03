@@ -146,11 +146,8 @@ test('Scenario: Saving persists the setting without clobbering other config', as
     5,
     'concurrencyDefault preserved'
   );
-  assert.deepEqual(
-    restored.skill.phases.plan,
-    { enabled: true, order: 1 },
-    'phases preserved'
-  );
+  // skill.phases was fully removed (TASK-201); it must never resurface.
+  assert.equal(restored.skill.phases, undefined, 'skill.phases stays absent');
   assert.ok(
     restored.columns.some((c) => c.status === 'custom-col'),
     'custom column preserved'
@@ -205,12 +202,15 @@ test('Scenario: Both SKILL.md copies instruct the orchestrator to honour the set
 
   // When: we read each file
   // Then: each contains a context-optimisation directive naming skill.contextOptimization
+  // (TASK-204: the section is now a top-level "## Context optimisation"
+  // heading, not a "### " subsection under a phase — the phase pipeline is
+  // gone, replaced by the generic column-driven dispatch loop.)
   assert.ok(
-    /### Context optimisation/.test(claudeSkill),
+    /## Context optimisation/.test(claudeSkill),
     '.claude SKILL.md has Context optimisation section'
   );
   assert.ok(
-    /### Context optimisation/.test(assetsSkill),
+    /## Context optimisation/.test(assetsSkill),
     'assets SKILL.md has Context optimisation section'
   );
 
@@ -223,14 +223,15 @@ test('Scenario: Both SKILL.md copies instruct the orchestrator to honour the set
     'assets SKILL.md names skill.contextOptimization'
   );
 
-  // And: each instructs trimming/summarising context at every phase movement
+  // And: each instructs trimming/summarising context at every column-to-column
+  // dispatch hand-off (TASK-204's generic replacement for "phase movement").
   assert.ok(
-    /phase movement/.test(claudeSkill),
-    '.claude SKILL.md mentions phase movement'
+    /column-to-column\s*\r?\n?\s*movement|dispatch hand-off/i.test(claudeSkill),
+    '.claude SKILL.md mentions column-to-column movement / dispatch hand-off'
   );
   assert.ok(
-    /phase movement/.test(assetsSkill),
-    'assets SKILL.md mentions phase movement'
+    /column-to-column\s*\r?\n?\s*movement|dispatch hand-off/i.test(assetsSkill),
+    'assets SKILL.md mentions column-to-column movement / dispatch hand-off'
   );
 
   assert.ok(

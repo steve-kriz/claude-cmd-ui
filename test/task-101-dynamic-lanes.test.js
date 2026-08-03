@@ -27,16 +27,16 @@ const { LANE_STATUSES } = require('../lib/ticket-lanes');
 const mod = H.loadLaneModule(H.makeWindow().window, H.makeDocument(), console);
 const { normalizeTasksColumns, tasksConfigSig } = mod;
 
-const SYSTEM_ORDER = ['todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done'];
+const SYSTEM_ORDER = ['todo', 'defining', 'in-progress', 'testing', 'done'];
 const SYSTEM_LABELS = {
   todo: 'To Do', defining: 'Defining', 'in-progress': 'In Progress',
-  testing: 'Testing', 'post-processing': 'Post-processing', done: 'Done',
+  testing: 'Testing', done: 'Done',
 };
 
 // ---------------------------------------------------------------------------
-// normalizeTasksColumns — null / missing → the six canonical system columns
+// normalizeTasksColumns — null / missing → the five canonical system columns
 // ---------------------------------------------------------------------------
-test('unit: normalizeTasksColumns(null) is the six system columns in canonical order', () => {
+test('unit: normalizeTasksColumns(null) is the five system columns in canonical order', () => {
   const cols = normalizeTasksColumns(null);
   assert.deepEqual(cols.map((c) => c.status), SYSTEM_ORDER);
   // The renderer order matches the lib LANE_STATUSES enum (kept in lockstep).
@@ -49,7 +49,7 @@ test('unit: normalizeTasksColumns(null) is the six system columns in canonical o
   }
 });
 
-test('unit: undefined / non-object / array / no-columns config all fall back to the six system defaults', () => {
+test('unit: undefined / non-object / array / no-columns config all fall back to the five system defaults', () => {
   for (const junk of [undefined, 42, 'nope', true, [], {}, { columns: null }, { columns: 'x' }, { columns: 42 }]) {
     const cols = normalizeTasksColumns(junk);
     assert.deepEqual(cols.map((c) => c.status), SYSTEM_ORDER, `junk ${JSON.stringify(junk)} → defaults`);
@@ -59,7 +59,7 @@ test('unit: undefined / non-object / array / no-columns config all fall back to 
 
 test('unit: junk ENTRIES inside columns are skipped, defaults still render', () => {
   const cols = normalizeTasksColumns({ columns: [null, 42, 'x', [], { nostatus: 1 }, { status: 123 }] });
-  // None of the junk entries produced a column; the six system defaults remain.
+  // None of the junk entries produced a column; the five system defaults remain.
   assert.deepEqual(cols.map((c) => c.status), SYSTEM_ORDER);
 });
 
@@ -77,11 +77,11 @@ test('unit: a user column anchors after the last system column preceding it in c
     columns: [
       { status: 'todo' }, { status: 'defining' }, { status: 'in-progress' },
       { status: 'testing' }, { status: 'ux-review', label: 'UX Review' },
-      { status: 'post-processing' }, { status: 'done' },
+      { status: 'done' },
     ],
   });
   assert.deepEqual(cols.map((c) => c.status),
-    ['todo', 'defining', 'in-progress', 'testing', 'ux-review', 'post-processing', 'done']);
+    ['todo', 'defining', 'in-progress', 'testing', 'ux-review', 'done']);
   const ux = cols.find((c) => c.status === 'ux-review');
   assert.equal(ux.system, false, 'ux-review is a user column');
   assert.equal(ux.label, 'UX Review');
@@ -91,7 +91,7 @@ test('unit: a user column before any system column anchors to the very front', (
   const cols = normalizeTasksColumns({ columns: [{ status: 'triage' }, { status: 'todo' }] });
   assert.equal(cols[0].status, 'triage', 'anchor=null user column leads the board');
   assert.equal(cols[0].system, false);
-  // The six system columns still follow in canonical order.
+  // The five system columns still follow in canonical order.
   assert.deepEqual(cols.slice(1).map((c) => c.status), SYSTEM_ORDER);
 });
 
@@ -122,7 +122,7 @@ test('unit: reserved slugs (valid statuses, unknown, __wont-do__) never become u
       { status: '__wont-do__' },    // reserved archive marker
     ],
   });
-  // All reserved → dropped; only the six system defaults remain.
+  // All reserved → dropped; only the five system defaults remain.
   assert.deepEqual(cols.map((c) => c.status), SYSTEM_ORDER);
   assert.ok(cols.every((c) => c.system === true));
 });

@@ -81,15 +81,18 @@ test('Scenario: The corrected prose matches SLOT_OCCUPYING_STATUSES in lib/ticke
 // ---------------------------------------------------------------------------
 // Scenario: Phase-1-only model invariant preserved (edge) — TASK-051
 // ---------------------------------------------------------------------------
-test('Scenario: Phase-1-only model invariant preserved (no model id at/after "## Phase 2 — Build")', () => {
-  // Given the orchestrate SKILL
+test('Scenario: model-id-confinement invariant preserved (no model id outside "## Model routing")', () => {
+  // Given the orchestrate SKILL (TASK-204: model ids now live only inside the
+  // "## Model routing" section, replacing the old "## Phase 2 — Build" anchor)
   for (const [label, src] of [['assets', skillAssetsSrc], ['.claude', skillProjectSrc]]) {
-    const phase2Idx = src.indexOf('## Phase 2 — Build');
-    assert.ok(phase2Idx !== -1, `${label}: Phase 2 heading present`);
-    // Then no model id appears at or after the "## Phase 2 — Build" heading
-    const afterPhase2 = src.slice(phase2Idx);
-    assert.ok(!afterPhase2.includes(FABLE), `${label}: no ${FABLE} at/after Phase 2`);
-    assert.ok(!afterPhase2.includes(OPUS), `${label}: no ${OPUS} at/after Phase 2`);
+    const routingIdx = src.indexOf('## Model routing');
+    assert.ok(routingIdx !== -1, `${label}: Model routing heading present`);
+    const nextHeadingIdx = src.indexOf('\n## ', routingIdx + 1);
+    assert.ok(nextHeadingIdx !== -1, `${label}: a heading follows Model routing`);
+    // Then no model id appears outside the Model routing section
+    const outsideRouting = src.slice(0, routingIdx) + src.slice(nextHeadingIdx);
+    assert.ok(!outsideRouting.includes(FABLE), `${label}: no ${FABLE} outside Model routing`);
+    assert.ok(!outsideRouting.includes(OPUS), `${label}: no ${OPUS} outside Model routing`);
   }
 });
 

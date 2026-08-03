@@ -14,7 +14,9 @@
 //      the transient is explicitly ACCEPTED / bounded / self-corrects).
 //   2. The note lives in the parked-defining / concurrency context.
 //   3. The two SKILL copies stay byte-identical (drift guard).
-//   4. No model id appears at/after "## Phase 2 — Build" (TASK-051 invariant).
+//   4. No model id appears in the dispatch-loop / forward-movement prose,
+//      i.e. between "## The generic dispatch loop" and "## Model routing"
+//      (TASK-051 invariant, re-anchored post-TASK-204's Phase-pipeline removal).
 //   5. The shipped code matches the documented behavior: OPTION (b) left the
 //      TASK-087 slot-occupancy code in place — a parked (question-waiting)
 //      `defining` ticket is exempt from the slot count, an actively-defining one
@@ -102,31 +104,37 @@ test('unit: both SKILL copies give the rationale (preferred over a cap-on-resume
 
 test('unit: the accepted-behavior note sits inside the parked-defining prose', () => {
   for (const [label, src] of SKILL_COPIES) {
-    // The parked-defining prose ends with "...end-of-run report." then the note
-    // begins immediately ("When a parked definition's question is answered...").
-    // NOTE: the file wraps prose, so use single-line-safe markers for ordering
-    // ("ACCEPTED" is a single token that appears exactly once, in this note).
-    const reportIdx = src.indexOf('List every such still-parked ticket in the end-of-run report.');
+    // TASK-204 removed the old Phase-pipeline prose; the parked-defining
+    // walk-through now lives under "## Forward movement model"'s `defining`
+    // bullet. The prose immediately preceding the note states the
+    // question-parked ticket is slot-exempt, then the note begins
+    // immediately ("When a parked definition's question is answered...").
+    // NOTE: the file wraps prose, so use single-line-safe markers for
+    // ordering ("ACCEPTED" is a single token that appears exactly once, in
+    // this note).
+    const parkedProseIdx = src.indexOf(
+      'A question-parked `defining` ticket does not hold a'
+    );
     const noteIdx = src.indexOf('When a parked definition\'s question is answered');
     const acceptedIdx = src.indexOf('ACCEPTED');
-    const definedBulletIdx = src.indexOf('**Defined → back to `todo`');
+    const staleBulletIdx = src.indexOf('**Stale `defining` on a fresh run**');
     assert.equal(src.indexOf('ACCEPTED', acceptedIdx + 1), -1, `${label}: ACCEPTED appears exactly once`);
-    assert.ok(reportIdx !== -1, `${label}: parked-defining report sentence present`);
+    assert.ok(parkedProseIdx !== -1, `${label}: parked-defining slot-exemption sentence present`);
     assert.ok(noteIdx !== -1, `${label}: note present`);
     assert.ok(acceptedIdx !== -1, `${label}: ACCEPTED sentence present`);
-    assert.ok(definedBulletIdx !== -1, `${label}: Defined-bullet present`);
-    // Order: parked prose -> note -> ACCEPTED -> next (Defined) bullet.
-    assert.ok(reportIdx < noteIdx, `${label}: note follows the parked-defining prose`);
+    assert.ok(staleBulletIdx !== -1, `${label}: Stale-defining bullet present`);
+    // Order: parked prose -> note -> ACCEPTED -> next (Stale-defining) bullet.
+    assert.ok(parkedProseIdx < noteIdx, `${label}: note follows the parked-defining prose`);
     assert.ok(noteIdx < acceptedIdx, `${label}: ACCEPTED sits within the note`);
-    assert.ok(acceptedIdx < definedBulletIdx, `${label}: note precedes the Defined bullet`);
+    assert.ok(acceptedIdx < staleBulletIdx, `${label}: note precedes the next (Stale-defining) bullet`);
   }
 });
 
 test('unit: the note references `limit` and the concurrency-slot vocabulary (not an unrelated section)', () => {
   for (const [label, src] of SKILL_COPIES) {
     const noteIdx = src.indexOf('When a parked definition\'s question is answered');
-    const definedBulletIdx = src.indexOf('**Defined → back to `todo`');
-    const note = src.slice(noteIdx, definedBulletIdx);
+    const staleBulletIdx = src.indexOf('**Stale `defining` on a fresh run**');
+    const note = src.slice(noteIdx, staleBulletIdx);
     assert.ok(note.includes('concurrency slot'), `${label}: note is about a concurrency slot`);
     assert.ok(note.includes('`limit`'), `${label}: note references limit`);
   }
@@ -140,18 +148,30 @@ test('unit: the two SKILL.md copies are byte-identical (Buffer.equals)', () => {
   assert.ok(a.equals(b), 'assets/SKILL.md === .claude/SKILL.md byte-for-byte');
 });
 
-// --- 4. TASK-051 invariant: no model id at/after Phase 2 -------------------
+// --- 4. TASK-051 invariant: no model id in the dispatch-loop prose ----------
 
-test('unit: no model id appears at or after the "## Phase 2 — Build" heading', () => {
+test('unit: no model id appears in the dispatch-loop / forward-movement prose', () => {
+  // TASK-204 replaced the old hardcoded Phase 1-4 pipeline (where "## Phase 2
+  // — Build" was the coder-dispatch section) with a column-driven generic
+  // loop. Model tiers now live exclusively in "## Model routing" (which
+  // documents the out-of-the-box tiering by design, per TASK-204's own
+  // acceptance criteria) — never spliced into the dispatch-mechanics prose
+  // that precedes it ("## The generic dispatch loop" / "## Forward movement
+  // model"). Anchor on that span instead of the now-removed Phase heading.
   for (const [label, src] of SKILL_COPIES) {
-    const phase2Idx = src.indexOf('## Phase 2 — Build');
-    assert.ok(phase2Idx !== -1, `${label}: Phase 2 heading present`);
-    const fromPhase2 = src.slice(phase2Idx);
-    assert.ok(!fromPhase2.includes(FABLE), `${label}: no ${FABLE} at/after Phase 2`);
-    assert.ok(!fromPhase2.includes(OPUS), `${label}: no ${OPUS} at/after Phase 2`);
-    // The accepted-behavior note itself lives after Phase 2 — prove it carries no id.
-    assert.ok(src.indexOf('ACCEPTED') > phase2Idx,
-      `${label}: the note is inside the Phase 2 build section`);
+    const loopIdx = src.indexOf('## The generic dispatch loop');
+    const modelRoutingIdx = src.indexOf('## Model routing');
+    assert.ok(loopIdx !== -1, `${label}: generic dispatch loop heading present`);
+    assert.ok(modelRoutingIdx !== -1, `${label}: Model routing heading present`);
+    assert.ok(loopIdx < modelRoutingIdx, `${label}: dispatch-loop prose precedes Model routing`);
+    const dispatchProse = src.slice(loopIdx, modelRoutingIdx);
+    assert.ok(!dispatchProse.includes(FABLE), `${label}: no ${FABLE} in the dispatch-loop prose`);
+    assert.ok(!dispatchProse.includes(OPUS), `${label}: no ${OPUS} in the dispatch-loop prose`);
+    // The accepted-behavior note itself lives inside this prose — prove it
+    // sits there too (it is about concurrency slots, not model routing).
+    const acceptedIdx = src.indexOf('ACCEPTED');
+    assert.ok(acceptedIdx > loopIdx && acceptedIdx < modelRoutingIdx,
+      `${label}: the note is inside the dispatch-loop / forward-movement prose`);
   }
 });
 

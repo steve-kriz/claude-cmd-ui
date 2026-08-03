@@ -166,16 +166,16 @@ function runAccordionHandler(handler, ev, teamBody) {
 // ---------------------------------------------------------------------------
 // Scenario: All sections start expanded
 // ===========================================================================
-test('Scenario: All sections start expanded', () => {
-  // Given the Team tab markup
+test('Scenario: All (surviving) sections start expanded', () => {
+  // Given the Team tab markup (TASK-203: the Workflow section is gone; only
+  // Agents and Board remain).
   const agentsSection = htmlSrc.indexOf('teamAgentsSection');
   assert.notEqual(agentsSection, -1, 'Agents section exists');
 
-  const workflowSection = htmlSrc.indexOf('teamWorkflowSection');
-  assert.notEqual(workflowSection, -1, 'Workflow section exists');
-
   const boardSection = htmlSrc.indexOf('teamBoardSection');
   assert.notEqual(boardSection, -1, 'Board section exists');
+
+  assert.equal(htmlSrc.indexOf('teamWorkflowSection'), -1, 'Workflow section no longer exists');
 
   // When the Team tab first renders
   // Then no section has the "collapsed" class
@@ -192,11 +192,9 @@ test('Scenario: All sections start expanded', () => {
   };
 
   const agentsTag = extractSection(agentsSection, 'Agents');
-  const workflowTag = extractSection(workflowSection, 'Workflow');
   const boardTag = extractSection(boardSection, 'Board');
 
   assert.ok(!agentsTag.hasCollapsed, 'Agents section does not ship with collapsed class');
-  assert.ok(!workflowTag.hasCollapsed, 'Workflow section does not ship with collapsed class');
   assert.ok(!boardTag.hasCollapsed, 'Board section does not ship with collapsed class');
 
   // And each section's toggle button has aria-expanded "true"
@@ -204,11 +202,6 @@ test('Scenario: All sections start expanded', () => {
     htmlSrc.slice(agentsSection, agentsSection + 400),
     /team-section-toggle"[^>]*aria-expanded="true"/,
     'Agents toggle has aria-expanded="true"'
-  );
-  assert.match(
-    htmlSrc.slice(workflowSection, workflowSection + 400),
-    /team-section-toggle"[^>]*aria-expanded="true"/,
-    'Workflow toggle has aria-expanded="true"'
   );
   assert.match(
     htmlSrc.slice(boardSection, boardSection + 400),
@@ -528,7 +521,9 @@ test('Scenario: Toggle button is keyboard-accessible', () => {
   const buttonRegex = /<button[^>]*class="team-section-toggle"[^>]*>/g;
   const buttons = [...htmlSrc.matchAll(buttonRegex)];
 
-  assert.ok(buttons.length === 3, 'Exactly three toggle buttons exist');
+  // TASK-203: the Workflow section (and its toggle) was removed, so only the
+  // Agents and Board sections ship a toggle now.
+  assert.ok(buttons.length === 2, 'Exactly two toggle buttons exist');
 
   for (const match of buttons) {
     const buttonHtml = match[0];

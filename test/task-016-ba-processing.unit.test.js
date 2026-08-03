@@ -118,20 +118,18 @@ test('UNIT: ba.md enforces "captured before build/Phase 2" ordering', () => {
   );
 });
 
-test('UNIT: SKILL.md Phase 1 mandates thorough analysis captured before build', () => {
-  assert.ok(has(SKILL, /phase 1/i), 'SKILL.md must have a Phase 1 section');
-  assert.ok(has(SKILL, /\bthorough(ly)?\b/), 'SKILL.md Phase 1 must say "thorough"');
+// TASK-204: SKILL.md no longer has a "Phase 1" section or restates the BA's
+// thoroughness/capture-before-build mandate — that role-specific detail now
+// lives exclusively in .claude/agents/ba.md (see the ba.md-focused tests
+// above, all of which still pass). SKILL.md's generic loop only needs to
+// describe that a `defining` column exists, dispatches orchestrate-ba, and
+// gates on the definition-skip check.
+test('UNIT: SKILL.md documents the `defining` column dispatching orchestrate-ba with the definition gate', () => {
+  assert.ok(has(SKILL, /`defining`.*orchestrate-ba/is), 'SKILL.md must dispatch the defining column to orchestrate-ba');
+  assert.ok(has(SKILL, /isTicketDefined/), 'SKILL.md must reference the isTicketDefined definition-skip gate');
   assert.ok(
-    has(SKILL, /all[^.\n]*information[^.\n]*coder[^.\n]*need|information a coder needs/i),
-    'SKILL.md must require capturing all the information a coder needs',
-  );
-  assert.ok(
-    has(SKILL, /before[^.\n]*(any )?build|before[^.\n]*phase 2|before any build/i),
-    'SKILL.md must require capture before any build/Phase 2 begins',
-  );
-  assert.ok(
-    has(SKILL, /in(side)? the ticket|ticket body|captured in the ticket/i),
-    'SKILL.md must require the analysis to live in the ticket',
+    has(SKILL, /ticket returns to[\s\S]{0,20}todo[\s\S]{0,80}never straight into[\s\S]{0,20}in-progress/i),
+    'SKILL.md must require a defined ticket to return to todo before it is claimed/built',
   );
 });
 

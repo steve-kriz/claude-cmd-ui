@@ -52,7 +52,7 @@ test('Scenario: Summary includes a user column — "UX Review 2" appears in boar
   const order = cfg.columns.map((c) => c.status);
   assert.deepEqual(
     order,
-    ['todo', 'defining', 'in-progress', 'testing', 'ux-review', 'post-processing', 'done'],
+    ['todo', 'defining', 'in-progress', 'testing', 'ux-review', 'done'],
     'ux-review is anchored after testing in board order',
   );
 
@@ -69,12 +69,12 @@ test('Scenario: Summary includes a user column — "UX Review 2" appears in boar
 
   // Then a "UX Review 2" entry appears in the counts line...
   assert.ok(counts.includes('UX Review 2'), `expected "UX Review 2" in:\n${counts}`);
-  // ...and it sits in board order: after `testing`, before `post-processing`.
+  // ...and it sits in board order: after `testing`, before `done`.
   const iTesting = counts.indexOf('testing ');
   const iUx = counts.indexOf('UX Review 2');
-  const iPost = counts.indexOf('post-processing ');
-  assert.ok(iTesting !== -1 && iUx !== -1 && iPost !== -1, 'all three lane pieces present');
-  assert.ok(iTesting < iUx && iUx < iPost, `board order testing < ux-review < post-processing, got:\n${counts}`);
+  const iDone = counts.indexOf('done ');
+  assert.ok(iTesting !== -1 && iUx !== -1 && iDone !== -1, 'all three lane pieces present');
+  assert.ok(iTesting < iUx && iUx < iDone, `board order testing < ux-review < done, got:\n${counts}`);
 
   // And the ux-review tickets did NOT inflate the system active section (working
   // stays defining/in-progress/testing only).
@@ -92,7 +92,7 @@ test('Scenario: No config regression (edge) — output identical to the current 
   ];
 
   // When the summary is built one-arg (historic call) vs with the DEFAULT config
-  // columns (normalizeConfig(null) → the six system columns).
+  // columns (normalizeConfig(null) → the five system columns).
   const oneArg = formatTasksSummary(board);
   const defaultCols = normalizeConfig(null).columns;
   const withDefault = formatTasksSummary(board, defaultCols);
@@ -104,7 +104,7 @@ test('Scenario: No config regression (edge) — output identical to the current 
   // failed-testing folded into testing, no unknown piece).
   assert.equal(
     countsLine(oneArg),
-    'todo 1 · defining 0 · in-progress 1 · testing 2 · post-processing 0 · done 0',
+    'todo 1 · defining 0 · in-progress 1 · testing 2 · done 0',
     'fixed-lane counts, failed-testing folded into testing',
   );
 });

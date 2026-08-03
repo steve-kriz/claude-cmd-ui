@@ -50,21 +50,21 @@ function cardStatuses(laneEl) {
 // ===========================================================================
 // Scenario: No config renders today's board (edge / REGRESSION)
 //   Given tasks/team-config.json does not exist
-//   Then six lanes render with today's order, labels and no badges
+//   Then five lanes render with today's order, labels and no badges
 // ===========================================================================
-test('Scenario: no config renders today\'s six lanes in order, with labels and NO badges (regression)', () => {
+test('Scenario: no config renders today\'s five lanes in order, with labels and NO badges (regression)', () => {
   // Given a board whose team config was never read (null → defaults)
   const { mod, tab } = fresh({ config: null });
   // When the board renders
   mod.renderTasksBoard(tab);
-  // Then exactly the six system lanes (in canonical order) plus the trailing
+  // Then exactly the five system lanes (in canonical order) plus the trailing
   // hidden `unknown` catch-all render — behaviourally identical to today.
   assert.deepEqual(laneStatuses(tab),
-    ['todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done', 'unknown']);
+    ['todo', 'defining', 'in-progress', 'testing', 'done', 'unknown']);
   // And each visible system lane header carries today's label.
   const labels = {
     todo: 'To Do', defining: 'Defining', 'in-progress': 'In Progress',
-    testing: 'Testing', 'post-processing': 'Post-processing', done: 'Done',
+    testing: 'Testing', done: 'Done',
   };
   for (const [status, label] of Object.entries(labels)) {
     const labelEl = findByClass(lane(tab, status), 'tasks-lane-label');
@@ -97,17 +97,17 @@ test('Scenario (regression): the six hardcoded .tasks-lane divs are gone from in
 // ===========================================================================
 // Scenario: User column renders as a lane
 //   Given config inserts ux-review after testing
-//   Then seven lanes render in config order and ux-review tickets show there
+//   Then six lanes render in config order and ux-review tickets show there
 // ===========================================================================
-test('Scenario: a config inserting ux-review after testing renders seven lanes in order', () => {
+test('Scenario: a config inserting ux-review after testing renders six lanes in order', () => {
   // Given a config that inserts a ux-review user column between testing and
-  // post-processing, and a ticket whose status is ux-review.
+  // done, and a ticket whose status is ux-review.
   const config = {
     columns: [
       { status: 'todo' }, { status: 'defining' }, { status: 'in-progress' },
       { status: 'testing' },
       { status: 'ux-review', label: 'UX Review', description: 'design pass' },
-      { status: 'post-processing' }, { status: 'done' },
+      { status: 'done' },
     ],
   };
   const { mod, tab } = fresh({
@@ -116,9 +116,9 @@ test('Scenario: a config inserting ux-review after testing renders seven lanes i
   });
   // When the board renders
   mod.renderTasksBoard(tab);
-  // Then seven lanes render in config order (then the trailing unknown lane).
+  // Then six lanes render in config order (then the trailing unknown lane).
   assert.deepEqual(laneStatuses(tab),
-    ['todo', 'defining', 'in-progress', 'testing', 'ux-review', 'post-processing', 'done', 'unknown']);
+    ['todo', 'defining', 'in-progress', 'testing', 'ux-review', 'done', 'unknown']);
   // And ux-review sits in the 5th slot, right after testing.
   assert.equal(laneStatuses(tab)[4], 'ux-review');
   // And the ux-review ticket appears in the ux-review lane — NOT in unknown.
@@ -201,9 +201,9 @@ test('Scenario (failure): a corrupt team-config.json renders defaults and never 
   await assert.doesNotReject(() => mod.pollTasksOnce(tab, true));
   // Then the last-good config stays null (defaults) ...
   assert.equal(tab.tasks.config, null, 'invalid JSON is not adopted; config stays at defaults');
-  // ... and the board rendered exactly the six default lanes.
+  // ... and the board rendered exactly the five default lanes.
   assert.deepEqual(laneStatuses(tab),
-    ['todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done', 'unknown']);
+    ['todo', 'defining', 'in-progress', 'testing', 'done', 'unknown']);
   // And polling keeps working: a SECOND poll (still corrupt) also does not throw
   // and still shows defaults — the poll loop is not wedged by the bad file.
   await assert.doesNotReject(() => mod.pollTasksOnce(tab, true));
@@ -303,7 +303,9 @@ test('Scenario (edge): with no out-of-config tickets, the unknown lane stays hid
 });
 
 // ===========================================================================
-// Scenario: lane counts + the post-processing Add button survive dynamic generation
+// Scenario: lane counts survive dynamic generation; no lane has an Add button
+// (TASK-206 removed the post-processing lane and its dedicated "+" Add button
+// entirely — no lane gains any special Add affordance).
 // ===========================================================================
 test('Scenario: generated lane count spans report per-lane totals', () => {
   const { mod, tab } = fresh({
@@ -319,20 +321,13 @@ test('Scenario: generated lane count spans report per-lane totals', () => {
   assert.equal(findByClass(lane(tab, 'done'), 'tasks-lane-count').textContent, '0');
 });
 
-test('Scenario: only the post-processing lane keeps its "+" Add button, wired to the post-processing create mode', async () => {
-  const { mod, tab, window } = fresh({});
+test('Scenario: no lane renders a "+" Add button (TASK-206 removed the post-processing lane\'s Add affordance)', () => {
+  const { mod, tab } = fresh({});
   mod.renderTasksBoard(tab);
-  // Only the post-processing lane has an add button.
-  assert.equal(findAllByClass(tab.els.tasksBoard, 'tasks-lane-add').length, 1, 'exactly one Add button');
-  const addBtn = findByClass(lane(tab, 'post-processing'), 'tasks-lane-add');
-  assert.ok(addBtn, 'the post-processing lane owns the Add button');
-  assert.equal(addBtn.textContent, '+');
-  // Clicking it opens the new-ticket modal in post-processing mode (status + kind).
-  await fire(addBtn, 'click');
-  const calls = window.__calls.openNewTaskModal || [];
-  assert.equal(calls.length, 1, 'the Add click opened the new-ticket modal once');
-  assert.deepEqual(calls[0], { status: 'post-processing', kind: 'post-processing' },
-    'the Add button passes status + kind post-processing');
+  // No lane — system or user — has an add button anymore.
+  assert.equal(findAllByClass(tab.els.tasksBoard, 'tasks-lane-add').length, 0,
+    'zero Add buttons render on any lane');
+  assert.ok(!lane(tab, 'post-processing'), 'the post-processing lane no longer exists at all');
 });
 
 // ===========================================================================

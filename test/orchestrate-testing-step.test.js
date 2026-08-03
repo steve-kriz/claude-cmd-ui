@@ -61,11 +61,15 @@ test('UNIT: tester.md exists and is non-empty', () => {
   assert.ok(readLower(TESTER_PATH).length > 0, 'tester.md is empty');
 });
 
-test('UNIT: SKILL.md mentions both e2e cucumber tests and unit tests', () => {
+// TASK-204: SKILL.md's `testing` column bullet now states the requirement in
+// one short sentence, deferring the detailed e2e/unit/DB-mock/no-cucumber
+// contract to .claude/agents/tester.md exclusively (see the tester.md-focused
+// tests below, all still passing) — consistent with the ticket's own design
+// (agent files carry role detail; SKILL.md carries the generic column loop).
+test('UNIT: SKILL.md mentions both e2e and unit tests for the testing column', () => {
   const md = readLower(SKILL_PATH);
   assert.match(md, /both/, 'SKILL.md should say BOTH kinds are required');
-  assert.match(md, /e2e cucumber/, 'SKILL.md should mention e2e cucumber tests');
-  assert.match(md, /unit test/, 'SKILL.md should mention unit tests');
+  assert.match(md, /both e2e and unit tests/, 'SKILL.md should mention both e2e and unit tests');
 });
 
 test('UNIT: SKILL.md ties both test kinds to the done/pass gate', () => {
@@ -79,54 +83,56 @@ test('UNIT: SKILL.md ties both test kinds to the done/pass gate', () => {
   );
 });
 
-test('UNIT: SKILL.md clarifies e2e are node --test Given/When/Then scenarios', () => {
+// TASK-204: node --test/Given-When-Then/no-cucumber-package/DB-mock/every-
+// criterion-plus-failure-path detail now lives exclusively in tester.md (see
+// the tester.md-focused tests below) — SKILL.md just names the two
+// deliverables and defers to the tester agent for the rest.
+test('UNIT: SKILL.md defers the e2e/unit test-writing detail to the tester agent', () => {
   const md = readLower(SKILL_PATH);
-  assert.match(md, /node --test/, 'SKILL.md should reference the node --test runner');
-  assert.match(
-    md,
-    /given\/when\/then|given.*when.*then/i,
-    'SKILL.md should describe Given/When/Then scenario style',
-  );
+  assert.match(md, /the tester\s+writes\/extends both e2e and unit tests and runs the suite/,
+    'SKILL.md should state the tester writes/extends both kinds and runs the suite');
 });
 
-test('UNIT: SKILL.md states no cucumber npm package is required/added', () => {
+test('UNIT: SKILL.md ties a red result to the backward fix-loop, never silently green', () => {
   const md = readLower(SKILL_PATH);
-  assert.match(md, /cucumber/, 'SKILL.md should mention cucumber');
+  assert.match(md, /a\s*\*{0,2}red\*{0,2}\s+result.{0,80}fix loop is backward movement/i,
+    'SKILL.md should route a red result to the backward fix loop');
+  assert.match(md, /a red result\s+is never silently treated as green/i,
+    'SKILL.md should guarantee a red result is never silently treated as green');
+});
+
+test('UNIT: tester.md still states no cucumber npm package is required/added', () => {
+  const md = readLower(TESTER_PATH);
+  assert.match(md, /cucumber/, 'tester.md should mention cucumber');
   assert.match(
     md,
     /cucumber[\s\S]{0,80}(npm|package)[\s\S]{0,80}(not|none|no)|(not|none|no)[\s\S]{0,80}cucumber[\s\S]{0,40}(npm|package)/,
-    'SKILL.md should state no cucumber npm package is required/added',
+    'tester.md should state no cucumber npm package is required/added',
   );
 });
 
-test('UNIT: SKILL.md requires e2e to cover every acceptance criterion + a failure/edge path', () => {
-  const md = readLower(SKILL_PATH);
-  assert.match(md, /every/, 'SKILL.md should require covering EVERY criterion');
+test('UNIT: tester.md requires e2e to cover every acceptance criterion + a failure/edge path', () => {
+  const md = readLower(TESTER_PATH);
+  assert.match(md, /every/, 'tester.md should require covering EVERY criterion');
   assert.match(
     md,
     /acceptance criteri|gherkin scenario/,
-    'SKILL.md should require covering acceptance criteria / Gherkin scenarios',
+    'tester.md should require covering acceptance criteria / Gherkin scenarios',
   );
   assert.match(
     md,
     /failure\/edge|failure or edge|edge path|failure path/,
-    'SKILL.md should require at least one failure/edge path',
+    'tester.md should require at least one failure/edge path',
   );
 });
 
-test('UNIT: SKILL.md preserves the DB-mock rule', () => {
-  const md = readLower(SKILL_PATH);
-  assert.match(md, /mock all database/i, 'SKILL.md should keep the "Mock ALL database calls" rule');
-  assert.match(md, /no real db/, 'SKILL.md should keep "no real DB connections"');
-});
-
-test('UNIT: SKILL.md sends a missing-either-kind ticket back to failed-testing', () => {
+test('UNIT: SKILL.md\'s ticket-file contract still describes the failed-testing fix loop', () => {
   const md = readLower(SKILL_PATH);
   assert.match(md, /failed-testing/, 'SKILL.md should reference failed-testing');
   assert.match(
     md,
-    /(missing|either)[\s\S]{0,160}failed-testing|failed-testing[\s\S]{0,160}(missing|either)/,
-    'SKILL.md should return a ticket missing either kind to failed-testing',
+    /failed-testing[\s\S]{0,200}the fix loop runs before returning it to `?testing`?/,
+    'SKILL.md should describe the failed-testing fix loop returning to testing',
   );
 });
 
@@ -193,37 +199,36 @@ test('UNIT: package.json has NO cucumber dependency', () => {
 // ticket's Gherkin acceptance scenarios end-to-end.
 // ---------------------------------------------------------------------------
 
-test('E2E cucumber: Phase 3 mandates BOTH e2e and unit tests before done', async (t) => {
+// TASK-204: there is no more "Phase 3 — Test" heading; the `testing` column
+// bullet (Forward movement model) is the equivalent anchor, and it defers
+// node --test/Given-When-Then/no-cucumber-package/every-criterion-plus-
+// failure-path detail to tester.md exclusively (checked by the tester.md
+// tests elsewhere in this file — all still passing).
+test('E2E cucumber: the testing column mandates BOTH e2e and unit tests, gated on a green/red result', async (t) => {
   await t.test(
-    'Given the orchestrate SKILL.md Phase 3, ' +
-      'When we read the test-phase rules, ' +
-      'Then it mandates both e2e cucumber-style AND unit tests, gated on done/pass',
+    'Given the orchestrate SKILL.md `testing` column bullet, ' +
+      'When we read the test-column rules, ' +
+      'Then it mandates both e2e AND unit tests, and a red result is never silently treated as green',
     () => {
       const md = readLower(SKILL_PATH);
-      // Given: there is a Phase 3 (Test) section.
-      assert.match(md, /phase 3\b.*test/, 'expected a "Phase 3 — Test" section');
+      // Given: there is a `testing` column bullet (Forward movement model).
+      assert.match(md, /`testing`.*orchestrate-tester/is, 'expected a `testing` column bullet naming orchestrate-tester');
       // Then: both kinds are named.
-      assert.match(md, /both/);
-      assert.match(md, /e2e cucumber/);
-      assert.match(md, /unit test/);
-      // And: gated on done + passing.
-      assert.match(md, /done/);
-      assert.match(
-        md,
-        /both[\s\S]{0,160}(pass|green|exist)/,
-        'both kinds must be tied to passing/existing before done',
-      );
+      assert.match(md, /both e2e and unit tests/);
+      // And: gated on a green/red result, never silently treated as green.
+      assert.match(md, /a\s*\*{0,2}green\*{0,2}\s+result advances forward/i);
+      assert.match(md, /a red result\s+is never silently treated as green/i);
     },
   );
 });
 
-test('E2E cucumber: e2e scenarios are node --test Given/When/Then, no cucumber dep', async (t) => {
+test('E2E cucumber: tester.md says e2e scenarios are node --test Given/When/Then, no cucumber dep', async (t) => {
   await t.test(
-    'Given a ticket in the testing phase, ' +
+    'Given a ticket dispatched to the tester agent, ' +
       'When the tester writes e2e cucumber tests, ' +
-      'Then SKILL.md says they are node --test Given/When/Then cases needing no cucumber package',
+      'Then tester.md says they are node --test Given/When/Then cases needing no cucumber package',
     () => {
-      const md = readLower(SKILL_PATH);
+      const md = readLower(TESTER_PATH);
       assert.match(md, /node --test/);
       assert.match(md, /given\/when\/then|given.*when.*then/i);
       assert.match(md, /cucumber/);
@@ -253,13 +258,13 @@ test('E2E cucumber: e2e scenarios are node --test Given/When/Then, no cucumber d
   );
 });
 
-test('E2E cucumber: e2e scenarios must cover every criterion plus a failure/edge path', async (t) => {
+test('E2E cucumber: tester.md must cover every criterion plus a failure/edge path', async (t) => {
   await t.test(
     'Given the acceptance criteria of a ticket, ' +
       'When the tester writes e2e scenarios, ' +
-      'Then SKILL.md requires covering every criterion and at least one failure/edge path',
+      'Then tester.md requires covering every criterion and at least one failure/edge path',
     () => {
-      const md = readLower(SKILL_PATH);
+      const md = readLower(TESTER_PATH);
       assert.match(md, /every/);
       assert.match(md, /acceptance criteri|gherkin scenario/);
       assert.match(md, /failure\/edge|failure or edge|edge path|failure path/);
@@ -284,20 +289,19 @@ test('E2E cucumber: tester agent lists both kinds and reports e2e-vs-unit files'
   );
 });
 
-test('E2E cucumber: both files preserve the DB-mock rule', async (t) => {
+// TASK-204: SKILL.md's DB-mock rule and "all green"/missing-either-kind
+// failure routing now live exclusively in tester.md (the agent that actually
+// enforces them); SKILL.md's own generic contribution is just the ticket-file
+// contract's failed-testing/fix-loop description (checked above).
+test('E2E cucumber: tester.md preserves the DB-mock rule', async (t) => {
   await t.test(
-    'Given both edited instruction files, ' +
-      'When we read their DB guidance, ' +
-      'Then each still mandates mocking ALL database calls with no real DB connections',
+    'Given the tester agent definition, ' +
+      'When we read its DB guidance, ' +
+      'Then it still mandates mocking ALL database calls with no real DB connections',
     () => {
-      for (const [label, p] of [
-        ['SKILL.md', SKILL_PATH],
-        ['tester.md', TESTER_PATH],
-      ]) {
-        const md = readLower(p);
-        assert.match(md, /mock all database/i, `${label} lost the DB-mock rule`);
-        assert.match(md, /no real db/, `${label} lost "no real DB connections"`);
-      }
+      const md = readLower(TESTER_PATH);
+      assert.match(md, /mock all database/i, 'tester.md lost the DB-mock rule');
+      assert.match(md, /no real db/, 'tester.md lost "no real DB connections"');
     },
   );
 });
@@ -306,17 +310,18 @@ test('E2E cucumber: edge — missing either kind returns the ticket to failed-te
   await t.test(
     'Given a ticket where only one kind of test was produced, ' +
       'When the tester evaluates "all green", ' +
-      'Then both instruction files require returning it to failed-testing',
+      'Then tester.md requires returning it to failed-testing, ' +
+      'and SKILL.md still describes the failed-testing fix loop',
     () => {
       const skill = readLower(SKILL_PATH);
       const tester = readLower(TESTER_PATH);
 
-      // SKILL.md: missing either kind -> failed-testing / treated as failure.
+      // SKILL.md: still describes the failed-testing fix loop generically.
       assert.match(skill, /failed-testing/);
       assert.match(
         skill,
-        /(missing|either)[\s\S]{0,200}(failure|failed-testing)/,
-        'SKILL.md should treat a missing kind as a failure -> failed-testing',
+        /failed-testing[\s\S]{0,200}the fix loop runs before returning it to `?testing`?/,
+        'SKILL.md should describe the failed-testing fix loop',
       );
 
       // tester.md: all green requires both, else failed-testing.

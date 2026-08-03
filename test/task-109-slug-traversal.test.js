@@ -138,13 +138,13 @@ test('gate: an unsafe user column never becomes a user status / lane / folder', 
 test('gate: a safe user column still enters the set and anchors its lane', () => {
   const columns = [
     col('todo', true), col('defining', true), col('in-progress', true),
-    col('testing', true), col('ux-review', false), col('post-processing', true), col('done', true),
+    col('testing', true), col('ux-review', false), col('done', true),
   ];
   assert.equal(isUserStatus('ux-review', columns), true);
   assert.equal(isKnownStatusFor('ux-review', columns), true);
   assert.equal(laneForStatusFor('ux-review', columns), 'ux-review');
   assert.deepEqual(laneStatusesFor(columns), [
-    'todo', 'defining', 'in-progress', 'testing', 'ux-review', 'post-processing', 'done',
+    'todo', 'defining', 'in-progress', 'testing', 'ux-review', 'done',
   ]);
 });
 
@@ -152,7 +152,7 @@ test('gate: a safe user column alongside an unsafe one keeps the safe lane, drop
   const columns = [
     col('todo', true), col('testing', true),
     col('../../evil', false), col('ux-review', false),
-    col('post-processing', true), col('done', true),
+    col('done', true),
   ];
   assert.equal(isUserStatus('ux-review', columns), true, 'safe slug survives');
   assert.equal(isUserStatus('../../evil', columns), false, 'unsafe slug dropped');

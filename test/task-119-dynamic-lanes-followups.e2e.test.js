@@ -11,7 +11,7 @@
 //        unreadable, or not-yet-loaded); it warns (`.missing`) ONLY when the set is
 //        a CONFIRMED enumeration (a Set — even an empty one) that lacks the agent.
 //   F3 — deleting tasks/team-config.json mid-session must REVERT the board to the
-//        six default lanes on the next poll (a CONFIRMED not-found), while a
+//        five default lanes on the next poll (a CONFIRMED not-found), while a
 //        transient present-but-unreadable read error must KEEP the last-good config.
 //
 // Each scenario drives the REAL shipped renderer functions
@@ -41,7 +41,7 @@ const {
 
 const CSS = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'styles.css'), 'utf8');
 
-const SYSTEM_ORDER = ['todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done'];
+const SYSTEM_ORDER = ['todo', 'defining', 'in-progress', 'testing', 'done'];
 const DEFAULT_LANES = [...SYSTEM_ORDER, 'unknown'];
 
 // The lane element for a data-status, or undefined.
@@ -200,12 +200,12 @@ test('Scenario (F2 edge): a confirmed-EMPTY agents dir (empty Set) warns the con
 
 // ---------------------------------------------------------------------------
 // Scenario: a valid config renders its lanes, a transient read error keeps them,
-//           and a confirmed delete reverts to the six default lanes
+//           and a confirmed delete reverts to the five default lanes
 //   Given team-config.json declares a ux-review lane and the board polled it
 //   When a later poll cannot read the config but it is CONFIRMED present
 //     Then the last-good config is kept (ux-review lane survives)
 //   When a later poll cannot read the config and it is CONFIRMED absent (deleted)
-//     Then the board reverts to the six default lanes (ux-review lane gone)
+//     Then the board reverts to the five default lanes (ux-review lane gone)
 // ---------------------------------------------------------------------------
 test('Scenario (F3): valid config renders its lanes; transient read error keeps last-good; a confirmed delete reverts to defaults', async () => {
   // Given a valid team-config.json with a ux-review user lane.
@@ -224,7 +224,7 @@ test('Scenario (F3): valid config renders its lanes; transient read error keeps 
   // The config declares ONLY the ux-review user column (no preceding system column),
   // so it anchors to the FRONT of the board, ahead of todo.
   assert.deepEqual(laneStatuses(tab),
-    ['ux-review', 'todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done', 'unknown'],
+    ['ux-review', 'todo', 'defining', 'in-progress', 'testing', 'done', 'unknown'],
     'the ux-review lane renders from the good config (anchored to the front)');
 
   // When a later poll cannot READ the config, but exists confirms it is STILL PRESENT
@@ -240,11 +240,11 @@ test('Scenario (F3): valid config renders its lanes; transient read error keeps 
   // When a later poll cannot read the config AND exists confirms it is GONE (deleted).
   existsMap.set(CFG_PATH, { ok: true, exists: false }); // confirmed not-found
   await assert.doesNotReject(() => mod.pollTasksOnce(tab, true));
-  // Then the board REVERTS to the six default lanes (F3 fix).
+  // Then the board REVERTS to the five default lanes (F3 fix).
   assert.equal(tab.tasks.config, null,
-    'a CONFIRMED delete reverts config to null (the six default lanes)');
+    'a CONFIRMED delete reverts config to null (the five default lanes)');
   assert.deepEqual(laneStatuses(tab), DEFAULT_LANES,
-    'deleting team-config.json returns the board to the six default lanes');
+    'deleting team-config.json returns the board to the five default lanes');
   assert.ok(!lane(tab, 'ux-review'), 'the removed ux-review lane is gone after the confirmed delete');
 });
 

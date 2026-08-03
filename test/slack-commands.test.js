@@ -214,7 +214,7 @@ test('formatTasksSummary: active tickets listed under "Currently working on:" wi
   // Idle statuses are NOT listed as being worked on.
   assert.ok(!out.includes('TASK-001 — Setup'));
   // Lane-counts line in LANE_STATUSES order.
-  assert.ok(out.includes('todo 1 · defining 1 · in-progress 1 · testing 1 · post-processing 0 · done 1'));
+  assert.ok(out.includes('todo 1 · defining 1 · in-progress 1 · testing 1 · done 1'));
 });
 
 test('formatTasksSummary: no active tickets → "Nothing is being worked on right now."', () => {

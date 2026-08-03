@@ -70,9 +70,8 @@ function loadEditor(window, document, console, localStorage) {
     extractConst(rendererSrc, 'TASKS_RESERVED_SLUGS'),
     extractConst(rendererSrc, 'TASKS_MAX_SLUG_LENGTH'),
     extractConst(rendererSrc, 'TASKS_SLUG_RE'),
-    // TASK-180 - tasksBuildColumn normalises a column's optional `phase` link
-    // via tasksNormalizeColumnPhase, which reads TASKS_PHASE_KEYS.
-    extractConst(rendererSrc, 'TASKS_PHASE_KEYS'),
+    // TASK-180's `phase` link (TASKS_PHASE_KEYS/tasksNormalizeColumnPhase) was
+    // fully removed by TASK-201/203 — tasksBuildColumn no longer has one.
     // path helpers
     extractFn(rendererSrc, 'inferSep'),
     extractFn(rendererSrc, 'appendPath'),
@@ -88,7 +87,6 @@ function loadEditor(window, document, console, localStorage) {
     extractFn(rendererSrc, 'initTasksConcurrency'),
     extractFn(rendererSrc, 'buildCommandFor'),
     extractFn(rendererSrc, 'tasksPrettifyLabel'),
-    extractFn(rendererSrc, 'tasksNormalizeColumnPhase'),
     extractFn(rendererSrc, 'tasksBuildColumn'),
     extractFn(rendererSrc, 'normalizeTasksColumns'),
     // TASK-200 — tasksSerializeTeamConfig now normalises skill.contextOptimization
@@ -104,11 +102,13 @@ function loadEditor(window, document, console, localStorage) {
     extractFn(rendererSrc, 'tasksIsUnsafeKey'),
     extractFn(rendererSrc, 'buildWorkingConfigFromRaw'),
     extractFn(rendererSrc, 'buildWorkflowConcurrencyControl'),
-    // refreshTeamWorkflow is fire-and-forget from the Save handler; stub it so a
-    // Save does not re-drive the whole (unmounted) panel. Crucially it does NOT
-    // re-read the config into tab.tasks.config — so any config reflection observed
-    // right after a Save is the F2 in-memory update, NOT a poll.
-    'function refreshTeamWorkflow(){}',
+    // TASK-202: buildWorkflowConcurrencyControl's Save handler now calls
+    // refreshTeamBoard(tab) (the panel it is mounted in), not the removed
+    // refreshTeamWorkflow. Stub it so a Save does not re-drive the whole
+    // (unmounted) panel. Crucially it does NOT re-read the config into
+    // tab.tasks.config — so any config reflection observed right after a Save
+    // is the F2 in-memory update, NOT a poll.
+    'function refreshTeamBoard(){}',
     'return { buildWorkflowConcurrencyControl, buildWorkingConfigFromRaw,',
     '  resolveTasksConcurrency, currentTasksConcurrency, buildCommandFor,',
     '  syncTasksConcurrencyOption, initTasksConcurrency, tasksSerializeTeamConfig,',
@@ -304,9 +304,11 @@ test('F1 Scenario (failure): a Save whose re-read FAILS falls back to rawConfig 
     assert.deepEqual(persisted.someUnknownField, { keep: true }, 'unknown top-level field preserved');
     assert.deepEqual(persisted.anotherUnknown, [1, 2, 3], 'second unknown field preserved');
     assert.deepEqual(persisted.columns.find((c) => c.status === 'ux-review'),
-      { status: 'ux-review', label: 'UX Review', description: 'design pass', agent: null, system: false, phase: null },
+      {
+        status: 'ux-review', label: 'UX Review', description: 'design pass', agent: null, instructions: '', system: false,
+      },
       'the user column survived the bad re-read');
-    for (const s of ['todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done']) {
+    for (const s of ['todo', 'defining', 'in-progress', 'testing', 'done']) {
       assert.ok(persisted.columns.some((c) => c.status === s), `system column ${s} present`);
     }
   } finally { cleanup(root); }

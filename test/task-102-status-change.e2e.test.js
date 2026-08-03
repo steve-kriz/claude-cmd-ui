@@ -109,11 +109,9 @@ function loadFsModule() {
     extractConst(rendererSrc, 'TASKS_RESERVED_SLUGS'),
     extractConst(rendererSrc, 'TASKS_MAX_SLUG_LENGTH'),
     extractConst(rendererSrc, 'TASKS_SLUG_RE'),
-    // TASK-180 - tasksBuildColumn normalises a column's optional `phase` link
-    // via tasksNormalizeColumnPhase, which reads TASKS_PHASE_KEYS.
-    extractConst(rendererSrc, 'TASKS_PHASE_KEYS'),
+    // TASK-180's `phase` link (TASKS_PHASE_KEYS/tasksNormalizeColumnPhase) was
+    // fully removed by TASK-201/203 — tasksBuildColumn no longer has one.
     extractFn(rendererSrc, 'tasksPrettifyLabel'),
-    extractFn(rendererSrc, 'tasksNormalizeColumnPhase'),
     extractFn(rendererSrc, 'tasksBuildColumn'),
     extractFn(rendererSrc, 'normalizeTasksColumns'),
     extractFn(rendererSrc, 'tasksUserStatusSet'),
@@ -237,7 +235,7 @@ test('Scenario: the modal status select lists the configured columns in board or
   mod.populateTaskStatusOptions(sel, mod.normalizeTasksColumns(CONFIG_UX));
   // Then the select lists every column in board order, then the "Won't do" entry.
   assert.deepEqual(sel.children.map((o) => o.value),
-    ['todo', 'defining', 'in-progress', 'testing', 'ux-review', 'post-processing', 'done', '__wont-do__']);
+    ['todo', 'defining', 'in-progress', 'testing', 'ux-review', 'done', '__wont-do__']);
   // And values are the slugs while labels come from the config (ux-review's label).
   const ux = sel.children.find((o) => o.value === 'ux-review');
   assert.equal(ux.textContent, 'UX Review');

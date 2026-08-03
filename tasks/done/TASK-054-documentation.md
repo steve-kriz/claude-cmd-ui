@@ -1,13 +1,15 @@
 ---
 id: TASK-054
 title: Documentation
-status: post-processing
+status: done
 created: 2026-07-19T06:08:24.489Z
-updated: 2026-07-19T06:08:24.489Z
-kind: post-processing
+updated: 2026-08-03T11:00:00.000Z
+resolution: wont-do
 ---
 
 ## Description
+Retired: this was a post-processing ticket; it was never run and is kept here, unbuilt, after the post-processing column was removed (TASK-206).
+
 Thought process
 Thought process
 Here's the revised prompt.

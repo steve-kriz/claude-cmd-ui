@@ -25,7 +25,13 @@ const {
   slotOccupancyCount,
 } = require('../lib/ticket-queue');
 
-const { VALID_STATUSES, POST_PROCESSING_KIND } = require('../lib/ticket-lanes');
+const { VALID_STATUSES } = require('../lib/ticket-lanes');
+
+// TASK-206 removed the kind:post-processing concept entirely — there is no
+// longer a POST_PROCESSING_KIND export. A leftover `kind: post-processing`
+// frontmatter key is just an arbitrary, ignored string now (see the guard
+// section at the bottom of this file).
+const LEGACY_POST_PROCESSING_KIND = 'post-processing';
 
 // Ticket frontmatter factory returning a { fm } wrapper as the board stores them.
 function T(id, status, extra) {
@@ -36,7 +42,7 @@ function T(id, status, extra) {
 
 test('SWARM_STATUSES names exactly the system-owned lifecycle + failed-testing set', () => {
   const expected = [
-    'todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done', 'failed-testing',
+    'todo', 'defining', 'in-progress', 'testing', 'done', 'failed-testing',
   ];
   // Same membership regardless of order.
   assert.deepEqual([...SWARM_STATUSES].sort(), [...expected].sort());
@@ -139,62 +145,64 @@ test('slotOccupancyCount ignores user statuses entirely', () => {
   assert.equal(slotOccupancyCount(board), 3);
 });
 
-// ── Post-processing KIND guard asserted WHERE IT ACTS (TASK-118) ──────────────
+// ── Legacy kind:post-processing is now IGNORED — treated purely by status
+// (TASK-206) ───────────────────────────────────────────────────────────────
 //
-// The user-status tests above prove the STATUS boundary. These prove the KIND
-// boundary: they hold the STATUS at a CLAIMABLE value ('todo') so the only field
-// that can flip the verdict is `kind: post-processing`. Each kind ticket is
-// paired with a kind-LESS control at the SAME status that IS granted/selected,
-// so the field alone is shown to drive every refusal (and a future all-todo-
-// unclaimable regression can't pass silently). `POST_PROCESSING_KIND` is imported
-// from ../lib/ticket-lanes — no local constant.
+// TASK-118 originally added a KIND-based guard that force-excluded a
+// kind:post-processing ticket regardless of its status. TASK-206 removed the
+// whole post-processing concept: a leftover `kind: post-processing` frontmatter
+// key on disk (from before the removal) now round-trips as an ordinary, ignored
+// unknown field — it must NOT be force-excluded from claiming/parallel-running/
+// selection, and no guard may ever report a 'post-processing' reason again. Each
+// kind-carrying ticket is paired with a kind-less control at the SAME status to
+// prove the two behave identically (the field truly does nothing).
 
-test('claimTicket refuses a kind:post-processing ticket in a CLAIMABLE status (kind drives it, reason exactly post-processing)', () => {
-  // Bare fm into claimTicket, per its calling convention.
-  const res = claimTicket({ id: 'PP-1', status: 'todo', kind: POST_PROCESSING_KIND }, 'agent-A');
-  assert.equal(res.ok, false);
-  assert.equal(res.reason, 'post-processing'); // NOT 'not-claimable' — the kind guard, not the status
-  // Not stamped in-progress and no agent recorded.
-  assert.equal(res.fm.status, 'todo');
-  assert.equal(res.fm.agent, undefined);
+test('claimTicket treats a leftover kind:post-processing ticket purely by its status (claimable, no post-processing reason)', () => {
+  const res = claimTicket({ id: 'PP-1', status: 'todo', kind: LEGACY_POST_PROCESSING_KIND }, 'agent-A');
+  assert.equal(res.ok, true, 'a todo ticket is claimable regardless of a leftover kind key');
+  assert.equal(res.fm.status, 'in-progress');
+  assert.equal(res.fm.agent, 'agent-A');
+  assert.notEqual(res.reason, 'post-processing', 'no post-processing reason is ever returned');
 
-  // Kind-less control at the SAME status IS granted — proving the field flips it.
+  // Kind-less control at the SAME status behaves identically.
   const ctrl = claimTicket({ id: 'OK-1', status: 'todo' }, 'agent-A');
   assert.equal(ctrl.ok, true);
   assert.equal(ctrl.fm.status, 'in-progress');
   assert.equal(ctrl.fm.agent, 'agent-A');
 });
 
-test('canRunInParallel refuses a kind:post-processing ticket by KIND even with free slots (reason post-processing, not no-slots/not-claimable)', () => {
-  const res = canRunInParallel([], T('PP-1', 'todo', { kind: POST_PROCESSING_KIND }), { limit: 3 });
-  assert.equal(res.ok, false);
-  assert.equal(res.reason, 'post-processing');
-  assert.equal(res.freeSlots, 3); // slots are free — the kind, not capacity, refuses it
+test('canRunInParallel treats a leftover kind:post-processing ticket purely by its status (ok, no post-processing reason)', () => {
+  const res = canRunInParallel([], T('PP-1', 'todo', { kind: LEGACY_POST_PROCESSING_KIND }), { limit: 3 });
+  assert.equal(res.ok, true, 'a todo ticket with a leftover kind key is eligible');
+  assert.equal(res.reason, 'ok');
+  assert.equal(res.freeSlots, 3);
 
-  // Kind-less control at the SAME status + empty board IS eligible.
+  // Kind-less control at the SAME status behaves identically.
   const ctrl = canRunInParallel([], T('OK-1', 'todo'), { limit: 3 });
   assert.equal(ctrl.ok, true);
   assert.equal(ctrl.reason, 'ok');
   assert.equal(ctrl.freeSlots, 3);
 });
 
-test('selectNextBatch never returns a kind:post-processing ticket in a claimable status, but does return the kind-less control', () => {
+test('selectNextBatch returns a leftover kind:post-processing ticket in a claimable status just like its kind-less control', () => {
   const board = [
-    T('PP-1', 'todo', { kind: POST_PROCESSING_KIND }), // claimable status, excluded by KIND
-    T('TASK-3', 'todo'),                                // kind-less control — selected
+    T('PP-1', 'todo', { kind: LEGACY_POST_PROCESSING_KIND }), // claimable status, kind no longer excludes it
+    T('TASK-3', 'todo'),                                       // kind-less control
   ];
   const picked = selectNextBatch(board, { limit: 3 }).map((t) => t.fm.id);
-  assert.deepEqual(picked, ['TASK-3']); // free slots, yet PP-1 is never dispatched
+  assert.deepEqual(picked.sort(), ['PP-1', 'TASK-3'], 'both dispatch — the leftover kind key is inert');
 });
 
-test('KIND guard outranks the claimed verdict: kind:post-processing + foreign agent reports post-processing, not claimed', () => {
-  // claimTicket: the kind guard sits above the isClaimed() check.
-  const res = claimTicket({ id: 'PP-1', status: 'todo', kind: POST_PROCESSING_KIND, agent: 'other' }, 'agent-A');
+test('a leftover kind:post-processing ticket claimed by a foreign agent still reports claimed (kind is inert; status precedence unchanged)', () => {
+  // claimTicket: the (now-removed) kind guard no longer sits above isClaimed().
+  const res = claimTicket({ id: 'PP-1', status: 'todo', kind: LEGACY_POST_PROCESSING_KIND, agent: 'other' }, 'agent-A');
   assert.equal(res.ok, false);
-  assert.equal(res.reason, 'post-processing'); // NOT 'claimed'
+  assert.equal(res.reason, 'claimed');
+  assert.notEqual(res.reason, 'post-processing');
 
   // canRunInParallel: same precedence.
-  const par = canRunInParallel([], T('PP-1', 'todo', { kind: POST_PROCESSING_KIND, agent: 'other' }), { limit: 3 });
+  const par = canRunInParallel([], T('PP-1', 'todo', { kind: LEGACY_POST_PROCESSING_KIND, agent: 'other' }), { limit: 3 });
   assert.equal(par.ok, false);
-  assert.equal(par.reason, 'post-processing'); // NOT 'claimed'
+  assert.equal(par.reason, 'claimed');
+  assert.notEqual(par.reason, 'post-processing');
 });

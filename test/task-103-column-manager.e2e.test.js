@@ -6,7 +6,7 @@
 // are scenario-style node:test cases in Given/When/Then form.
 //
 // Feature: the Team tab Board panel — a column manager over
-// <folder>/tasks/team-config.json. It lists the six system columns plus any user
+// <folder>/tasks/team-config.json. It lists the five system columns plus any user
 // columns; adds a user column (label → derived read-only slug, validated,
 // spliced at a chosen position); protects system columns (no remove, no re-slug,
 // fixed relative order); removes user columns (warning stating the live ticket
@@ -75,15 +75,11 @@ function loadBoard(window, document, console) {
     extractConst(rendererSrc, 'TASKS_RESERVED_SLUGS'),
     extractConst(rendererSrc, 'TASKS_MAX_SLUG_LENGTH'),
     extractConst(rendererSrc, 'TASKS_SLUG_RE'),
-    // TASK-180 - tasksBuildColumn normalises a column's optional `phase` link
-    // via tasksNormalizeColumnPhase, which reads TASKS_PHASE_KEYS.
-    extractConst(rendererSrc, 'TASKS_PHASE_KEYS'),
-    // TASK-183 - tasksApplyPhaseAutoEnable's fallback when a phase's
-    // skill.phases entry is missing/malformed, plus the column->phase link
-    // counter it and refreshTeamBoard's baseline snapshot both use.
-    extractConst(rendererSrc, 'TASKS_PHASE_ENABLED_DEFAULTS'),
-    extractFn(rendererSrc, 'tasksPhaseLinkCounts'),
-    extractFn(rendererSrc, 'tasksApplyPhaseAutoEnable'),
+    // TASK-180's `phase` link and TASK-183's auto-enable machinery
+    // (TASKS_PHASE_KEYS/TASKS_PHASE_ENABLED_DEFAULTS/tasksPhaseLinkCounts/
+    // tasksApplyPhaseAutoEnable/tasksNormalizeColumnPhase) were fully removed by
+    // TASK-201/203 — none of these symbols exist in renderer.js any more, so
+    // none is extracted here.
     // TASK-121 (F2): tasksSerializeTeamConfig now clamps skill.concurrencyDefault
     // through resolveTasksConcurrency, so the serializer needs these three symbols
     // in scope or saveTeamBoardConfig throws ReferenceError. Function declarations
@@ -92,7 +88,6 @@ function loadBoard(window, document, console) {
     extractConst(rendererSrc, 'TASKS_DEFAULT_CONCURRENCY'),
     extractFn(rendererSrc, 'resolveTasksConcurrency'),
     extractFn(rendererSrc, 'tasksPrettifyLabel'),
-    extractFn(rendererSrc, 'tasksNormalizeColumnPhase'),
     extractFn(rendererSrc, 'tasksBuildColumn'),
     extractFn(rendererSrc, 'normalizeTasksColumns'),
     extractFn(rendererSrc, 'tasksSlugForLabel'),
@@ -110,6 +105,10 @@ function loadBoard(window, document, console) {
     extractFn(rendererSrc, 'readTeamAgentNames'),
     extractFn(rendererSrc, 'countTeamTicketsForStatus'),
     extractFn(rendererSrc, 'refreshTeamBoard'),
+    // TASK-202 — renderTeamBoard now calls these two workflow controls directly
+    // (relocated into the Board panel), so they must be in scope too.
+    extractFn(rendererSrc, 'buildWorkflowConcurrencyControl'),
+    extractFn(rendererSrc, 'buildWorkflowContextOptimizationControl'),
     extractFn(rendererSrc, 'renderTeamBoard'),
     extractFn(rendererSrc, 'canSwapTeamColumns'),
     extractFn(rendererSrc, 'buildTeamColumnRow'),
@@ -174,7 +173,7 @@ function makeEnv(opts) {
 
 const cfgPathFor = (root) => path.join(root, 'tasks', 'team-config.json');
 
-// Write an initial config to disk (the default six system columns unless given).
+// Write an initial config to disk (the default five system columns unless given).
 function seedConfig(root, cfg) {
   const dir = path.join(root, 'tasks');
   fs.mkdirSync(dir, { recursive: true });
@@ -225,7 +224,7 @@ function rows(body) {
 //   And the Tasks board shows the new lane on its next poll
 // ===========================================================================
 test('Scenario: adding "UX Review" after Testing and saving writes ux-review at that position', async () => {
-  // Given an open folder whose tasks/team-config.json holds the six defaults
+  // Given an open folder whose tasks/team-config.json holds the five defaults
   const env = makeEnv();
   seedConfig(env.root);
   const B = loadBoard(env.window, env.document, env.console);
@@ -234,8 +233,8 @@ test('Scenario: adding "UX Review" after Testing and saving writes ux-review at 
   // When the Board panel is loaded
   await B.refreshTeamBoard(tab);
   assert.deepEqual(rows(tab.els.teamBoardBody).map((r) => r.slug),
-    ['todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done'],
-    'loads the six system columns in canonical order');
+    ['todo', 'defining', 'in-progress', 'testing', 'done'],
+    'loads the five system columns in canonical order');
 
   // ...and the user types "UX Review" (the derived slug previews read-only)
   const af = addForm(tab.els.teamBoardBody);
@@ -250,7 +249,7 @@ test('Scenario: adding "UX Review" after Testing and saving writes ux-review at 
 
   // Then the in-memory model inserts ux-review immediately after Testing
   assert.deepEqual(rows(tab.els.teamBoardBody).map((r) => r.slug),
-    ['todo', 'defining', 'in-progress', 'testing', 'ux-review', 'post-processing', 'done']);
+    ['todo', 'defining', 'in-progress', 'testing', 'ux-review', 'done']);
 
   // When the user saves
   await B.saveTeamBoardConfig(tab);
@@ -260,7 +259,7 @@ test('Scenario: adding "UX Review" after Testing and saving writes ux-review at 
   const written = JSON.parse(fs.readFileSync(cfgPathFor(env.root), 'utf8'));
   const statuses = written.columns.map((c) => c.status);
   assert.deepEqual(statuses,
-    ['todo', 'defining', 'in-progress', 'testing', 'ux-review', 'post-processing', 'done']);
+    ['todo', 'defining', 'in-progress', 'testing', 'ux-review', 'done']);
   const ux = written.columns.find((c) => c.status === 'ux-review');
   assert.equal(ux.system, false);
   assert.equal(ux.label, 'UX Review');
@@ -270,7 +269,7 @@ test('Scenario: adding "UX Review" after Testing and saving writes ux-review at 
   // Testing (no restart needed).
   const laneStatuses = B.normalizeTasksColumns(written).map((c) => c.status);
   assert.deepEqual(laneStatuses,
-    ['todo', 'defining', 'in-progress', 'testing', 'ux-review', 'post-processing', 'done'],
+    ['todo', 'defining', 'in-progress', 'testing', 'ux-review', 'done'],
     'the next board poll would render the ux-review lane after Testing');
 });
 
@@ -434,9 +433,9 @@ test('Scenario (failure): a corrupt config loads the defaults with a notice and 
   // When the Board panel loads
   await B.refreshTeamBoard(tab);
 
-  // Then the editor loads the six system defaults with a non-blocking notice
+  // Then the editor loads the five system defaults with a non-blocking notice
   assert.deepEqual(rows(tab.els.teamBoardBody).map((r) => r.slug),
-    ['todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done'],
+    ['todo', 'defining', 'in-progress', 'testing', 'done'],
     'defaults loaded');
   assert.ok(tab.teamBoard.notice, 'a notice is set');
   assert.match(tab.teamBoard.notice, /not valid JSON/i);
@@ -449,7 +448,7 @@ test('Scenario (failure): a corrupt config loads the defaults with a notice and 
   await flush();
   const repaired = JSON.parse(fs.readFileSync(cfgPathFor(env.root), 'utf8')); // must not throw
   assert.deepEqual(repaired.columns.map((c) => c.status),
-    ['todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done']);
+    ['todo', 'defining', 'in-progress', 'testing', 'done']);
   // The lib authority accepts the repaired file without column repairs.
   const libNorm = teamConfig.normalizeConfig(repaired);
   assert.deepEqual((libNorm.warnings || []).filter((w) => /column/i.test(w)), []);

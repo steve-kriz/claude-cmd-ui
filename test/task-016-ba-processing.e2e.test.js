@@ -131,29 +131,32 @@ test('TASK-016 e2e: BA thoroughly analyzes and fully captures each ticket before
 
   await t.test(
     'Scenario: Analysis must be captured before the build phase — ' +
-      'Given ".claude/agents/ba.md" and ".claude/skills/orchestrate/SKILL.md", ' +
-      'Then they state the full analysis must be captured in the ticket before ' +
-      'any build begins',
+      'Given ".claude/agents/ba.md", Then it states the full analysis must be ' +
+      'captured in the ticket before any build begins; and SKILL.md still ' +
+      'dispatches the `defining` column to orchestrate-ba with the ' +
+      'definition-skip gate (TASK-204: this specific BA-thoroughness/capture ' +
+      'wording now lives exclusively in ba.md, not restated in SKILL.md)',
     () => {
       const ba = readFile(BA_PATH);
       const skill = readFile(SKILL_PATH);
 
-      for (const [name, text] of [
-        ['ba.md', ba],
-        ['SKILL.md', skill],
-      ]) {
-        assert.ok(
-          matches(text, /captured?[^.\n]*(in|inside)[^.\n]*ticket|inside the ticket|in the ticket/i),
-          `${name} must state the analysis is captured inside the ticket`,
-        );
-        assert.ok(
-          matches(
-            text,
-            /before[^.\n]*(any )?build|before[^.\n]*phase 2|before any build begins|before the build/i,
-          ),
-          `${name} must state this happens before any build begins`,
-        );
-      }
+      assert.ok(
+        matches(ba, /captured?[^.\n]*(in|inside)[^.\n]*ticket|inside the ticket|in the ticket/i),
+        'ba.md must state the analysis is captured inside the ticket',
+      );
+      assert.ok(
+        matches(
+          ba,
+          /before[^.\n]*(any )?build|before[^.\n]*phase 2|before any build begins|before the build/i,
+        ),
+        'ba.md must state this happens before any build begins',
+      );
+
+      // SKILL.md's generic column loop still dispatches `defining` to
+      // orchestrate-ba and gates on the isTicketDefined definition-skip check
+      // before a ticket can ever reach `in-progress` (build).
+      assert.ok(matches(skill, /`defining`[\s\S]*?orchestrate-ba/i), 'SKILL.md dispatches defining to orchestrate-ba');
+      assert.ok(matches(skill, /isTicketDefined/), 'SKILL.md references the isTicketDefined definition gate');
     },
   );
 

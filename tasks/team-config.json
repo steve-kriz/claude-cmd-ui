@@ -6,77 +6,55 @@
       "label": "To Do",
       "description": "",
       "agent": null,
-      "system": true,
-      "phase": null
+      "instructions": "Entry queue. New tickets wait here for /orchestrate build. No agent runs in this column.",
+      "system": true
     },
     {
       "status": "defining",
       "label": "Defining",
       "description": "",
-      "agent": null,
-      "system": true,
-      "phase": "plan"
+      "agent": "orchestrate-ba",
+      "instructions": "Define the ticket: a precise Description, complete Acceptance Criteria, Cucumber Tests (Gherkin, at least one failure/edge scenario), explicit edge/failure cases, and the relevant files/context — all inside the ticket body. Never touch the user-owned Additional Context. If the ticket is already defined (real Acceptance Criteria plus a non-empty gherkin block), pass it through unchanged without redefining. Raise any clarifying question on the ticket's question field.",
+      "system": true
     },
     {
       "status": "in-progress",
       "label": "In Progress",
       "description": "",
-      "agent": null,
-      "system": true,
-      "phase": "build"
+      "agent": "orchestrate-coder",
+      "instructions": "Implement the ticket to its Acceptance Criteria inside this ticket's isolated worktree/branch. Honour the Additional Context. Follow existing codebase conventions. Do not write tests beyond what compilation/wiring needs.",
+      "system": true
     },
     {
       "status": "testing",
       "label": "Testing",
       "description": "",
-      "agent": null,
-      "system": true,
-      "phase": "test"
-    },
-    {
-      "status": "post-processing",
-      "label": "Post-processing",
-      "description": "",
-      "agent": null,
-      "system": true,
-      "phase": null
+      "agent": "orchestrate-tester",
+      "instructions": "Write BOTH e2e cucumber-style node --test scenarios AND unit tests covering every Acceptance Criterion including at least one failure/edge path. Mock all database calls. Run the full suite under node --test and report pass/fail with failure output. A red result returns the ticket for a fix, capped at 3 attempts.",
+      "system": true
     },
     {
       "status": "pr-review",
       "label": "PR review",
       "description": "",
       "agent": null,
-      "system": false,
-      "phase": "review"
+      "instructions": "",
+      "system": false
     },
     {
       "status": "done",
       "label": "Done",
       "description": "",
       "agent": null,
-      "system": true,
-      "phase": null
+      "instructions": "Terminal column. Completed tickets rest here.",
+      "system": true
     }
   ],
   "skill": {
-    "phases": {
-      "plan": {
-        "enabled": true,
-        "order": 1
-      },
-      "build": {
-        "enabled": true,
-        "order": 2
-      },
-      "test": {
-        "enabled": true,
-        "order": 3
-      },
-      "review": {
-        "enabled": false,
-        "order": 4
-      }
-    },
-    "concurrencyDefault": 5
+    "concurrencyDefault": 5,
+    "contextOptimization": {
+      "enabled": true,
+      "level": "standard"
+    }
   }
 }

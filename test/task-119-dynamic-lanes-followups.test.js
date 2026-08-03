@@ -34,7 +34,7 @@ const { laneStatusesFor } = require('../lib/ticket-lanes.js');
 const mod = H.loadLaneModule(H.makeWindow().window, H.makeDocument(), console);
 const { normalizeTasksColumns, buildTasksLaneEl } = mod;
 
-const SYSTEM_ORDER = ['todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done'];
+const SYSTEM_ORDER = ['todo', 'defining', 'in-progress', 'testing', 'done'];
 
 // ---------------------------------------------------------------------------
 // F1 — lockstep cross-check: renderer ordering === lib engine ordering.
@@ -68,17 +68,17 @@ test('F1 unit: a user column (ux-review after testing) orders identically in ren
     columns: [
       { status: 'todo' }, { status: 'defining' }, { status: 'in-progress' },
       { status: 'testing' }, { status: 'ux-review', label: 'UX Review' },
-      { status: 'post-processing' }, { status: 'done' },
+      { status: 'done' },
     ],
   };
   assertLockstep(cfg, 'user column after testing',
-    ['todo', 'defining', 'in-progress', 'testing', 'ux-review', 'post-processing', 'done']);
+    ['todo', 'defining', 'in-progress', 'testing', 'ux-review', 'done']);
 });
 
 test('F1 unit: a user column before any system column anchors to the front in BOTH', () => {
   assertLockstep({ columns: [{ status: 'triage' }, { status: 'todo' }] },
     'user column before todo',
-    ['triage', 'todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done']);
+    ['triage', 'todo', 'defining', 'in-progress', 'testing', 'done']);
 });
 
 test('F1 unit: reserved + invalid slugs are dropped identically (only a valid user slug survives)', () => {
@@ -92,7 +92,7 @@ test('F1 unit: reserved + invalid slugs are dropped identically (only a valid us
     ],
   };
   assertLockstep(cfg, 'reserved/invalid dropped',
-    ['ux-review', 'todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done']);
+    ['ux-review', 'todo', 'defining', 'in-progress', 'testing', 'done']);
 });
 
 test('F1 unit: shuffled system columns re-impose canonical order in BOTH', () => {
@@ -103,7 +103,7 @@ test('F1 unit: shuffled system columns re-impose canonical order in BOTH', () =>
 test('F1 unit: a duplicate user slug de-dupes to one lane in BOTH (first wins)', () => {
   assertLockstep({ columns: [{ status: 'ux-review' }, { status: 'ux-review' }] },
     'duplicate user slug',
-    ['ux-review', 'todo', 'defining', 'in-progress', 'testing', 'post-processing', 'done']);
+    ['ux-review', 'todo', 'defining', 'in-progress', 'testing', 'done']);
 });
 
 // ---------------------------------------------------------------------------

@@ -226,10 +226,13 @@ test('Scenario: both SKILL.md copies document the parked-defining exemption and 
   const projectSrc = readLF(PROJECT_SKILL);
 
   // Then each documents that a question-parked defining ticket frees its slot.
+  // (TASK-204 reworded this bullet under "Forward movement model"'s `defining`
+  // walk-through; the guarantee is unchanged — a parked ticket does not hold a
+  // slot and so can never starve other ready work.)
   for (const [label, src] of [['assets', assetsSrc], ['.claude', projectSrc]]) {
-    assert.match(src, /parked on an unanswered BA question, which frees its slot/,
+    assert.match(src, /question-parked `defining` ticket does not hold a\s+concurrency slot/,
       `${label}/SKILL.md documents the parked-defining slot exemption`);
-    assert.match(src, /parked definitions never starve ready/,
+    assert.match(src, /can never starve other ready work/,
       `${label}/SKILL.md documents that parked definitions never starve ready work`);
   }
 
@@ -240,14 +243,19 @@ test('Scenario: both SKILL.md copies document the parked-defining exemption and 
     'assets/skills/orchestrate/SKILL.md === .claude/skills/orchestrate/SKILL.md (byte-for-byte)');
 });
 
-test('Scenario: no model id appears at or after "## Phase 2 — Build" in either SKILL copy', () => {
+test('Scenario: no model id appears outside the "## Model routing" section in either SKILL copy', () => {
+  // TASK-204: the phase pipeline (and its "## Phase 2 — Build" anchor) is
+  // gone; model ids now live ONLY inside "## Model routing" (never spliced
+  // into any column's own dispatch prose).
   const modelIdRe = /claude-(?:opus|sonnet|haiku|fable)[\w.-]*|claude-\d/i;
   for (const [label, p] of [['assets', ASSETS_SKILL], ['.claude', PROJECT_SKILL]]) {
     const src = readLF(p);
-    const idx = src.indexOf('## Phase 2 — Build');
-    assert.ok(idx !== -1, `${label}/SKILL.md has a "## Phase 2 — Build" heading`);
-    const fromPhase2 = src.slice(idx);
-    assert.ok(!modelIdRe.test(fromPhase2),
-      `${label}/SKILL.md must not name a model id at/after Phase 2 (found: ${(fromPhase2.match(modelIdRe) || [''])[0]})`);
+    const routingIdx = src.indexOf('## Model routing');
+    assert.ok(routingIdx !== -1, `${label}/SKILL.md has a "## Model routing" heading`);
+    const nextHeadingIdx = src.indexOf('\n## ', routingIdx + 1);
+    assert.ok(nextHeadingIdx !== -1, `${label}/SKILL.md: a heading follows Model routing`);
+    const outsideRouting = src.slice(0, routingIdx) + src.slice(nextHeadingIdx);
+    assert.ok(!modelIdRe.test(outsideRouting),
+      `${label}/SKILL.md must not name a model id outside Model routing (found: ${(outsideRouting.match(modelIdRe) || [''])[0]})`);
   }
 });

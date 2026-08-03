@@ -3996,6 +3996,9 @@ body {
   flex: 1 1 160px;
   min-width: 140px;
 }
+.team-column-field-full {
+  flex: 1 1 100%;
+}
 .team-column-field-label {
   font-size: 10px;
   color: #888;
@@ -4003,7 +4006,8 @@ body {
   letter-spacing: 0.4px;
 }
 .team-column-field input,
-.team-column-field select {
+.team-column-field select,
+.team-column-field textarea {
   box-sizing: border-box;
   width: 100%;
   background: #1a1a1a;
@@ -4013,6 +4017,10 @@ body {
   padding: 4px 6px;
   font-size: 12px;
   font-family: inherit;
+}
+.team-column-field textarea {
+  resize: vertical;
+  min-height: 44px;
 }
 .team-column-field input:read-only {
   color: #999;

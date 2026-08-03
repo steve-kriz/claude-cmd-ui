@@ -643,9 +643,12 @@ test('DRIFT GUARD: the new bug ticket is status todo, filed via ticketFolderForS
   assert.match(body, /window\.api\.fs\.writeFile\(filePath, serializeTicket\(fm, body\)\)/, 'whole-file write of the bug ticket');
 });
 
-test('DRIFT GUARD: bug mode is gated to a plain todo create (hidden for the post-processing Add path)', () => {
+test('DRIFT GUARD: bug mode is always offered (TASK-206 removed the only other, post-processing, Add path)', () => {
   const src = opener();
-  assert.match(src, /const allowBug = !!bugBtn && !kind && status === 'todo';/, 'Bug offered only for a plain todo create');
+  // TASK-206 removed the post-processing mode/opts parameter entirely — the
+  // toolbar Add button is the only caller now, and it always creates a todo
+  // ticket, so Bug mode is unconditionally offered.
+  assert.match(src, /const allowBug = !!bugBtn;/, 'Bug is always offered (the toolbar path is the only caller now)');
   assert.match(src, /bugBtn\.classList\.toggle\('hidden', !allowBug\)/, 'the Bug button is hidden when not allowed');
   // The selector is populated from the live board (tab.tasks.tickets → fm.id).
   assert.match(src, /for \(const tk of tab\.tasks\.tickets\.values\(\)\)/, 'selector populated from the live board');

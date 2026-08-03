@@ -238,7 +238,7 @@ app.on('window-all-closed', () => {
 
 // ── Keep-awake wake-lock (TASK-036) ──────────────────────────────────────────
 // While at least one orchestrate ticket is actively being worked (defining /
-// in-progress / testing / post-processing) the OS must not sleep or suspend. The
+// in-progress / testing) the OS must not sleep or suspend. The
 // renderer owns the board state, so it reports the live app-wide active count
 // over the fire-and-forget 'tasks:activity' channel; we translate that into a
 // single Electron powerSaveBlocker. We use 'prevent-display-sleep' (keep the

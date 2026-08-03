@@ -19,9 +19,14 @@
 // an INJECTED window + a minimal in-memory mock document.
 //
 // ALL side-effecting collaborators are STUBBED: window.api.tasks.installSkill
-// (the install IPC), and launchCmdAgent / refreshTeamWorkflow /
-// refreshTeamAgents / pollTasksOnce are injected recording stubs. NO real
-// DB / Electron / network / PTY spawn ever happens.
+// (the install IPC), and launchCmdAgent / refreshTeamAgents / pollTasksOnce are
+// injected recording stubs. NO real DB / Electron / network / PTY spawn ever
+// happens.
+//
+// TASK-203 note: buildWorkflowInstallHint (mirrored by this scenario's header
+// comment) was removed along with the Workflow panel; this file never extracted
+// it directly, so no functional change was needed here beyond dropping the
+// now-unused refreshTeamWorkflow/teamWorkflowBody stubs below.
 // ===========================================================================
 
 const { test } = require('node:test');
@@ -50,7 +55,6 @@ function extractFn(src, name) {
 function loadSurfaces(window, document, console, deps) {
   const body = [
     'const launchCmdAgent = deps.launchCmdAgent;',
-    'const refreshTeamWorkflow = deps.refreshTeamWorkflow;',
     'const refreshTeamAgents = deps.refreshTeamAgents;',
     'const pollTasksOnce = deps.pollTasksOnce;',
     extractFn(rendererSrc, 'promptSkillRegistration'),
@@ -166,7 +170,7 @@ async function flush() {
 function makeHarness(opts) {
   const o = opts || {};
   const calls = {
-    installSkill: [], launchCmdAgent: [], refreshTeamWorkflow: [],
+    installSkill: [], launchCmdAgent: [],
     refreshTeamAgents: [], pollTasksOnce: [],
   };
   const document = makeDocument();
@@ -192,7 +196,6 @@ function makeHarness(opts) {
       calls.launchCmdAgent.push(tab);
       if (tab.cmd) tab.cmd.id = 'new-session-' + (++seq);
     },
-    async refreshTeamWorkflow(tab) { calls.refreshTeamWorkflow.push(tab); },
     async refreshTeamAgents(tab) { calls.refreshTeamAgents.push(tab); },
     pollTasksOnce(tab, flag) { calls.pollTasksOnce.push({ tab, flag }); },
   };
@@ -235,7 +238,6 @@ function makeClaudeTab(document, opts) {
       tasksSkillBanner,
       tasksInstallSkillBtn: (() => { const b = document.createElement('button'); b.textContent = 'Install orchestration skill'; return b; })(),
       tasksBuildBtn: (() => { const b = document.createElement('button'); b.disabled = true; return b; })(),
-      teamWorkflowBody: document.createElement('div'),
       teamAgentsBody: document.createElement('div'),
       _tasksView: tasksView,
       _tasksBoard: tasksBoard,

@@ -27,7 +27,10 @@ const {
   slotOccupancyCount,
 } = require('../lib/ticket-queue');
 
-const { POST_PROCESSING_KIND } = require('../lib/ticket-lanes');
+// TASK-206 removed the kind:post-processing concept and its POST_PROCESSING_KIND
+// export entirely. A leftover `kind: post-processing` frontmatter key from before
+// the removal is now just an arbitrary, ignored string — see the scenarios below.
+const LEGACY_POST_PROCESSING_KIND = 'post-processing';
 
 // Tiny Given/When/Then scaffolding so the scenario bodies read as Gherkin steps
 // without any external cucumber runtime.
@@ -92,9 +95,9 @@ scenario('User-status ticket cannot be claimed (failure)', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-scenario('Occupancy unchanged by user statuses (edge, mixed board incl. a post-processing-STATUS card)', () => {
+scenario('Occupancy unchanged by user statuses (edge, mixed board incl. a legacy post-processing-STATUS card)', () => {
   let board; let boardNoUser; let newTicket; let verdict; let verdictNoUser;
-  Given('3 in-progress tickets and 5 ux-review tickets with limit 3, plus a post-processing card', () => {
+  Given('3 in-progress tickets and 5 ux-review tickets with limit 3, plus a legacy post-processing-status card', () => {
     board = [
       T('TASK-1', 'in-progress', { agent: 'a1' }),
       T('TASK-2', 'in-progress', { agent: 'a2' }),
@@ -104,14 +107,11 @@ scenario('Occupancy unchanged by user statuses (edge, mixed board incl. a post-p
       T('TASK-12', 'ux-review'),
       T('TASK-13', 'ux-review'),
       T('TASK-14', 'ux-review'),
-      // A card in the post-processing STATUS: excluded from slot occupancy by
-      // STATUS alone (post-processing is not in SLOT_OCCUPYING_STATUSES —
-      // defining/in-progress/testing). The `kind` field is NOT what excludes it
-      // here: slot occupancy is status-only in the lib and never inspects kind,
-      // so deleting `kind` would not change this count. The KIND guard is
-      // asserted where it actually acts (claim/parallel/select) in the dedicated
-      // scenario below and in task-100-swarm-guards.test.js.
-      T('TASK-20', 'post-processing', { kind: POST_PROCESSING_KIND }),
+      // TASK-206: 'post-processing' is no longer a valid status at all — a card
+      // with this legacy status (and the now-inert `kind` key) routes to the
+      // unknown lane and is excluded from slot occupancy the same way any
+      // out-of-enum status is (never defining/in-progress/testing).
+      T('TASK-20', 'post-processing', { kind: LEGACY_POST_PROCESSING_KIND }),
     ];
     // Same board with the user-status cards removed.
     boardNoUser = board.filter((t) => t.fm.status !== 'ux-review');
@@ -125,7 +125,7 @@ scenario('Occupancy unchanged by user statuses (edge, mixed board incl. a post-p
     assert.equal(verdict.reason, 'no-slots');
     assert.equal(verdict.freeSlots, 0);
   });
-  And('slot occupancy counts only the 3 in-progress (ux-review excluded by status; post-processing excluded by STATUS, not kind)', () => {
+  And('slot occupancy counts only the 3 in-progress (ux-review and the legacy post-processing status both excluded)', () => {
     assert.equal(slotOccupancyCount(board), 3);
   });
   And('removing the ux-review tickets does not change the verdict', () => {
@@ -136,45 +136,46 @@ scenario('Occupancy unchanged by user statuses (edge, mixed board incl. a post-p
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The KIND guard asserted WHERE IT ACTS: a kind:post-processing ticket whose
-// STATUS is CLAIMABLE ('todo') is refused by claimTicket / canRunInParallel /
-// selectNextBatch by the KIND, while a kind-less control at the same status is
-// granted/selected — proving the `kind` field alone flips every verdict (slot
-// occupancy, which is status-only, is deliberately NOT the mechanism here).
-scenario('Post-processing KIND (not status) is what excludes a claimable-status ticket', () => {
+// TASK-206: the KIND guard is GONE — a leftover kind:post-processing ticket
+// whose STATUS is CLAIMABLE ('todo') is now granted/selected by claimTicket /
+// canRunInParallel / selectNextBatch exactly like its kind-less control,
+// proving the `kind` field is truly inert (never force-excluded, never a
+// 'post-processing' reason).
+scenario('a leftover kind:post-processing ticket is treated purely by its status (kind is inert)', () => {
   let board; let picked; let claim; let ctrlClaim; let parallel; let ctrlParallel;
-  Given('a todo ticket with kind:post-processing plus a kind-less todo control, limit 3', () => {
+  Given('a todo ticket with a leftover kind:post-processing plus a kind-less todo control, limit 3', () => {
     board = [
-      T('PP-1', 'todo', { kind: POST_PROCESSING_KIND }), // claimable status, kind excludes it
-      T('TASK-3', 'todo'),                               // kind-less control
+      T('PP-1', 'todo', { kind: LEGACY_POST_PROCESSING_KIND }), // claimable status, kind no longer matters
+      T('TASK-3', 'todo'),                                        // kind-less control
     ];
   });
   When('the guards run against these claimable-status tickets', () => {
     picked = selectNextBatch(board, { limit: 3 }).map((t) => t.fm.id);
-    claim = claimTicket({ id: 'PP-1', status: 'todo', kind: POST_PROCESSING_KIND }, 'agent-A');
+    claim = claimTicket({ id: 'PP-1', status: 'todo', kind: LEGACY_POST_PROCESSING_KIND }, 'agent-A');
     ctrlClaim = claimTicket({ id: 'TASK-3', status: 'todo' }, 'agent-A');
-    parallel = canRunInParallel([], T('PP-1', 'todo', { kind: POST_PROCESSING_KIND }), { limit: 3 });
+    parallel = canRunInParallel([], T('PP-1', 'todo', { kind: LEGACY_POST_PROCESSING_KIND }), { limit: 3 });
     ctrlParallel = canRunInParallel([], T('TASK-3', 'todo'), { limit: 3 });
   });
-  Then('selectNextBatch returns only the kind-less control despite free slots', () => {
-    assert.deepEqual(picked, ['TASK-3']);
+  Then('selectNextBatch returns BOTH tickets — the leftover kind key excludes nothing', () => {
+    assert.deepEqual(picked.sort(), ['PP-1', 'TASK-3']);
   });
-  And('claimTicket refuses the kind ticket with reason exactly post-processing, no agent stamp', () => {
-    assert.equal(claim.ok, false);
-    assert.equal(claim.reason, 'post-processing'); // NOT 'not-claimable'
-    assert.equal(claim.fm.status, 'todo');
-    assert.equal(claim.fm.agent, undefined);
+  And('claimTicket grants the kind-carrying ticket exactly like its kind-less control', () => {
+    assert.equal(claim.ok, true);
+    assert.notEqual(claim.reason, 'post-processing');
+    assert.equal(claim.fm.status, 'in-progress');
+    assert.equal(claim.fm.agent, 'agent-A');
   });
-  And('claimTicket grants the kind-less control at the same status (kind flips the verdict)', () => {
+  And('claimTicket grants the kind-less control at the same status identically', () => {
     assert.equal(ctrlClaim.ok, true);
     assert.equal(ctrlClaim.fm.status, 'in-progress');
     assert.equal(ctrlClaim.fm.agent, 'agent-A');
   });
-  And('canRunInParallel refuses the kind ticket with post-processing while freeSlots stays 3', () => {
-    assert.equal(parallel.ok, false);
-    assert.equal(parallel.reason, 'post-processing'); // NOT 'no-slots'/'not-claimable'
+  And('canRunInParallel is eligible for the kind-carrying ticket, never reporting post-processing', () => {
+    assert.equal(parallel.ok, true);
+    assert.equal(parallel.reason, 'ok');
+    assert.notEqual(parallel.reason, 'post-processing');
     assert.equal(parallel.freeSlots, 3);
-    // Control at the same status is eligible with the slots free.
+    // Control at the same status behaves identically.
     assert.equal(ctrlParallel.ok, true);
     assert.equal(ctrlParallel.reason, 'ok');
     assert.equal(ctrlParallel.freeSlots, 3);
@@ -182,22 +183,24 @@ scenario('Post-processing KIND (not status) is what excludes a claimable-status 
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Precedence: the KIND guard outranks the claimed verdict. A kind:post-processing
-// ticket owned by a foreign agent still reports 'post-processing' (the kind guard
-// sits above the isClaimed() check in both claimTicket and canRunInParallel).
-scenario('Post-processing KIND outranks the claimed verdict (precedence)', () => {
+// Precedence: with the KIND guard removed, a leftover kind:post-processing
+// ticket owned by a foreign agent reports 'claimed' exactly like any other
+// claimed ticket — never 'post-processing' (TASK-206).
+scenario('a leftover kind:post-processing ticket owned by a foreign agent still reports claimed, never post-processing', () => {
   let claim; let parallel;
-  When('a kind:post-processing todo ticket also carries a foreign agent', () => {
-    claim = claimTicket({ id: 'PP-1', status: 'todo', kind: POST_PROCESSING_KIND, agent: 'other' }, 'agent-A');
-    parallel = canRunInParallel([], T('PP-1', 'todo', { kind: POST_PROCESSING_KIND, agent: 'other' }), { limit: 3 });
+  When('a todo ticket with a leftover kind:post-processing also carries a foreign agent', () => {
+    claim = claimTicket({ id: 'PP-1', status: 'todo', kind: LEGACY_POST_PROCESSING_KIND, agent: 'other' }, 'agent-A');
+    parallel = canRunInParallel([], T('PP-1', 'todo', { kind: LEGACY_POST_PROCESSING_KIND, agent: 'other' }), { limit: 3 });
   });
-  Then('claimTicket reports post-processing, not claimed', () => {
+  Then('claimTicket reports claimed, never post-processing', () => {
     assert.equal(claim.ok, false);
-    assert.equal(claim.reason, 'post-processing');
+    assert.equal(claim.reason, 'claimed');
+    assert.notEqual(claim.reason, 'post-processing');
   });
-  And('canRunInParallel reports post-processing, not claimed', () => {
+  And('canRunInParallel reports claimed, never post-processing', () => {
     assert.equal(parallel.ok, false);
-    assert.equal(parallel.reason, 'post-processing');
+    assert.equal(parallel.reason, 'claimed');
+    assert.notEqual(parallel.reason, 'post-processing');
   });
 });
 

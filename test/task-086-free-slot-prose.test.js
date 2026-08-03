@@ -74,10 +74,13 @@ for (const [label, src] of SKILL_COPIES) {
       `${label} copy explains the occupancy count includes defining`);
   });
 
-  test(`unit: ${label}/SKILL.md carries the formula at all THREE free-slot occurrences`, () => {
+  test(`unit: ${label}/SKILL.md carries the free-slot formula (TASK-204: stated once, cross-referenced)`, () => {
+    // TASK-204 consolidated the prose so the formula is stated ONCE,
+    // canonically, in "Concurrency, claims, and isolation", with every other
+    // section cross-referencing it instead of restating it verbatim.
     const matches = src.match(new RegExp(FREE_SLOT_FORMULA.source, 'g')) || [];
-    assert.ok(matches.length >= 3,
-      `${label} copy has >= 3 defining-inclusive free-slot formulas (found ${matches.length})`);
+    assert.ok(matches.length >= 1,
+      `${label} copy has >= 1 defining-inclusive free-slot formula (found ${matches.length})`);
   });
 
   test(`unit: ${label}/SKILL.md no longer says "limit − active count" (excluding defining)`, () => {
@@ -127,13 +130,16 @@ test('unit: the two SKILL.md copies are byte-identical (Buffer.equals)', () => {
 
 // --- TASK-051 invariant: no model id at/after "## Phase 2 — Build" ---------
 
-test('unit: no model id appears at or after the "## Phase 2 — Build" heading', () => {
+test('unit: no model id appears outside the "## Model routing" section', () => {
+  // TASK-204: model ids now live ONLY inside "## Model routing".
   for (const [label, src] of SKILL_COPIES) {
-    const phase2Idx = src.indexOf('## Phase 2 — Build');
-    assert.ok(phase2Idx !== -1, `${label}: Phase 2 heading present`);
-    const afterPhase2 = src.slice(phase2Idx);
-    assert.ok(!afterPhase2.includes(FABLE), `${label}: no ${FABLE} at/after Phase 2`);
-    assert.ok(!afterPhase2.includes(OPUS), `${label}: no ${OPUS} at/after Phase 2`);
+    const routingIdx = src.indexOf('## Model routing');
+    assert.ok(routingIdx !== -1, `${label}: Model routing heading present`);
+    const nextHeadingIdx = src.indexOf('\n## ', routingIdx + 1);
+    assert.ok(nextHeadingIdx !== -1, `${label}: a heading follows Model routing`);
+    const outsideRouting = src.slice(0, routingIdx) + src.slice(nextHeadingIdx);
+    assert.ok(!outsideRouting.includes(FABLE), `${label}: no ${FABLE} outside Model routing`);
+    assert.ok(!outsideRouting.includes(OPUS), `${label}: no ${OPUS} outside Model routing`);
   }
 });
 
