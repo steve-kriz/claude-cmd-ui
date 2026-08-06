@@ -17,6 +17,10 @@ Two pieces work together:
   keys, this agent calls the Jira REST API directly using the token from
   `.env` and creates one equivalent local ticket per referenced issue.
 
+![The Team tab's Agents panel listing the jira-ba agent alongside the other orchestrate subagents, and the Integrations panel showing "Re-sign in with Atlassian" and "✓ Connected to officehq."](../images/jira-ba-agent.png)
+
+*The Team tab — the `jira-ba` agent in the Agents panel, and "Sign in with Atlassian" in the Integrations panel below it.*
+
 ## How it works
 
 ### Sign-in flow (`lib/atlassian-oauth.js`, `lib/atlassian.js`)

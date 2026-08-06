@@ -1153,5 +1153,10 @@
     "ts": "2026-08-06T23:04:03.092Z",
     "source": "user",
     "prompt": "update documentation to explain about the atlassian ba and loggingin into the atlasian account, how to setup the app"
+  },
+  {
+    "ts": "2026-08-06T23:09:18.273Z",
+    "source": "user",
+    "prompt": "add the jira screenshot to the jira integration readme"
   }
 ]
