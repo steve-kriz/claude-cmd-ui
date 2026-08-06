@@ -211,12 +211,12 @@ test('AC: index.html ships no teamWorkflow* markup at all', () => {
   assert.equal(htmlSrc.includes('teamWorkflow'), false, 'index.html has no teamWorkflow* class or id anywhere');
 });
 
-test('AC: the generic team-section-toggle wiring convention is untouched by name (Agents/Board still use it)', () => {
+test('AC: the generic team-section-toggle wiring convention is untouched by name (Agents/Integrations/Board still use it)', () => {
   // Removing the Workflow section must not have broken the shared class hook
-  // the Agents/Board section headers use for their own toggle buttons.
+  // the Agents/Integrations/Board section headers use for their own toggle buttons.
   const vStart = htmlSrc.indexOf('data-view="team"');
   const vClose = htmlSrc.indexOf('</template>', vStart);
   const panel = htmlSrc.slice(vStart, vClose);
   const toggles = panel.match(/class="team-section-toggle"/g) || [];
-  assert.equal(toggles.length, 2, 'exactly two team-section-toggle buttons remain (Agents + Board)');
+  assert.equal(toggles.length, 3, 'exactly three team-section-toggle buttons remain (Agents + Integrations + Board)');
 });

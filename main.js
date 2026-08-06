@@ -13,6 +13,7 @@ const aws = require('./lib/aws');
 const cloudLogs = require('./lib/cloud-logs');
 const slack = require('./lib/slack');
 const slackOAuth = require('./lib/slack-oauth');
+const atlassianOAuth = require('./lib/atlassian-oauth');
 const slackSummarize = require('./lib/slack-summarize');
 const agentRegenerate = require('./lib/agent-regenerate');
 const skillRegenerate = require('./lib/skill-regenerate');
@@ -2162,7 +2163,7 @@ const SLACK_SUMMARIZE_MAX_INPUT_CHARS = 12000;
 // Summarize already-cleaned+redacted auto-post output with a fast Claude model
 // (TASK-073). The renderer's two auto-post paths call this with text that has
 // already passed through humanizeSlackOutput + redactSecrets; we read the
-// ANTHROPIC_API_KEY from the .env store (never logged, never returned) and hand
+// LOG_REDACTING_ANTHROPIC_KEY from the .env store (never logged, never returned) and hand
 // the text to the Electron-free summarizer with redactSecrets injected as a
 // defense-in-depth redact-before-send pass. Any failure (no key, disabled,
 // non-200, timeout, malformed) falls back to returning the INPUT text unchanged
@@ -2177,7 +2178,7 @@ ipcMain.handle('slack:summarize', async (_evt, { text, enabled } = {}) => {
     ? raw.slice(-SLACK_SUMMARIZE_MAX_INPUT_CHARS)
     : raw;
   try {
-    const apiKey = (envStore.get('ANTHROPIC_API_KEY') || '').trim();
+    const apiKey = (envStore.get('LOG_REDACTING_ANTHROPIC_KEY') || '').trim();
     const res = await slackSummarize.summarizeForSlack(input, {
       apiKey,
       enabled: !!enabled,
@@ -2202,7 +2203,7 @@ const AGENT_REGEN_MAX_CONTENT_CHARS = 60000;
 const AGENT_REGEN_MAX_INSTRUCTION_CHARS = 4000;
 
 // Regenerate an agent-definition file from its current text plus a user
-// instruction (TASK-130). Reads ANTHROPIC_API_KEY from the .env store (never
+// instruction (TASK-130). Reads LOG_REDACTING_ANTHROPIC_KEY from the .env store (never
 // logged, never returned), clamps both inputs, and delegates to the Electron-
 // free lib module, which never throws and returns a structured { ok, content,
 // reason }. This handler likewise never throws into the renderer and never
@@ -2218,7 +2219,7 @@ ipcMain.handle('agents:regenerate', async (_evt, { content, instruction } = {}) 
     ? rawInstruction.slice(0, AGENT_REGEN_MAX_INSTRUCTION_CHARS)
     : rawInstruction;
   try {
-    const apiKey = (envStore.get('ANTHROPIC_API_KEY') || '').trim();
+    const apiKey = (envStore.get('LOG_REDACTING_ANTHROPIC_KEY') || '').trim();
     const res = await agentRegenerate.regenerateAgentFile({
       apiKey,
       content: clampedContent,
@@ -2241,7 +2242,7 @@ const SKILL_REGEN_MAX_INSTRUCTION_CHARS = 4000;
 
 // Regenerate ONE phase-section's prose body of the orchestrate SKILL.md from
 // its current text plus a user instruction (TASK-184). Reads
-// ANTHROPIC_API_KEY from the .env store (never logged, never returned),
+// LOG_REDACTING_ANTHROPIC_KEY from the .env store (never logged, never returned),
 // clamps both inputs, and delegates to the Electron-free lib module, which
 // never throws and returns a structured { ok, content, reason }. This handler
 // likewise never throws into the renderer and never returns the key. The
@@ -2258,7 +2259,7 @@ ipcMain.handle('skill:regeneratePhase', async (_evt, { content, instruction } = 
     ? rawInstruction.slice(0, SKILL_REGEN_MAX_INSTRUCTION_CHARS)
     : rawInstruction;
   try {
-    const apiKey = (envStore.get('ANTHROPIC_API_KEY') || '').trim();
+    const apiKey = (envStore.get('LOG_REDACTING_ANTHROPIC_KEY') || '').trim();
     const res = await skillRegenerate.regeneratePhaseSection({
       apiKey,
       content: clampedContent,
@@ -2283,7 +2284,7 @@ const COLUMN_REGEN_MAX_CONTEXT_CHARS = 500;
 
 // Draft/rewrite one Board column's "instructions" text from its current text
 // (possibly empty) plus label/description/agent context and a user
-// instruction. Reads ANTHROPIC_API_KEY from the .env store (never logged,
+// instruction. Reads LOG_REDACTING_ANTHROPIC_KEY from the .env store (never logged,
 // never returned), clamps all inputs, and delegates to the Electron-free lib
 // module, which never throws and returns a structured { ok, content, reason }.
 // This handler likewise never throws into the renderer and never returns the
@@ -2302,7 +2303,7 @@ ipcMain.handle('team:regenerateColumnInstructions', async (_evt, {
   const clampedAgent = clamp(agent, COLUMN_REGEN_MAX_CONTEXT_CHARS);
   const clampedInstruction = clamp(instruction, COLUMN_REGEN_MAX_INSTRUCTION_CHARS);
   try {
-    const apiKey = (envStore.get('ANTHROPIC_API_KEY') || '').trim();
+    const apiKey = (envStore.get('LOG_REDACTING_ANTHROPIC_KEY') || '').trim();
     const res = await teamColumnRegenerate.regenerateColumnInstructions({
       apiKey,
       instructions: clampedInstructions,
@@ -2369,6 +2370,56 @@ ipcMain.handle('slack:startOAuth', async () => {
   slackOAuthInflight = run;
   try { return await run; }
   finally { slackOAuthInflight = null; }
+});
+
+// ── Atlassian "Sign in with Atlassian" OAuth 2.0 (3LO) ──────────────────────
+// Powers the Team tab's Jira integration: the jira-ba agent reads
+// ATLASSIAN_ACCESS_TOKEN / ATLASSIAN_CLOUD_ID (written below) to call the Jira
+// REST API directly at dispatch time. This handler only obtains and persists
+// those values; it never calls the Jira API itself. Same shell pattern as
+// slack:startOAuth above — the orchestration lives in the Electron-free
+// lib/atlassian-oauth.js.
+
+let atlassianOAuthInflight = null;
+
+ipcMain.handle('atlassian:startOAuth', async () => {
+  const clientId = (envStore.get('ATLASSIAN_CLIENT_ID') || '').trim();
+  const clientSecret = (envStore.get('ATLASSIAN_CLIENT_SECRET') || '').trim();
+  if (!clientId || !clientSecret) {
+    return {
+      ok: false,
+      needsCredentials: true,
+      error: 'ATLASSIAN_CLIENT_ID and ATLASSIAN_CLIENT_SECRET must be set before signing in with Atlassian.'
+    };
+  }
+  if (atlassianOAuthInflight) {
+    return { ok: false, error: 'An Atlassian sign-in is already in progress. Finish or close the browser tab first.' };
+  }
+  const run = atlassianOAuth.runOAuth({
+    clientId,
+    clientSecret,
+    openBrowser: (url) => shell.openExternal(url),
+    onStarted: ({ redirectUri, authorizeUrl }) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('atlassian:oauthStarted', { redirectUri, authorizeUrl });
+      }
+    }
+  });
+  atlassianOAuthInflight = run;
+  try { return await run; }
+  finally { atlassianOAuthInflight = null; }
+});
+
+// Status only — never returns the raw token to the renderer. Used by the Team
+// tab to show "Connected to <site>" vs. the sign-in button on refresh/activation.
+ipcMain.handle('atlassian:getStatus', async () => {
+  const connected = !!(envStore.get('ATLASSIAN_ACCESS_TOKEN') || '').trim();
+  return {
+    ok: true,
+    connected,
+    siteUrl: connected ? envStore.get('ATLASSIAN_SITE_URL') || null : null,
+    siteName: connected ? envStore.get('ATLASSIAN_SITE_NAME') || null : null
+  };
 });
 
 // Aborts whichever operation produced the current conflicted state.

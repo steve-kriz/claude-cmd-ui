@@ -339,8 +339,8 @@ test('main.js: declares content + instruction input clamps (defense in depth)', 
   assert.ok(iClamp < iCall, 'the clamp runs before regenerateAgentFile');
 });
 
-test('main.js: reads ANTHROPIC_API_KEY from the env store and delegates to the lib', () => {
-  assert.match(mainSrc, /envStore\.get\(\s*['"]ANTHROPIC_API_KEY['"]\s*\)/, 'reads the key from the env store');
+test('main.js: reads LOG_REDACTING_ANTHROPIC_KEY from the env store and delegates to the lib', () => {
+  assert.match(mainSrc, /envStore\.get\(\s*['"]LOG_REDACTING_ANTHROPIC_KEY['"]\s*\)/, 'reads the key from the env store');
   assert.match(mainSrc, /regenerateAgentFile\(/, 'delegates to the lib module');
 });
 

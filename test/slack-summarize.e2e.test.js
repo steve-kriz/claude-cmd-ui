@@ -238,7 +238,7 @@ test('Scenario: secrets are redacted before the text leaves the process (securit
 
 // ===========================================================================
 // Scenario: No API key falls back to the cleaned output (edge).
-//   Given no ANTHROPIC_API_KEY is configured
+//   Given no LOG_REDACTING_ANTHROPIC_KEY is configured
 //   When the flush runs
 //   Then no API call is made and the TASK-071 cleaned+redacted output is posted.
 // ===========================================================================

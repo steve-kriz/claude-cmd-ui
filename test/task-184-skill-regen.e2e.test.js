@@ -6,7 +6,7 @@
 // This file tests the IPC wiring in main.js (ipcMain.handle('skill:regeneratePhase'))
 // and preload.js (window.api.skill.regeneratePhase). The PURE logic is tested in
 // lib/skill-section.js and lib/skill-regenerate.js unit tests; this file verifies:
-//   - The IPC handler reads envStore for ANTHROPIC_API_KEY (never returns it)
+//   - The IPC handler reads envStore for LOG_REDACTING_ANTHROPIC_KEY (never returns it)
 //   - It clamps content to 20000 chars and instruction to 4000 chars
 //   - It degrades thrown errors to { ok: false, content: '', reason: 'error' }
 //   - The preload.js invocation shape matches window.api.agents.regenerate
@@ -140,7 +140,7 @@ test('Scenario: extract a phase body', async () => {
   const handler = loadSkillRegenerateHandler(mockStore, mockRegenerate);
 
   // Setup: API key is present
-  mockStore.set('ANTHROPIC_API_KEY', 'sk-test-key');
+  mockStore.set('LOG_REDACTING_ANTHROPIC_KEY', 'sk-test-key');
 
   // When: skill regeneration is invoked
   const result = await handler(null, {
@@ -161,7 +161,7 @@ test('Scenario: replace only the target section', async () => {
   // This scenario is tested in lib/skill-section.js unit tests
   // Here we verify the IPC wiring passes through correctly
   const mockStore = new MockEnvStore();
-  mockStore.set('ANTHROPIC_API_KEY', 'sk-test-key');
+  mockStore.set('LOG_REDACTING_ANTHROPIC_KEY', 'sk-test-key');
 
   const mockRegenerate = realSkillRegenerateWithHttp(mockHttpRequestSuccess('new review prose'));
   const handler = loadSkillRegenerateHandler(mockStore, mockRegenerate);
@@ -180,7 +180,7 @@ test('Scenario: identical replacement is byte-stable', async () => {
   // This tests that skill-section.js's replacePhaseBody is byte-stable
   // The IPC wiring just passes through
   const mockStore = new MockEnvStore();
-  mockStore.set('ANTHROPIC_API_KEY', 'sk-test-key');
+  mockStore.set('LOG_REDACTING_ANTHROPIC_KEY', 'sk-test-key');
 
   const mockRegenerate = realSkillRegenerateWithHttp(
     mockHttpRequestSuccess('exact same body')
@@ -200,7 +200,7 @@ test('Scenario: identical replacement is byte-stable', async () => {
 
 // Scenario: regenerate returns structured failure with no key (failure)
 test('Scenario: regenerate returns structured failure with no key (failure)', async () => {
-  // Given: no ANTHROPIC_API_KEY is set
+  // Given: no LOG_REDACTING_ANTHROPIC_KEY is set
   const mockStore = new MockEnvStore();
   // Not setting the key at all
   const mockRegenerate = realSkillRegenerateWithHttp(mockHttpRequestSuccess('response'));
@@ -223,7 +223,7 @@ test('Scenario: missing phase heading (failure/edge)', async () => {
   // This scenario is for lib/skill-section.js's replacePhaseBody
   // The IPC wiring just passes through the result
   const mockStore = new MockEnvStore();
-  mockStore.set('ANTHROPIC_API_KEY', 'sk-test-key');
+  mockStore.set('LOG_REDACTING_ANTHROPIC_KEY', 'sk-test-key');
 
   // Create a regenerate mock that returns a structured failure
   const mockRegenerate = {
@@ -249,7 +249,7 @@ test('Scenario: key never leaves main (security)', async () => {
   // When: skill:regeneratePhase runs
   const mockStore = new MockEnvStore();
   const secretKey = 'sk-super-secret-key-12345';
-  mockStore.set('ANTHROPIC_API_KEY', secretKey);
+  mockStore.set('LOG_REDACTING_ANTHROPIC_KEY', secretKey);
 
   const mockRegenerate = realSkillRegenerateWithHttp(mockHttpRequestSuccess('response'));
   const handler = loadSkillRegenerateHandler(mockStore, mockRegenerate);
@@ -285,7 +285,7 @@ function extractSentInstruction(text) {
 
 test('IPC handler clamps content to 20000 chars before calling regeneratePhaseSection/httpRequest', async () => {
   const mockStore = new MockEnvStore();
-  mockStore.set('ANTHROPIC_API_KEY', 'sk-test-key');
+  mockStore.set('LOG_REDACTING_ANTHROPIC_KEY', 'sk-test-key');
 
   let capturedText = null;
   const captureHttp = async (opts) => {
@@ -318,7 +318,7 @@ test('IPC handler clamps content to 20000 chars before calling regeneratePhaseSe
 
 test('IPC handler clamps instruction to 4000 chars before calling regeneratePhaseSection/httpRequest', async () => {
   const mockStore = new MockEnvStore();
-  mockStore.set('ANTHROPIC_API_KEY', 'sk-test-key');
+  mockStore.set('LOG_REDACTING_ANTHROPIC_KEY', 'sk-test-key');
 
   let capturedText = null;
   const captureHttp = async (opts) => {
@@ -354,7 +354,7 @@ test('IPC handler clamps instruction to 4000 chars before calling regeneratePhas
 
 test('IPC handler degrades thrown errors to {ok:false, reason:"error"}', async () => {
   const mockStore = new MockEnvStore();
-  mockStore.set('ANTHROPIC_API_KEY', 'sk-test-key');
+  mockStore.set('LOG_REDACTING_ANTHROPIC_KEY', 'sk-test-key');
 
   // Create a regenerate mock that throws
   const mockRegenerate = {
@@ -393,7 +393,7 @@ test('Preload shape: window.api.skill.regeneratePhase is an async function', asy
 
   // We simulate this here by verifying the IPC handler is callable
   const mockStore = new MockEnvStore();
-  mockStore.set('ANTHROPIC_API_KEY', 'sk-test-key');
+  mockStore.set('LOG_REDACTING_ANTHROPIC_KEY', 'sk-test-key');
   const mockRegenerate = realSkillRegenerateWithHttp(mockHttpRequestSuccess('response'));
   const handler = loadSkillRegenerateHandler(mockStore, mockRegenerate);
 
@@ -431,7 +431,7 @@ test('agents:regenerate behavior is unaffected by new skill:regeneratePhase hand
 
 test('All scenarios use mocked httpRequest — no real Anthropic API calls', async () => {
   const mockStore = new MockEnvStore();
-  mockStore.set('ANTHROPIC_API_KEY', 'sk-test-key');
+  mockStore.set('LOG_REDACTING_ANTHROPIC_KEY', 'sk-test-key');
 
   let httpWasCalled = false;
   const trackingHttp = async (opts) => {

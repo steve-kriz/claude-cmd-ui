@@ -2521,6 +2521,38 @@ body {
 }
 .slack-signin-btn:hover { background: #611f64; }
 
+/* Team tab · Integrations — "Sign in with Atlassian" row. */
+.team-integration-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.team-integration-label {
+  font-size: 12px;
+  color: #ccc;
+  min-width: 110px;
+}
+.team-integration-error {
+  font-size: 12px;
+  color: #f5a3a3;
+  margin-top: 6px;
+}
+.atlassian-signin-status {
+  font-size: 12px;
+  color: #bbb;
+}
+.atlassian-signin-status.ok { color: #7ec699; }
+.atlassian-signin-status.error { color: #f5a3a3; }
+
+/* Atlassian blue, matching the Slack sign-in button's brand-color treatment. */
+.atlassian-signin-btn {
+  background: #0052cc;
+  color: #fff;
+  border-color: #0747a6;
+}
+.atlassian-signin-btn:hover { background: #0747a6; }
+
 .slack-chat {
   flex: 1 1 auto;
   min-height: 0;

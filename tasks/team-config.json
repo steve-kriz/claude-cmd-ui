@@ -13,7 +13,7 @@
       "status": "defining",
       "label": "Defining",
       "description": "",
-      "agent": "ba",
+      "agent": "jira-ba",
       "instructions": "Define the ticket: a precise Description, complete Acceptance Criteria, Cucumber Tests (Gherkin, at least one failure/edge scenario), explicit edge/failure cases, and the relevant files/context — all inside the ticket body. Never touch the user-owned Additional Context. If the ticket is already defined (real Acceptance Criteria plus a non-empty gherkin block), pass it through unchanged without redefining. Raise any clarifying question on the ticket's question field.",
       "system": true
     },

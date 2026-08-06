@@ -29,6 +29,7 @@ Refresh (it resets only on app restart).
 | Section | What it edits | Backing store | Detailed docs |
 |---------|---------------|---------------|---------------|
 | **Agents** | Subagent definitions — list, edit the full file (description/tools/model/body), **Regenerate with AI**, and **Add agent** | `.claude/agents/*.md` (+ mirrored `assets/agents/*.md`) | [agent-management.md](agent-management.md) |
+| **Integrations** | **Sign in with Atlassian** — OAuth sign-in powering the `jira-ba` agent's Jira ticket import | `.env` (`ATLASSIAN_*`) | [jira-integration.md](jira-integration.md) |
 | **Workflow** | Read-only phase pipeline + per-phase agent **model** editor + per-phase **enable/reorder** + build-**concurrency** default + **context optimisation** control + guided **"Regenerate this phase's instructions"** AI action | `.claude/skills/orchestrate/SKILL.md` (read only, except the one guided AI-regenerate Save), agent files, `tasks/team-config.json` | [workflow-settings.md](workflow-settings.md) |
 | **Board** | The board columns/statuses — add, edit label/description/agent/**phase link**, reorder, remove | `tasks/team-config.json` | [dynamic-statuses.md](dynamic-statuses.md) |
 
@@ -52,7 +53,7 @@ see [dynamic-statuses.md](dynamic-statuses.md).)
    - **Agents** → **Add agent** to create a new subagent, or **Edit** on a card
      to change its description, tools, model or body (name is read-only). In the
      editor, **Regenerate with AI** proposes a rewritten file from a plain-English
-     instruction (requires `ANTHROPIC_API_KEY`); the result is a preview you must
+     instruction (requires `LOG_REDACTING_ANTHROPIC_KEY`); the result is a preview you must
      **Save** to apply.
    - **Workflow** → review the pipeline, **Edit** a phase's agent model, toggle a
      phase **Enabled**/reorder it, set the **Build concurrency default**, adjust

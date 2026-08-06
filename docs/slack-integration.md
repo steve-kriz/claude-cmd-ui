@@ -360,7 +360,7 @@ variable:
 | `SLACK_TOKEN` | Bot token (`xoxb-…`) or user token (`xoxp-…` written by OAuth). Read by `aws.getSlackToken` (`lib/aws.js:358-378`); an `xapp-…` value here is treated as the app token. Required to connect. |
 | `SLACK_APP_TOKEN` | App-level token (`xapp-…`, scope `connections:write`) enabling Socket Mode; optional — without it the tab polls. |
 | `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` | OAuth app credentials, required only for "Sign in with Slack" (`slack:startOAuth` refuses with `needsCredentials: true` when either is missing — `main.js:1682-1691`). |
-| `ANTHROPIC_API_KEY` | Optional. Enables AI summarization of auto-posted output (TASK-073) when the per-folder *"Summarize output with AI"* toggle is on. Read only in the main process by the `slack:summarize` handler and sent to Anthropic solely as the `x-api-key` header — it is **never logged, never posted to Slack, and never written to a ticket file**. With no key set, summarization silently falls back to TASK-071's cleaned+redacted output. |
+| `LOG_REDACTING_ANTHROPIC_KEY` | Optional. Enables AI summarization of auto-posted output (TASK-073) when the per-folder *"Summarize output with AI"* toggle is on. Read only in the main process by the `slack:summarize` handler and sent to Anthropic solely as the `x-api-key` header — it is **never logged, never posted to Slack, and never written to a ticket file**. With no key set, summarization silently falls back to TASK-071's cleaned+redacted output. |
 
 The Slack IPC surface these features build on (`preload.js` `window.api.slack.*`,
 handled in `main.js`): `getToken`, `connect`, `fetch`, `fetchReplies`, `post`,

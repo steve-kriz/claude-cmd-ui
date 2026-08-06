@@ -728,5 +728,430 @@
     "ts": "2026-08-03T11:36:59.555Z",
     "source": "user",
     "prompt": "add generate with AI to update the instruction, add an edit button to update agent and instruction"
+  },
+  {
+    "ts": "2026-08-06T00:56:26.033Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:03:28.606Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:04:47.874Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:05:02.872Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:05:36.872Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:06:10.873Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:06:42.873Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:06:52.870Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:07:21.876Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:07:34.866Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:08:12.871Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:08:27.870Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:08:40.874Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:08:48.866Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:08:58.864Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:09:09.874Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:09:18.867Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:09:46.875Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:09:54.878Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:10:06.877Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:10:17.866Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:10:27.870Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:10:40.873Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:11:02.062Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:11:09.875Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:11:29.866Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:11:37.873Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:11:49.864Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:11:57.867Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:12:07.875Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:12:18.863Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:12:26.878Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:12:35.865Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:12:44.863Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:12:54.865Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:13:03.868Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:13:11.870Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:13:20.867Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:13:30.865Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:13:43.870Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:13:52.877Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:14:01.875Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:14:10.868Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:14:19.867Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:14:27.875Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:14:38.872Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:14:47.864Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:14:56.873Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:15:05.883Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:15:15.874Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:15:24.874Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:15:33.863Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:15:42.875Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:15:52.869Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:16:03.863Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:16:13.874Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:16:22.868Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:16:32.864Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:16:42.873Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:16:53.865Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:17:03.863Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:17:15.874Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:17:25.863Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:17:35.861Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:19:11.874Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:19:20.864Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:19:33.863Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:19:41.863Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:19:48.867Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:19:59.868Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:20:08.866Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:20:16.861Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:20:23.862Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:20:30.871Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:20:37.866Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:20:47.863Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T01:20:55.870Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T02:46:31.573Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T02:49:07.634Z",
+    "source": "user",
+    "prompt": "change the agents to include a jira-ba agent that will look up atlasian jira and pull down the tickets referenced. using the new task as a reference to which tickets to pull down and create as tasks in this  icket createdickets add a login to atlassin button in the team setup that allows user to login and save the token in env so that will work."
+  },
+  {
+    "ts": "2026-08-06T03:07:16.872Z",
+    "source": "queue",
+    "prompt": "change the anthropic key to be LOG_REDACTING_ANTHROPIC_KEY and explain that this key is only used to redact the claude log"
+  },
+  {
+    "ts": "2026-08-06T22:44:20.665Z",
+    "source": "user",
+    "prompt": "getting error signing in with atlasian Hmm... We're having trouble logging you in.\nThe app's callback URL is invalid. Contact the app developer to fix the redirect URL in the app's settings.\n98168b01-3b54-4506-b29c-8d788c591112"
+  },
+  {
+    "ts": "2026-08-06T22:55:53.336Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T23:00:03.522Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T23:00:55.617Z",
+    "source": "queue",
+    "prompt": "/orchestrate build --concurrency 5"
+  },
+  {
+    "ts": "2026-08-06T23:04:03.092Z",
+    "source": "user",
+    "prompt": "update documentation to explain about the atlassian ba and loggingin into the atlasian account, how to setup the app"
   }
 ]

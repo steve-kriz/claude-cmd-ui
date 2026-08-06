@@ -193,7 +193,7 @@ function cleanup(root) {
 //   Then only the Agents and Board sections are shown
 //   And no element with the Workflow panel body exists
 // ===========================================================================
-test('Scenario: the Team tab has no Workflow panel — only Agents and Board sections are shown', () => {
+test('Scenario: the Team tab has no Workflow panel — only Agents, Integrations and Board sections are shown', () => {
   // Given the Team tab markup in renderer/index.html
   const vStart = htmlSrc.indexOf('data-view="team"');
   assert.notEqual(vStart, -1, 'the Team tab-view exists');
@@ -202,11 +202,12 @@ test('Scenario: the Team tab has no Workflow panel — only Agents and Board sec
   const panel = htmlSrc.slice(vStart, vClose);
 
   // When the user opens the Team tab (its static markup is what renders)
-  // Then only the Agents and Board sections are shown ...
+  // Then only the Agents, Integrations and Board sections are shown ...
   assert.match(panel, /class="teamAgentsSection[^"]*"/, 'the Agents section exists');
+  assert.match(panel, /class="teamIntegrationsSection[^"]*"/, 'the Integrations section exists');
   assert.match(panel, /class="teamBoardSection[^"]*"/, 'the Board section exists');
   const sectionCount = (panel.match(/team-section"/g) || []).length;
-  assert.equal(sectionCount, 2, 'exactly two team-section blocks render (Agents + Board)');
+  assert.equal(sectionCount, 3, 'exactly three team-section blocks render (Agents + Integrations + Board)');
 
   // ... and no element with the Workflow panel body — or any Workflow element —
   // exists anywhere in the Team panel.

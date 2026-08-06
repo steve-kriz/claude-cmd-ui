@@ -129,7 +129,7 @@ contextBridge.exposeInMainWorld('api', {
     post: (token, channel, text, threadTs) => ipcRenderer.invoke('slack:post', { token, channel, text, threadTs }),
     // TASK-073: request an LLM summary of already-cleaned+redacted auto-post
     // text. `enabled` reflects the per-folder summarization toggle; main reads
-    // the ANTHROPIC_API_KEY and falls back to the input text when unavailable.
+    // the LOG_REDACTING_ANTHROPIC_KEY and falls back to the input text when unavailable.
     summarize: (text, enabled) => ipcRenderer.invoke('slack:summarize', { text, enabled }),
     openSocket: (appToken) => ipcRenderer.invoke('slack:openSocket', { appToken }),
     startOAuth: () => ipcRenderer.invoke('slack:startOAuth'),
@@ -145,10 +145,20 @@ contextBridge.exposeInMainWorld('api', {
     set: (key, value) => ipcRenderer.invoke('env:set', { key, value })
   },
 
+  atlassian: {
+    startOAuth: () => ipcRenderer.invoke('atlassian:startOAuth'),
+    getStatus: () => ipcRenderer.invoke('atlassian:getStatus'),
+    onOAuthStarted: (cb) => {
+      const listener = (_e, payload) => cb(payload);
+      ipcRenderer.on('atlassian:oauthStarted', listener);
+      return () => ipcRenderer.removeListener('atlassian:oauthStarted', listener);
+    }
+  },
+
   agents: {
     // TASK-130: ask the main process to regenerate an agent-definition file from
     // its current text plus a natural-language instruction. Main reads
-    // ANTHROPIC_API_KEY (never returned) and clamps the inputs; the returned
+    // LOG_REDACTING_ANTHROPIC_KEY (never returned) and clamps the inputs; the returned
     // { ok, content, reason } is parsed + validated by the renderer before any
     // write, and only persisted when the user clicks Save.
     regenerate: (content, instruction) => ipcRenderer.invoke('agents:regenerate', { content, instruction })
@@ -157,7 +167,7 @@ contextBridge.exposeInMainWorld('api', {
   skill: {
     // TASK-184: ask the main process to regenerate ONE phase-section's prose
     // body of the orchestrate SKILL.md from its current text plus a
-    // natural-language instruction. Main reads ANTHROPIC_API_KEY (never
+    // natural-language instruction. Main reads LOG_REDACTING_ANTHROPIC_KEY (never
     // returned) and clamps the inputs; the returned { ok, content, reason } is
     // validated by the renderer (TASK-185) and only spliced back into
     // SKILL.md + written (scoped to that one phase's section, via
@@ -169,7 +179,7 @@ contextBridge.exposeInMainWorld('api', {
     // Ask the main process to draft/rewrite one Board column's "instructions"
     // text from its current text (may be empty) plus label/description/agent
     // context and a natural-language instruction. Main reads
-    // ANTHROPIC_API_KEY (never returned) and clamps the inputs; the returned
+    // LOG_REDACTING_ANTHROPIC_KEY (never returned) and clamps the inputs; the returned
     // { ok, content, reason } is previewed by the renderer in the
     // instructions textarea and only persisted via the normal Board Save.
     regenerateColumnInstructions: (payload) => ipcRenderer.invoke('team:regenerateColumnInstructions', payload)

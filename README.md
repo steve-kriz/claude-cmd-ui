@@ -89,6 +89,9 @@ usage, and API/IPC references.
   secret redaction / mention defang on everything the app posts.
 - **[Tasks board & the Orchestrate workflow](docs/orchestrate-workflow.md)** —
   the ticket-driven kanban board and its multi-agent build swarm.
+- **[Jira integration](docs/jira-integration.md)** — **Sign in with Atlassian**
+  OAuth (Team tab → Integrations) plus the `jira-ba` agent, which pulls a Jira
+  issue referenced on a ticket and turns it into an equivalent local ticket.
 - **[Ticket archiving](docs/ticket-archiving.md)** — stale done tickets (last
   activity > 5 days old) fold into a collapsible "Archived (N)" expander at the
   bottom of the Done lane (derived, no file move, no new status).
@@ -132,9 +135,11 @@ usage, and API/IPC references.
   drives all interaction; `styles.css` themes it.
 - **[`lib/`](lib)** — Electron-free main-process helpers: `pty.js` (PTY spawn +
   CLI auto-launch), `aws.js` (SSO), `slack.js` / `slack-oauth.js` /
-  `slack-proxy.js` (Slack), `env-store.js` (`.env`), `cloud-logs.js` (cloud
-  sync), `markdown.js` (preview renderer), `keep-awake.js` (wake-lock decision),
-  `orchestrate-agents.js`, and the `ticket-*.js` board helpers.
+  `slack-proxy.js` (Slack), `atlassian.js` / `atlassian-oauth.js` (Jira OAuth,
+  see [docs/jira-integration.md](docs/jira-integration.md)), `env-store.js`
+  (`.env`), `cloud-logs.js` (cloud sync), `markdown.js` (preview renderer),
+  `keep-awake.js` (wake-lock decision), `orchestrate-agents.js`, and the
+  `ticket-*.js` board helpers.
 - **[`.claude/skills/orchestrate/`](.claude/skills/orchestrate/SKILL.md) +
   `.claude/agents/`** — the orchestrate skill and the subagent definitions.
 - **[`lambda/prompt-logs/`](lambda/prompt-logs/index.mjs)** — an optional AWS
@@ -222,6 +227,7 @@ variables:
 | `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` | (none) | OAuth app credentials for **Sign in with Slack** |
 | `CLOUD_LOG_ENDPOINT` | (unset → disabled) | Prompt-logs Lambda URL for cloud sync |
 | `CLOUD_LOG_API_KEY` / `CLOUD_LOG_USERNAME` | (none / OS user) | Cloud-sync secret and username tag |
+| `ATLASSIAN_CLIENT_ID` / `ATLASSIAN_CLIENT_SECRET` | (none) | OAuth app credentials for **Sign in with Atlassian** (Jira import, see [docs/jira-integration.md](docs/jira-integration.md)) |
 
 State that is not in `.env` lives as JSON in Electron's userData dir
 (`session.json`, `status.json`) — see [Data and files written](#data-and-files-written).
@@ -287,6 +293,14 @@ one ticket in its own isolated branch/worktree, the **tester** writes e2e cucumb
 + unit tests, and a **tech-lead** reviews before done. Drive it with
 `/orchestrate plan <feature>`, `/orchestrate build`, and `/orchestrate status`.
 
+Which agent a column dispatches is configurable per project
+(`tasks/team-config.json`). This project's **defining** column is set to the
+**`jira-ba`** agent instead of the generic business-analyst: when a ticket's
+title/description names a Jira issue key (e.g. `DEV-14449`), it fetches that
+issue from Jira (via **Sign in with Atlassian**, see below) and creates an
+equivalent local ticket rather than writing acceptance criteria/Gherkin — see
+[docs/jira-integration.md](docs/jira-integration.md).
+
 **Accounting.** Each ticket records how long its build took and what it cost — the
 board shows per-ticket **build time**, **cost**, and estimated **token** usage,
 and every re-run appends to a durable run log.
@@ -309,6 +323,10 @@ are in the linked pages below.
   in [`lib/agent-files.js`](lib/agent-files.js). Adding an agent does not change
   orchestrate dispatch (the phase→agent mapping is fixed). See
   [docs/agent-management.md](docs/agent-management.md).
+- **Integrations panel** — **Sign in with Atlassian**, an OAuth 2.0 (3LO) flow
+  (mirroring **Sign in with Slack**) that saves a Jira access token to `.env`
+  for the `jira-ba` agent, which imports a Jira issue referenced on a ticket as
+  an equivalent local ticket. See [docs/jira-integration.md](docs/jira-integration.md).
 - **Workflow panel** — a **read-only** view of the four ordered phases
   (plan → build → test → review) parsed from `SKILL.md`
   ([`lib/skill-workflow.js`](lib/skill-workflow.js)), with per-phase dispatched
@@ -393,6 +411,7 @@ The full per-feature documentation set lives in [`docs/`](docs):
 | [docs/orchestrate-workflow.md](docs/orchestrate-workflow.md) | Tasks board, ticket contract, build swarm |
 | [docs/team-tab.md](docs/team-tab.md) | The Team tab overview and its three panels |
 | [docs/agent-management.md](docs/agent-management.md) | Agents panel (list/edit descriptions) and Add agent |
+| [docs/jira-integration.md](docs/jira-integration.md) | Sign in with Atlassian (OAuth) and the `jira-ba` Jira-import agent |
 | [docs/workflow-settings.md](docs/workflow-settings.md) | Read-only workflow pipeline, per-phase model editor, build-concurrency default |
 | [docs/dynamic-statuses.md](docs/dynamic-statuses.md) | `team-config.json` engine, custom board columns, config-aware lanes/folders/summaries |
 | [docs/assets-mirror.md](docs/assets-mirror.md) | `.claude/` ↔ `assets/` mirror auto-sync on write |
@@ -456,7 +475,7 @@ claude-cmd-ui/
 ├── docs/                    # Per-feature documentation (this set)
 ├── .claude/
 │   ├── skills/orchestrate/  # The orchestrate skill (SKILL.md)
-│   └── agents/              # ba / coder / tester / tech-lead subagent definitions
+│   └── agents/              # ba / coder / tester / tech-lead / jira-ba subagent definitions
 ├── tasks/                   # Ticket files for the Tasks board (one subfolder per status)
 ├── lambda/
 │   └── prompt-logs/         # Optional CloudWatch-backed prompt log store
