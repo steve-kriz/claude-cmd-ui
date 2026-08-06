@@ -249,12 +249,12 @@ test('main.js: declares input clamps (defense in depth) and runs them before the
   assert.ok(iClamp < iCall, 'the clamp runs before regenerateColumnInstructions');
 });
 
-test('main.js: reads ANTHROPIC_API_KEY from the env store and delegates to the lib module', () => {
+test('main.js: reads LOG_REDACTING_ANTHROPIC_KEY from the env store and delegates to the lib module', () => {
   const start = mainSrc.indexOf("ipcMain.handle('team:regenerateColumnInstructions'");
   assert.ok(start !== -1);
   const end = mainSrc.indexOf('ipcMain.handle(', start + 10);
   const handler = mainSrc.slice(start, end === -1 ? mainSrc.length : end);
-  assert.match(handler, /envStore\.get\(\s*['"]ANTHROPIC_API_KEY['"]\s*\)/, 'reads the key from the env store');
+  assert.match(handler, /envStore\.get\(\s*['"]LOG_REDACTING_ANTHROPIC_KEY['"]\s*\)/, 'reads the key from the env store');
   assert.match(handler, /teamColumnRegenerate\.regenerateColumnInstructions\(/, 'delegates to the lib module');
   assert.match(handler, /return\s*\{\s*ok:\s*res\.ok,\s*content:\s*res\.content,\s*reason:\s*res\.reason/,
     'success return is exactly { ok, content, reason }');

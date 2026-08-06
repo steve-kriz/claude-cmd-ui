@@ -214,7 +214,7 @@ function makeWindow(opts) {
       },
       tasks: { async installSkill() { return { ok: true }; } },
       agents: { regenerate: agentRegenerateBridge },
-      env: { async get(k) { return { ok: true, value: k === 'ANTHROPIC_API_KEY' ? (o.apiKey || '') : '' }; } },
+      env: { async get(k) { return { ok: true, value: k === 'LOG_REDACTING_ANTHROPIC_KEY' ? (o.apiKey || '') : '' }; } },
     },
   };
   const noopConsole = { error() {}, warn() {}, log() {} };
@@ -507,7 +507,7 @@ test('Scenario: Successful regeneration previews the result without writing, the
   try {
     const primaryPath = seed(root, ['.claude', 'agents', 'ba.md'], REAL_BA);
     seed(root, ['assets', 'agents', 'ba.md'], REAL_BA);
-    // Given ANTHROPIC_API_KEY is configured and the API returns a valid file.
+    // Given LOG_REDACTING_ANTHROPIC_KEY is configured and the API returns a valid file.
     const { window, calls, document, console } = makeWindow({
       apiKey: 'sk-key', httpResponse: { status: 200, body: okBody(REGEN_OK) }
     });
@@ -564,7 +564,7 @@ test('Scenario: Missing API key is reported without hitting the API', async () =
   const root = makeProject();
   try {
     seed(root, ['.claude', 'agents', 'ba.md'], REAL_BA);
-    // Given ANTHROPIC_API_KEY is NOT set (apiKey '').
+    // Given LOG_REDACTING_ANTHROPIC_KEY is NOT set (apiKey '').
     const { window, calls, document, console } = makeWindow({ apiKey: '', httpResponse: { status: 200, body: okBody(REGEN_OK) } });
     const tab = makeTab(root);
     const ed = await openEditor(tab, window, document, console);
@@ -575,7 +575,7 @@ test('Scenario: Missing API key is reported without hitting the API', async () =
     // Then a message says the key must be configured and NO API request is sent.
     const msg = findByClass(ed.card, 'team-agent-ai-msg');
     assert.equal(msg.classList.contains('hidden'), false, 'inline AI message shown');
-    assert.match(msg.textContent, /ANTHROPIC_API_KEY/i, 'names the key requirement');
+    assert.match(msg.textContent, /LOG_REDACTING_ANTHROPIC_KEY/i, 'names the key requirement');
     assert.equal(calls.http.length, 0, 'no API request reached the network boundary (lib short-circuits on no-key)');
     assert.equal(calls.writeFile.length, 0, 'nothing written');
   } finally { cleanup(root); }

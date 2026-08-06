@@ -297,19 +297,24 @@ test('Scenario (edge): activating Team with NO folder shows "(open a folder)" ev
   // "Save" and "Refresh" header controls; TASK-144 added a per-section accordion
   // toggle button (".team-section-toggle") to EACH "team-section-header" block.
   // TASK-203 removed the Workflow section entirely (and its "Refresh" control with
-  // it), so the scaffold now ships exactly SIX header buttons: Agents Add +
-  // Refresh, Board Save + Refresh, and the two remaining accordion toggles.
-  assert.equal(buttons.length, 6, 'the scaffold ships exactly six header buttons (Agents Add/Refresh + Board Save/Refresh + 2 accordion toggles)');
+  // it). The Jira integration then added an Integrations section between Agents
+  // and Board with its own accordion toggle plus a "Sign in with Atlassian"
+  // button, so the scaffold now ships exactly EIGHT header/body buttons: Agents
+  // Add + Refresh, Board Save + Refresh, the three accordion toggles, and the
+  // Atlassian sign-in button.
+  assert.equal(buttons.length, 8, 'the scaffold ships exactly eight header/body buttons (Agents Add/Refresh + Board Save/Refresh + 3 accordion toggles + Atlassian sign-in)');
   assert.ok(buttons.some((b) => /class="teamAgentsAddBtn/.test(b)), 'ships the Agents "Add agent" control (TASK-095)');
   assert.ok(buttons.some((b) => /class="teamAgentsRefresh/.test(b)), 'ships the Agents "Refresh" control (TASK-094)');
   assert.ok(buttons.some((b) => /class="teamBoardSaveBtn/.test(b)), 'ships the Board "Save" control (TASK-103)');
   assert.ok(buttons.some((b) => /class="teamBoardRefresh/.test(b)), 'ships the Board "Refresh" control (TASK-103)');
+  assert.ok(buttons.some((b) => /class="teamAtlassianSignInBtn/.test(b)), 'ships the Integrations "Sign in with Atlassian" control');
   assert.ok(!buttons.some((b) => /class="teamWorkflowRefresh/.test(b)), 'the Workflow "Refresh" control no longer exists (TASK-203)');
-  // TASK-144: exactly 2 accordion toggle buttons ship now (one per surviving
-  // section), each expanded by default (aria-expanded="true") and typed to
-  // avoid form-submit side effects (type="button").
+  // TASK-144: one accordion toggle button per section ships, each expanded by
+  // default (aria-expanded="true") and typed to avoid form-submit side effects
+  // (type="button"). The Jira integration added a third section (Integrations),
+  // so this is now 3, not 2.
   const toggleButtons = buttons.filter((b) => /class="team-section-toggle"/.test(b));
-  assert.equal(toggleButtons.length, 2, 'ships exactly 2 accordion toggle buttons, one per surviving section (TASK-144/203)');
+  assert.equal(toggleButtons.length, 3, 'ships exactly 3 accordion toggle buttons, one per surviving section (TASK-144/203 + Integrations)');
   assert.ok(toggleButtons.every((b) => /type="button"/.test(b)), 'each accordion toggle is type="button" (TASK-144)');
   assert.ok(toggleButtons.every((b) => /aria-expanded="true"/.test(b)), 'each accordion toggle starts expanded (TASK-144)');
   // The Add-agent FORM lives in a separate #addAgentModal (not this panel), so the

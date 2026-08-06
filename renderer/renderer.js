@@ -253,7 +253,7 @@ function createTab() {
       botUserId: null,
       postReplies: true,
       // LLM summarization of auto-posted output (TASK-073). OFF by default:
-      // it is opt-in because it requires an ANTHROPIC_API_KEY and sends output
+      // it is opt-in because it requires an LOG_REDACTING_ANTHROPIC_KEY and sends output
       // to an external service. When off the auto-post paths behave exactly as
       // TASK-071 (mechanical cleanup + redaction only).
       summarize: false,
@@ -545,6 +545,9 @@ function createTab() {
       teamAgentsAddBtn: ws.querySelector('.teamAgentsAddBtn'),
       teamAgentsRefresh: ws.querySelector('.teamAgentsRefresh'),
       teamAgentsBody: ws.querySelector('.teamAgentsBody'),
+      teamAtlassianSignInBtn: ws.querySelector('.teamAtlassianSignInBtn'),
+      teamAtlassianStatus: ws.querySelector('.teamAtlassianStatus'),
+      teamAtlassianError: ws.querySelector('.teamAtlassianError'),
       teamBoardSection: ws.querySelector('.teamBoardSection'),
       teamBoardSaveBtn: ws.querySelector('.teamBoardSaveBtn'),
       teamBoardRefresh: ws.querySelector('.teamBoardRefresh'),
@@ -595,6 +598,9 @@ function createTab() {
   }
   if (tab.els.teamAgentsAddBtn) {
     tab.els.teamAgentsAddBtn.addEventListener('click', () => openAddAgentModal(tab));
+  }
+  if (tab.els.teamAtlassianSignInBtn) {
+    tab.els.teamAtlassianSignInBtn.addEventListener('click', () => signInWithAtlassian(tab));
   }
   if (tab.els.teamBoardRefresh) {
     tab.els.teamBoardRefresh.addEventListener('click', () => refreshTeamBoard(tab));
@@ -6424,7 +6430,7 @@ function buildTeamColumnRow(tab, col, idx) {
     if (!res || !res.ok) {
       const reason = res && res.reason;
       if (reason === 'no-key') {
-        showAiMsg('Set ANTHROPIC_API_KEY (Settings) to use AI generation — no request was sent.');
+        showAiMsg('Set LOG_REDACTING_ANTHROPIC_KEY (Settings) to use AI generation — no request was sent.');
       } else if (reason === 'empty-instruction') {
         showAiMsg('Enter an instruction describing what the instructions should say.');
       } else {
@@ -7391,8 +7397,113 @@ function initTeamTab(tab) {
   tab.els.teamStatus.textContent = '';
   // Agents panel (TASK-094) reads .claude/agents/ from disk each activation.
   refreshTeamAgents(tab);
+  // Integrations panel: whether "Sign in with Atlassian" has already produced a
+  // usable token. This is app-wide (the token lives in .env, not per-project),
+  // so it does not need `tab.folder` to answer — refreshed anyway on every
+  // activation so a sign-in done from another tab is picked up.
+  refreshTeamIntegrations(tab);
   // Board panel (TASK-103): column manager over tasks/team-config.json.
   refreshTeamBoard(tab);
+}
+
+// ── Team tab · Integrations (Jira/Atlassian sign-in) ────────────────────────
+// Mirrors the Slack "Sign in with Slack" flow (updateSlackTokenUI /
+// signInWithSlack below): ensure OAuth app credentials are set, run the OAuth
+// flow in the main process (opens the system browser, catches the loopback
+// redirect, exchanges the code, resolves the Jira site, saves
+// ATLASSIAN_ACCESS_TOKEN/ATLASSIAN_CLOUD_ID/… to .env), then reflect the
+// resulting connected/disconnected state. Unlike Slack, the renderer never
+// holds the raw token — only a connected/site-name status read via
+// atlassian:getStatus.
+
+async function refreshTeamIntegrations(tab) {
+  if (!tab.els.teamAtlassianStatus) return;
+  const guardTab = tab;
+  try {
+    const res = await window.api.atlassian.getStatus();
+    if (TABS.get(guardTab.id) !== guardTab) return; // stale guard (tab closed mid-await)
+    if (res && res.ok && res.connected) {
+      tab.els.teamAtlassianStatus.textContent = '✓ Connected' + (res.siteName ? ` to ${res.siteName}` : '') + '.';
+      tab.els.teamAtlassianStatus.className = 'teamAtlassianStatus atlassian-signin-status ok';
+      tab.els.teamAtlassianSignInBtn.textContent = 'Re-sign in with Atlassian';
+    } else {
+      tab.els.teamAtlassianStatus.textContent = '';
+      tab.els.teamAtlassianStatus.className = 'teamAtlassianStatus atlassian-signin-status';
+      tab.els.teamAtlassianSignInBtn.textContent = 'Sign in with Atlassian';
+    }
+  } catch (err) {
+    if (TABS.get(guardTab.id) !== guardTab) return;
+    tab.els.teamAtlassianStatus.textContent = '';
+    tab.els.teamAtlassianStatus.className = 'teamAtlassianStatus atlassian-signin-status';
+  }
+}
+
+// Prompt for (and persist) the Atlassian OAuth app's client credentials.
+// Mirrors ensureSlackClientCredentials. Returns null if the user cancels.
+async function ensureAtlassianClientCredentials() {
+  const id = await ensureSecret({
+    key: 'ATLASSIAN_CLIENT_ID',
+    title: 'Atlassian OAuth app Client ID',
+    description: 'From developer.atlassian.com/console/myapps → your app → Settings. Saved to .env and reused next time.',
+    placeholder: 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+  });
+  if (!id) return null;
+  const secret = await ensureSecret({
+    key: 'ATLASSIAN_CLIENT_SECRET',
+    title: 'Atlassian OAuth app Client Secret',
+    description: 'From developer.atlassian.com/console/myapps → your app → Settings. Saved to .env and reused next time.',
+    placeholder: '••••••••••••••••',
+    password: true
+  });
+  if (!secret) return null;
+  return { id, secret };
+}
+
+async function signInWithAtlassian(tab) {
+  if (!tab.els.teamAtlassianSignInBtn) return;
+  const setStatus = (text, cls) => {
+    tab.els.teamAtlassianStatus.textContent = text;
+    tab.els.teamAtlassianStatus.className = 'teamAtlassianStatus atlassian-signin-status' + (cls ? ' ' + cls : '');
+  };
+  if (tab.els.teamAtlassianError) tab.els.teamAtlassianError.textContent = '';
+
+  const creds = await ensureAtlassianClientCredentials();
+  if (!creds) {
+    setStatus('Atlassian sign-in needs both ATLASSIAN_CLIENT_ID and ATLASSIAN_CLIENT_SECRET.', 'error');
+    return;
+  }
+
+  const btn = tab.els.teamAtlassianSignInBtn;
+  const prevLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Signing in…';
+  setStatus('Opening your browser to sign in with Atlassian…', '');
+
+  const off = window.api.atlassian.onOAuthStarted(({ redirectUri }) => {
+    if (redirectUri) {
+      setStatus('Waiting for Atlassian in your browser… If it errors, register this redirect URL on your Atlassian OAuth app (Authorization → Callback URL): ' + redirectUri, '');
+    }
+  });
+
+  try {
+    const res = await window.api.atlassian.startOAuth();
+    if (!res || !res.ok || !res.token) {
+      const msg = (res && res.error) || 'Atlassian sign-in failed.';
+      setStatus(msg, 'error');
+      if (tab.els.teamAtlassianError) tab.els.teamAtlassianError.textContent = msg;
+      return;
+    }
+    setStatus('✓ Connected' + (res.siteName ? ` to ${res.siteName}` : '') + '.', 'ok');
+    btn.textContent = 'Re-sign in with Atlassian';
+  } catch (err) {
+    const msg = err.message || String(err);
+    setStatus(msg, 'error');
+    if (tab.els.teamAtlassianError) tab.els.teamAtlassianError.textContent = msg;
+  } finally {
+    if (off) off();
+    btn.disabled = false;
+    if (btn.textContent === 'Signing in…') btn.textContent = prevLabel;
+  }
 }
 
 // ── Stats tab · Usage & telemetry (TASK-147/155/156/157) ────────────────────
@@ -9154,7 +9265,7 @@ function buildAgentCard(tab, filePath, name, parsed) {
     if (!res || !res.ok) {
       const reason = res && res.reason;
       if (reason === 'no-key') {
-        showAiMsg('Set ANTHROPIC_API_KEY (Settings) to use AI regeneration — no request was sent.');
+        showAiMsg('Set LOG_REDACTING_ANTHROPIC_KEY (Settings) to use AI regeneration — no request was sent.');
       } else if (reason === 'empty-instruction') {
         showAiMsg('Enter an instruction describing how this agent should change.');
       } else {

@@ -119,7 +119,7 @@ parseable card). You type a natural-language instruction — e.g. "also allow th
 Bash tool and mention linting in the description" — and click **Regenerate with
 AI**. The current editor state (serialized via `serializeAgentEdits`) plus the
 instruction go to the new `agents:regenerate` IPC handler in `main.js`, which reads
-`ANTHROPIC_API_KEY` from the env store (**never** logged or returned), clamps both
+`LOG_REDACTING_ANTHROPIC_KEY` from the env store (**never** logged or returned), clamps both
 inputs (defense-in-depth, mirroring the Slack summarizer's cap), and delegates to
 the Electron-free [`lib/agent-regenerate.js`](../lib/agent-regenerate.js).
 
@@ -215,7 +215,7 @@ You are a specialized subagent.
   no-change save reproduces the file exactly.
 - **AI never writes:** a validated proposal is a preview only; Save runs the same
   validation + write path as a manual edit. Any AI failure preserves your edits.
-- **Secrets:** `ANTHROPIC_API_KEY` is read only in `main.js` and never logged or
+- **Secrets:** `LOG_REDACTING_ANTHROPIC_KEY` is read only in `main.js` and never logged or
   returned over IPC; the file text is size-clamped in main before the billed call.
 - **Duplicate/invalid name** → inline error, no write. The write-time existence
   check is the authoritative race guard; the in-memory name set is an early hint.

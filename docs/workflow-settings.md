@@ -186,7 +186,7 @@ discards the proposal with no write; the button reads **"Regenerating…"** and
 is disabled while a request is in flight; a stale-guard discards a response
 that arrives after the folder/tab changed or the card was torn down by a
 re-render; every failure path (empty instruction, missing
-`ANTHROPIC_API_KEY`, non-200/timeout/network/malformed/empty response, or an
+`LOG_REDACTING_ANTHROPIC_KEY`, non-200/timeout/network/malformed/empty response, or an
 invalid proposal) shows an inline message and writes nothing, preserving the
 typed instruction. All dynamic text uses `textContent`.
 
@@ -204,7 +204,7 @@ Backend (TASK-184, Electron-free, never throws):
   result.
 - The `skill:regeneratePhase` IPC handler in `main.js` (exposed to the
   renderer as `window.api.skill.regeneratePhase`) clamps inputs and reads
-  `ANTHROPIC_API_KEY` from the env store, delegating to the lib above.
+  `LOG_REDACTING_ANTHROPIC_KEY` from the env store, delegating to the lib above.
 
 Renderer (TASK-185, `buildWorkflowPhaseRegenerator`): the renderer is a browser
 script that cannot `require` Node modules, so `lib/skill-section.js`'s splice
