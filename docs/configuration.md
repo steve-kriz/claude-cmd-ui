@@ -44,6 +44,13 @@ SLACK_CLIENT_SECRET=...
 CLOUD_LOG_ENDPOINT=https://xxxx.lambda-url.ap-southeast-2.on.aws/
 CLOUD_LOG_API_KEY=...
 CLOUD_LOG_USERNAME=steve
+
+# Atlassian / Jira (see docs/jira-integration.md)
+ATLASSIAN_CLIENT_ID=...
+ATLASSIAN_CLIENT_SECRET=...
+# ATLASSIAN_ACCESS_TOKEN / ATLASSIAN_REFRESH_TOKEN / ATLASSIAN_CLOUD_ID /
+# ATLASSIAN_SITE_URL / ATLASSIAN_SITE_NAME are written automatically by
+# "Sign in with Atlassian" — you normally never edit these by hand.
 ```
 
 Read/write from the renderer or a Node one-off:
@@ -72,6 +79,11 @@ node -e "const e=require('./lib/env-store'); console.log(e.readAll())"
 | `CLOUD_LOG_ENDPOINT` | (unset → disabled) | Prompt-logs Lambda URL for cloud sync | [prompt-history](prompt-history.md) |
 | `CLOUD_LOG_API_KEY` | (none) | Optional shared secret sent as `X-Api-Key` | [prompt-history](prompt-history.md) |
 | `CLOUD_LOG_USERNAME` | OS username | Username tag for cloud log events | [prompt-history](prompt-history.md) |
+| `ATLASSIAN_CLIENT_ID` / `ATLASSIAN_CLIENT_SECRET` | (none) | OAuth 2.0 (3LO) app credentials for **Sign in with Atlassian** | [jira-integration](jira-integration.md) |
+| `ATLASSIAN_ACCESS_TOKEN` | (none) | Bearer token the `jira-ba` agent uses to call the Jira REST API (OAuth writes this) | [jira-integration](jira-integration.md) |
+| `ATLASSIAN_REFRESH_TOKEN` | (none) | Used to mint a new access token once the current one expires | [jira-integration](jira-integration.md) |
+| `ATLASSIAN_CLOUD_ID` | (none) | Resolved Jira site (cloud id); part of every Jira REST API URL | [jira-integration](jira-integration.md) |
+| `ATLASSIAN_SITE_URL` / `ATLASSIAN_SITE_NAME` | (none) | Shown in the Team tab as "Connected to `<site>`" | [jira-integration](jira-integration.md) |
 
 Lambda-side variables (`LOG_GROUP`, `AWS_REGION`, `API_KEY`) are documented in
 [prompt-history](prompt-history.md).
