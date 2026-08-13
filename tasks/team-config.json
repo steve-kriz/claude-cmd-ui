@@ -6,7 +6,7 @@
       "label": "To Do",
       "description": "",
       "agent": null,
-      "instructions": "Entry queue. New tickets wait here for /orchestrate build. No agent runs in this column.",
+      "instructions": "Entry queue — PASSIVE, no agent is dispatched here. New tickets land in To Do and wait for /orchestrate build to pick them up in board order. Leave the ticket body untouched: the Defining column's agent is the first to write to it.",
       "system": true
     },
     {
@@ -21,24 +21,24 @@
       "status": "in-progress",
       "label": "In Progress",
       "description": "",
-      "agent": "coder",
-      "instructions": "Implement the ticket to its Acceptance Criteria inside this ticket's isolated worktree/branch. Honour the Additional Context. Follow existing codebase conventions. Do not write tests beyond what compilation/wiring needs.",
+      "agent": "orchestrate-coder",
+      "instructions": "Implement the ticket to its Acceptance Criteria inside this ticket's isolated worktree/branch. Honour the Additional Context. Follow the conventions of the surrounding code rather than introducing a new style. Keep the change scoped to this ticket — no drive-by refactors of unrelated code. Do not write tests beyond what compilation/wiring needs; the Testing column owns tests. Report the files you changed and anything the tester should know.",
       "system": true
     },
     {
       "status": "testing",
       "label": "Testing",
       "description": "",
-      "agent": "tester",
-      "instructions": "Write BOTH e2e cucumber-style node --test scenarios AND unit tests covering every Acceptance Criterion including at least one failure/edge path. Mock all database calls. Run the full suite under node --test and report pass/fail with failure output. A red result returns the ticket for a fix, capped at 3 attempts.",
+      "agent": "orchestrate-tester",
+      "instructions": "Write BOTH e2e cucumber-style node --test scenarios AND unit tests covering every Acceptance Criterion including at least one failure/edge path. Mock all database calls — never open a real connection. Run the full suite under node --test and report pass/fail with the failure output verbatim. A red result returns the ticket for a fix, capped at 3 attempts.",
       "system": true
     },
     {
       "status": "pr-review",
       "label": "PR review",
-      "description": "",
-      "agent": null,
-      "instructions": "",
+      "description": "Tech-lead review of the finished implementation before it reaches Done.",
+      "agent": "orchestrate-tech-lead",
+      "instructions": "Review the finished implementation against the ticket before it reaches Done. Read BOTH the ticket and the code it produced. Verify the tests actually exercise the new code paths (not just that the suite is green), that every Acceptance Criterion is genuinely met, that security is addressed (input validation, authorisation, injection, secrets never logged or committed), and that error and edge paths behave. Report each finding with a severity. Issue a reject-and-rework verdict — sending the ticket back to Testing — ONLY for a critical or high-severity security or correctness finding that must be fixed before this ticket can proceed. Raise every lower-severity finding as its own follow-up To Do ticket carrying a review-of key naming the reviewed ticket, and leave the reviewed ticket's status and frontmatter untouched. Review only — never edit the code yourself.",
       "system": false
     },
     {
@@ -46,7 +46,7 @@
       "label": "Done",
       "description": "",
       "agent": null,
-      "instructions": "Terminal column. Completed tickets rest here.",
+      "instructions": "Terminal column — PASSIVE, no agent is dispatched here. A ticket that reaches Done is finished and is never re-dispatched, even when a review raised follow-up tickets (those are separate To Do tickets and travel the board on their own).",
       "system": true
     }
   ],

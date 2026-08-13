@@ -277,11 +277,33 @@ test('SYSTEM_COLUMN_DEFAULT_INSTRUCTIONS maps all six system slugs', () => {
 
 test('SYSTEM_COLUMN_DEFAULT_INSTRUCTIONS has expected canonical text', () => {
   const expected = {
-    todo: 'Entry queue. New tickets wait here for /orchestrate build. No agent runs in this column.',
-    done: 'Terminal column. Completed tickets rest here.',
+    todo: 'Entry queue — PASSIVE, no agent is dispatched here. New tickets land in To Do and wait for /orchestrate build to pick them up in board order. Leave the ticket body untouched: the Defining column\'s agent is the first to write to it.',
+    done: 'Terminal column — PASSIVE, no agent is dispatched here. A ticket that reaches Done is finished and is never re-dispatched, even when a review raised follow-up tickets (those are separate To Do tickets and travel the board on their own).',
   };
   for (const [slug, text] of Object.entries(expected)) {
     assert.equal(SYSTEM_COLUMN_DEFAULT_INSTRUCTIONS[slug], text, `${slug} instruction text matches`);
+  }
+});
+
+// The two agent-less columns must SAY they are passive: their text is the only
+// place a reader learns why todo/done carry `agent: null` (dispatching `done`
+// would re-run an agent over every finished ticket on each build).
+test('the passive columns document that no agent is dispatched in them', () => {
+  for (const slug of ['todo', 'done']) {
+    assert.equal(SYSTEM_COLUMN_DEFAULT_AGENTS[slug], null, `${slug} has no agent`);
+    assert.match(SYSTEM_COLUMN_DEFAULT_INSTRUCTIONS[slug], /PASSIVE, no agent is dispatched here/,
+      `${slug} instructions state the column is passive`);
+  }
+});
+
+// Every column that DOES dispatch must carry non-trivial instructions — a
+// working column with a blank prompt is the "board isn't ready" bug.
+test('every column with an agent carries substantive instructions', () => {
+  for (const slug of SYSTEM_SLUGS) {
+    if (SYSTEM_COLUMN_DEFAULT_AGENTS[slug] == null) continue;
+    const text = SYSTEM_COLUMN_DEFAULT_INSTRUCTIONS[slug];
+    assert.ok(typeof text === 'string' && text.trim().length >= 80,
+      `${slug} has substantive instructions (got ${text ? text.length : 0} chars)`);
   }
 });
 

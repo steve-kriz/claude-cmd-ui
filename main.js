@@ -18,6 +18,7 @@ const slackSummarize = require('./lib/slack-summarize');
 const agentRegenerate = require('./lib/agent-regenerate');
 const skillRegenerate = require('./lib/skill-regenerate');
 const teamColumnRegenerate = require('./lib/team-column-regenerate');
+const teamConfig = require('./lib/team-config');
 const { redactSecrets } = require('./lib/slack-proxy');
 const { createTelemetryReceiver } = require('./lib/telemetry-receiver');
 const claudeUsage = require('./lib/claude-usage');
@@ -1114,8 +1115,22 @@ ipcMain.handle('tasks:installSkill', async (_evt, { projectPath }) => {
       const content = await fsp.readFile(path.join(agentsSrcDir, name));
       await fsp.writeFile(path.join(agentsDestDir, name), content);
     }
-    await fsp.mkdir(path.join(projectPath, 'tasks'), { recursive: true });
-    return { ok: true };
+    const tasksDir = path.join(projectPath, 'tasks');
+    await fsp.mkdir(tasksDir, { recursive: true });
+    // Seed the board so a brand-new project is ready to build the moment the
+    // skill is installed: every working column already names one of the agents
+    // just copied above, with the instructions that agent is dispatched with.
+    // Written ONLY when no config exists yet — an existing board (user-edited
+    // columns, agents, concurrency) is never overwritten by a re-install.
+    const cfgPath = path.join(tasksDir, 'team-config.json');
+    let seededBoard = false;
+    try {
+      await fsp.stat(cfgPath);
+    } catch (_) {
+      await fsp.writeFile(cfgPath, teamConfig.serializeConfig(teamConfig.starterConfig()), 'utf8');
+      seededBoard = true;
+    }
+    return { ok: true, seededBoard };
   } catch (err) {
     return { ok: false, error: err.message };
   }

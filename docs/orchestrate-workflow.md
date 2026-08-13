@@ -193,7 +193,18 @@ banner, Workflow panel, or Agents panel — all three drive the same
 
 1. **File copy** — `tasks:installSkill` copies the bundled skill and the subagent
    definitions from `assets/` into the opened project's `.claude/skills/` and
-   `.claude/agents/`, and ensures `tasks/` exists (asar-safe file copies).
+   `.claude/agents/`, and ensures `tasks/` exists (asar-safe file copies). It also
+   **seeds the starter board** into `tasks/team-config.json` — `starterConfig()`
+   from [`lib/team-config.js`](../lib/team-config.js): the five system columns plus
+   a `pr-review` lane between Testing and Done, so every dispatching column already
+   names one of the four agents just copied (`orchestrate-ba` → `orchestrate-coder`
+   → `orchestrate-tester` → `orchestrate-tech-lead`) and carries the instructions it
+   is dispatched with. `todo` and `done` stay deliberately agent-less — the skill
+   never dispatches a passive column, and giving `done` an agent would re-run it
+   over every finished ticket on each build. The seed is written **only when
+   `tasks/team-config.json` does not already exist**, so re-installing to pick up
+   new agent definitions never overwrites a user's board; the handler reports which
+   happened as `{ ok, seededBoard }`.
 2. **Session registration** — Claude Code discovers project skills only at
    **session startup**, so the long-lived `claude` pane that was already running
    when you clicked Install will not see the freshly-copied skill. After a

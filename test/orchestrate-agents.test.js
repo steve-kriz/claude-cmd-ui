@@ -55,6 +55,9 @@ const {
   DEFAULT_CONCURRENCY,
 } = require('../lib/ticket-queue');
 
+// The starter board seeded into a fresh project at install time.
+const { starterConfig, serializeConfig } = require('../lib/team-config');
+
 const ROOT = path.join(__dirname, '..');
 const ASSETS_AGENTS = path.join(ROOT, 'assets', 'agents');
 const PROJECT_AGENTS = path.join(ROOT, '.claude', 'agents');
@@ -372,7 +375,17 @@ test('tasks:installSkill (main.js) copies assets/agents/* into <project>/.claude
   assert.match(body, /for\s*\(const name of await fsp\.readdir\(agentsSrcDir\)\)/);
   // And it still copies the skill + creates tasks/.
   assert.match(body, /path\.join\(projectPath,\s*'\.claude',\s*'skills',\s*'orchestrate'\)/);
-  assert.match(body, /fsp\.mkdir\(path\.join\(projectPath,\s*'tasks'\)/);
+  assert.match(body, /const tasksDir = path\.join\(projectPath,\s*'tasks'\)/);
+  assert.match(body, /fsp\.mkdir\(tasksDir,\s*\{\s*recursive:\s*true\s*\}\)/);
+  // ...and seeds the starter board so a fresh project is ready to build, but
+  // only when tasks/team-config.json does not already exist (the stat guard).
+  assert.match(body, /path\.join\(tasksDir,\s*'team-config\.json'\)/);
+  assert.match(body, /fsp\.stat\(cfgPath\)/);
+  assert.match(body, /teamConfig\.starterConfig\(\)/);
+  const statAt = body.indexOf('fsp.stat(cfgPath)');
+  const writeAt = body.indexOf('fsp.writeFile(cfgPath');
+  assert.ok(statAt !== -1 && writeAt !== -1 && statAt < writeAt,
+    'the existence check precedes the seed write, so an existing board is never overwritten');
 });
 
 // ===========================================================================
@@ -399,8 +412,16 @@ function installSkillInto(projectPath) {
   for (const name of fs.readdirSync(agentsSrcDir)) {
     fs.writeFileSync(path.join(agentsDestDir, name), fs.readFileSync(path.join(agentsSrcDir, name)));
   }
-  fs.mkdirSync(path.join(projectPath, 'tasks'), { recursive: true });
-  return { ok: true };
+  const tasksDir = path.join(projectPath, 'tasks');
+  fs.mkdirSync(tasksDir, { recursive: true });
+  // Seed the starter board, but only when the project has none yet.
+  const cfgPath = path.join(tasksDir, 'team-config.json');
+  let seededBoard = false;
+  if (!fs.existsSync(cfgPath)) {
+    fs.writeFileSync(cfgPath, serializeConfig(starterConfig()), 'utf8');
+    seededBoard = true;
+  }
+  return { ok: true, seededBoard };
 }
 
 function withTempProject(fn) {
@@ -455,6 +476,82 @@ test('installSkill propagation: the installed agent defs parse to the three orch
       .map((f) => parseAgentFrontmatter(readFileLF(path.join(proj, '.claude', 'agents', f))).fm.name)
       .sort();
     assert.deepEqual(names, [...AGENT_NAMES].sort(), 'a fresh project can dispatch to all three agents');
+  });
+});
+
+// --- The seeded starter board -----------------------------------------------
+// A fresh install must leave the project ready to BUILD, not just ready to
+// configure: every column that dispatches names an agent whose definition file
+// was installed alongside it, and carries the instructions it is dispatched with.
+
+test('installSkill propagation: a fresh project is seeded with a ready-to-build board', () => {
+  withTempProject((proj) => {
+    const r = installSkillInto(proj);
+    assert.equal(r.seededBoard, true, 'the board was seeded');
+    const cfgPath = path.join(proj, 'tasks', 'team-config.json');
+    assert.ok(fs.existsSync(cfgPath), 'tasks/team-config.json created by the install');
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+
+    // Every column is fully specified: an agent (or an explicit, documented
+    // passive null) plus non-empty instructions.
+    const installedAgentNames = new Set(fs.readdirSync(path.join(proj, '.claude', 'agents'))
+      .map((f) => parseAgentFrontmatter(readFileLF(path.join(proj, '.claude', 'agents', f))).fm.name));
+    let dispatching = 0;
+    for (const col of cfg.columns) {
+      assert.ok(typeof col.instructions === 'string' && col.instructions.trim() !== '',
+        `column ${col.status} has non-empty instructions`);
+      if (col.agent == null) {
+        // A passive column must say so — otherwise it reads as a misconfiguration.
+        assert.match(col.instructions, /PASSIVE/,
+          `agent-less column ${col.status} documents that it is passive`);
+        continue;
+      }
+      dispatching++;
+      // The named agent resolves to a real definition — never the generic fallback.
+      assert.ok(installedAgentNames.has(col.agent),
+        `column ${col.status} names agent "${col.agent}", which was installed`);
+      assert.notEqual(resolveAgentType(col.agent, installedAgentNames), FALLBACK_AGENT,
+        `column ${col.status} does not fall back to ${FALLBACK_AGENT}`);
+    }
+    assert.equal(dispatching, 4, 'four columns dispatch: BA, coder, tester, tech-lead');
+  });
+});
+
+test('installSkill propagation: the seeded board uses all four bundled agents in board order', () => {
+  withTempProject((proj) => {
+    installSkillInto(proj);
+    const cfg = JSON.parse(fs.readFileSync(path.join(proj, 'tasks', 'team-config.json'), 'utf8'));
+    assert.deepEqual(cfg.columns.filter((c) => c.agent).map((c) => c.agent), [
+      AGENT_TYPES.ba,
+      AGENT_TYPES.coder,
+      AGENT_TYPES.tester,
+      AGENT_TYPES.techLead,
+    ], 'dispatch order is BA -> coder -> tester -> tech-lead');
+    // The review lane sits between testing and done, per the skill's review-column contract.
+    const slugs = cfg.columns.map((c) => c.status);
+    assert.ok(slugs.indexOf('testing') < slugs.indexOf('pr-review'), 'review comes after testing');
+    assert.ok(slugs.indexOf('pr-review') < slugs.indexOf('done'), 'review comes before done');
+  });
+});
+
+test('installSkill propagation (edge): re-installing never overwrites an existing board', () => {
+  withTempProject((proj) => {
+    installSkillInto(proj);
+    // Given the user has customised their board...
+    const cfgPath = path.join(proj, 'tasks', 'team-config.json');
+    const customised = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    customised.columns = customised.columns.filter((c) => c.status !== 'pr-review');
+    customised.skill.concurrencyDefault = 1;
+    fs.writeFileSync(cfgPath, JSON.stringify(customised, null, 2) + '\n', 'utf8');
+
+    // ...when the skill is installed again (e.g. to pick up new agent defs)...
+    const r = installSkillInto(proj);
+
+    // ...then the board is left exactly as the user left it.
+    assert.equal(r.seededBoard, false, 're-install reports it did not seed');
+    const after = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    assert.ok(!after.columns.some((c) => c.status === 'pr-review'), 'deleted column stays deleted');
+    assert.equal(after.skill.concurrencyDefault, 1, 'custom concurrency preserved');
   });
 });
 

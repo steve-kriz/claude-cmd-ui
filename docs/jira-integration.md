@@ -15,7 +15,11 @@ Two pieces work together:
   workflow's `defining` column agent (configured in
   `tasks/team-config.json`). When a ticket references one or more Jira issue
   keys, this agent calls the Jira REST API directly using the token from
-  `.env` and creates one equivalent local ticket per referenced issue.
+  `.env` and creates one equivalent local ticket per referenced issue. It
+  ships as a bundled agent (`assets/agents/jira-ba.md`), so installing the
+  orchestrate skill into a project copies it into that project's
+  `.claude/agents/` alongside the other subagents — point a column's `agent`
+  at `jira-ba` to dispatch to it.
 
 ![The Team tab's Agents panel listing the jira-ba agent alongside the other orchestrate subagents, and the Integrations panel showing "Re-sign in with Atlassian" and "✓ Connected to officehq."](../images/jira-ba-agent.png)
 
