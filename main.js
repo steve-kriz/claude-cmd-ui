@@ -478,6 +478,60 @@ ipcMain.handle('aws:applyRole', async (_evt, { accountId, accountName, role, pro
 
 ipcMain.handle('aws:status', async () => aws.readStatus());
 
+// Pull the shared config secret out of the dev account and persist it into .env.
+// The renderer is told WHICH keys changed, never their values — secrets have no
+// reason to cross into the renderer process.
+ipcMain.handle('aws:syncClaudeVariables', async () => {
+  try {
+    const onLine = (line) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('aws:log', { line });
+      }
+    };
+    const result = await aws.syncClaudeVariables(onLine);
+    const written = [];
+    const unchanged = [];
+    const preserved = [];
+    // The .env FILE, not process.env: a key can be set in the shell without
+    // being in the file, and "is it already there?" is a question about the file.
+    const existing = await envStore.readAll();
+    for (const [key, value] of Object.entries(result.vars)) {
+      // An empty value in the secret means "nobody has filled this in yet". The
+      // key still gets added so .env lists everything the secret defines, but it
+      // must not blank a value someone already has locally.
+      if (value.trim() === '' && String(existing[key] || '').trim() !== '') {
+        preserved.push(key);
+        continue;
+      }
+      if (Object.prototype.hasOwnProperty.call(existing, key) && existing[key] === value) {
+        unchanged.push(key);
+        continue;
+      }
+      // Sequential: env-store.set is read-modify-write on a single file.
+      await envStore.set(key, value);
+      written.push(key);
+    }
+    onLine(
+      `[claude-cmd-ui] .env updated: ${written.length} written` +
+      `${unchanged.length ? `, ${unchanged.length} already current` : ''}` +
+      `${preserved.length ? `, ${preserved.length} empty in the secret (local value kept)` : ''}` +
+      `${result.skipped.length ? `, ${result.skipped.length} skipped` : ''}`
+    );
+    return {
+      ok: true,
+      secretId: result.secretId,
+      accountName: result.accountName,
+      role: result.role,
+      written,
+      unchanged,
+      preserved,
+      skipped: result.skipped
+    };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 ipcMain.handle('env:get', async (_evt, { key }) => {
   try { return { ok: true, value: envStore.get(key) }; }
   catch (err) { return { ok: false, error: err.message }; }

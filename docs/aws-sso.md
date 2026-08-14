@@ -40,6 +40,44 @@ channel while the active selection is pushed over `aws:status`.
 - **AWS CLI path** — the AWS CLI v2 is invoked at
   `C:\Program Files\Amazon\AWSCLIV2\aws.exe` (`AWS_EXE`).
 
+## Claude variables (shared config → `.env`)
+
+The same popup has a **Claude variables ⬇** button. It signs in to the **dev**
+account, reads the AWS Secrets Manager secret `/dev/claude-cmd-ui` — a flat JSON
+object of the configuration this app needs — and writes the pairs into `.env`.
+Everything downstream (`getSlackToken`, the Atlassian helpers, telemetry) keeps
+reading `.env` as it always has, so nothing else in the app needs to know
+Secrets Manager exists.
+
+- **Key names are normalized.** `"slack token"`, `"slackToken"` and
+  `"Slack-Token"` all land on `SLACK_TOKEN`, so whoever edits the secret does not
+  have to know the exact .env spelling.
+- **Every key in the secret is added.** A key you do not already have in `.env`
+  is appended, whether or not the secret has a value for it — `.env` ends up
+  listing everything the secret defines.
+- **An empty value never blanks a local one.** A key present with an empty value
+  means "nobody has filled this in yet", not "erase the local value". It is added
+  as an empty placeholder when `.env` does not have it, and your existing value
+  is kept when it does (reported as `preserved`). Clear a variable by editing
+  `.env` by hand.
+- **Values that cannot round-trip are refused.** `.env` is line-based, so a
+  value containing a newline is reported as skipped rather than written into a
+  file that would read back wrong. Same for keys that normalize to nothing or
+  collide with an earlier key.
+- **It does not change your active environment.** The read uses a dedicated
+  `[profile claude-cmd-ui-secrets]`; `~/.aws/credentials`, `[default]` and the
+  `sso-<account>` profiles are all left untouched, so pulling config never
+  hijacks the account you are working in.
+- **Secrets never enter the renderer.** The main process writes `.env` and hands
+  the UI key *names* and counts only.
+- Which account counts as "dev" is `AWS_DEV_ACCOUNT_ID` when set, otherwise the
+  discovered account whose name looks like a dev account (e.g. `ohq-dev`).
+  Point the button at a different secret with `CLAUDE_SECRET_ID`.
+
+Values already matching `.env` are reported as "already current" rather than
+rewritten. New values need an app restart (or a reload of the affected
+integration) to take effect.
+
 ## Usage
 
 From the UI (in the Git Bash tab's sub-toolbar): click **AWS environment ▾** →
@@ -56,6 +94,11 @@ await window.api.aws.applyRole(
 );
 off();
 const status = await window.api.aws.status();                  // persisted active selection
+
+// Pull the shared config secret into .env. Resolves to key NAMES only.
+const sync = await window.api.aws.syncClaudeVariables();
+// { ok, secretId, accountName, role, written: [...], unchanged: [...],
+//   preserved: [...], skipped: [{key, reason}] }
 ```
 
 ## Configuration
@@ -68,6 +111,8 @@ The SSO start URL and account IDs are read from `.env`
 | `AWS_SSO_START_URL` | SSO portal start URL. Prompted for on first use and stored in `.env`. Required. |
 | `AWS_DEV_ACCOUNT_ID` | Dev account id for the legacy `[profile sso-dev]` sync (optional). |
 | `AWS_PROD_ACCOUNT_ID` | Prod account id for the legacy `production` profile (optional). |
+| `AWS_DEV_ACCOUNT_ID` | Also names the account **Claude variables ⬇** reads the secret from. When unset, the account whose name looks like dev is used. |
+| `CLAUDE_SECRET_ID` | Secrets Manager secret the button reads. Default `/dev/claude-cmd-ui`. |
 
 Hardcoded in `lib/aws.js`: `AWS_EXE` (AWS CLI path), `SSO_REGION`
 (`ap-southeast-2`), `SSO_SESSION_NAME` (`claude-cmd-ui`), and the credential

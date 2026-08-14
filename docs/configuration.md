@@ -70,8 +70,9 @@ node -e "const e=require('./lib/env-store'); console.log(e.readAll())"
 |----------|---------|---------|-------------|
 | `OPEN_DEVTOOLS` | (unset → open) | Set `0` to stop DevTools opening on launch | [app-shell](app-shell.md) |
 | `AWS_SSO_START_URL` | (required for AWS) | SSO portal start URL; prompted and saved on first use | [aws-sso](aws-sso.md) |
-| `AWS_DEV_ACCOUNT_ID` | (none) | Dev account id for the legacy `sso-dev` profile sync | [aws-sso](aws-sso.md) |
+| `AWS_DEV_ACCOUNT_ID` | (none) | Dev account id for the legacy `sso-dev` profile sync; also names the account **Claude variables ⬇** reads from | [aws-sso](aws-sso.md) |
 | `AWS_PROD_ACCOUNT_ID` | (none) | Prod account id for the legacy `production` profile | [aws-sso](aws-sso.md) |
+| `CLAUDE_SECRET_ID` | `/dev/claude-cmd-ui` | Secrets Manager secret the **Claude variables ⬇** button pulls into `.env` | [aws-sso](aws-sso.md) |
 | `SLACK_TOKEN` | (required to connect) | Bot token `xoxb-…` or user token `xoxp-…` (OAuth writes this) | [slack-bridge](slack-bridge.md) |
 | `SLACK_APP_TOKEN` | (none) | App-level token `xapp-…` to enable Socket Mode | [slack-bridge](slack-bridge.md) |
 | `SLACK_CLIENT_ID` | (none) | OAuth app client id for "Sign in with Slack" | [slack-bridge](slack-bridge.md) |

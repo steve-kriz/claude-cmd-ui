@@ -37,6 +37,9 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('aws:applyRole', { accountId, accountName, role, profile }),
     status: () => ipcRenderer.invoke('aws:status'),
     listProfiles: () => ipcRenderer.invoke('aws:listProfiles'),
+    // Resolves to key NAMES only — the values are written straight to .env in
+    // the main process and never cross into the renderer.
+    syncClaudeVariables: () => ipcRenderer.invoke('aws:syncClaudeVariables'),
     onLog: (cb) => {
       const listener = (_e, payload) => cb(payload);
       ipcRenderer.on('aws:log', listener);

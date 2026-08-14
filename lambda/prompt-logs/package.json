@@ -1,13 +1,14 @@
 {
   "name": "claude-cmd-ui-prompt-logs",
   "version": "1.0.0",
-  "description": "Lambda that stores claude-cmd-ui prompt history in CloudWatch Logs.",
+  "description": "Lambda that stores claude-cmd-ui prompt history, usage telemetry, and native OTLP logs/metrics/traces in CloudWatch Logs.",
   "private": true,
   "main": "index.mjs",
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "@aws-sdk/client-cloudwatch": "^3.622.0",
     "@aws-sdk/client-cloudwatch-logs": "^3.622.0"
   }
 }

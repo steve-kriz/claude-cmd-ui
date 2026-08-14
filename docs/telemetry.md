@@ -305,6 +305,68 @@ are written back onto that entry via the existing `writePromptHistory`/
 nothing matches the window (telemetry off, or an older app run), the entry
 falls back to the existing `length/4` estimate.
 
+## Cost & usage metrics in CloudWatch
+
+Forwarding to the prompt-logs Lambda
+([`lambda/prompt-logs/index.mjs`](../lambda/prompt-logs/index.mjs)) archives the
+raw payloads in log groups, which is retrievable but not graphable. So on every
+ingest the Lambda **also publishes the signal values themselves** — dollars,
+tokens, durations, prompt sizes — to the CloudWatch **Metrics** API via
+`PutMetricData`, in namespace `ClaudeCmdUI` (override with `METRICS_NAMESPACE`).
+These are real metrics, not log lines CloudWatch has to parse back out: chart
+them, alarm on them, use them in metric math. Each source event — a
+`claude_code.api_request`, a prompt, a metric data point — contributes its own
+real numbers, never a batch count.
+
+The summable, per-call metrics are the ones to track spend with:
+
+| Metric | Source | Statistic |
+| --- | --- | --- |
+| `CostUsd` | `claude_code.api_request` log record | Sum |
+| `InputTokens` / `OutputTokens` | `claude_code.api_request` | Sum |
+| `CacheReadTokens` / `CacheCreationTokens` | `claude_code.api_request` | Sum |
+| `TotalTokens` | `claude_code.api_request` | Sum |
+| `RequestDurationMs` | `claude_code.api_request` | Average |
+| `PromptLength` | `claude_code.user_prompt` log record | Sum / Average |
+| `PromptCostUsd`, `PromptCharacters` | prompt-history `POST` entry | Sum |
+
+Request and prompt **counts** need no metric of their own: CloudWatch's
+`SampleCount` statistic on `CostUsd` is the number of API calls, and on
+`PromptLength` the number of prompts. `Average` works too — the aggregation
+below preserves it exactly.
+
+The `Session*` and `*Total` metrics (`SessionCostUsd` from a
+`telemetry.usage.v1` summary, `SessionCostUsdTotal` / `SessionTokensTotal` /
+`LinesOfCodeTotal` from Claude Code's own `claude_code.*` sums) are **cumulative
+running counters**, re-reported as they grow — graph those with **Maximum**;
+summing them double counts.
+
+Each metric is published once per dimension set — `[]` (fleet-wide), `[User]`,
+`[Model]`, `[Project]` and `[User, Model]`, plus `[Type]` on the
+token/lines-of-code breakdowns — because a `PutMetricData` datum carries exactly
+one dimension list. Session, host and request ids are deliberately **not**
+dimensions: they are unbounded, and every distinct combination is a separately
+billed metric. Those ids stay on the raw records in the OTLP/telemetry log
+groups. `Project` is dimensioned on the folder name.
+
+Values are aggregated before they are sent: everything for the same
+(metric, dimensions, minute) collapses into one `StatisticValues` datum carrying
+`SampleCount`/`Sum`/`Minimum`/`Maximum`. Standard-resolution CloudWatch metrics
+are stored at 1-minute granularity anyway, so this costs no fidelity — Sum,
+Average, Maximum and SampleCount stay exact — while keeping a large OTLP batch
+down to one or two API calls.
+
+Deploy with [`lambda/deploy.sh`](../lambda/deploy.sh), which builds a bundled
+package (dependencies included, so the artifact does not depend on whichever SDK
+the managed runtime happens to ship), publishes a numbered rollback version of
+the currently deployed code before overwriting `$LATEST`, and smoke-tests the
+result. Beyond the log-group permissions the execution role also needs
+`cloudwatch:PutMetricData` — no resource ARN, so scope it with a
+`cloudwatch:namespace` condition; the script warns when that policy is missing.
+
+Set `METRICS_ENABLED=0` on the Lambda to stop publishing metrics; raw archival is
+unaffected.
+
 ## Configuration
 
 Persisted in `.env` (see [`.env.example`](../.env.example)):

@@ -368,6 +368,7 @@ function createTab() {
       envBtns: ws.querySelector('.envBtns'),
       profileSelect: ws.querySelector('.profileSelect'),
       profileReloadBtn: ws.querySelector('.profileReloadBtn'),
+      claudeVarsBtn: ws.querySelector('.claudeVarsBtn'),
       statusChip: ws.querySelector('.statusChip'),
       rolePicker: ws.querySelector('.rolePicker'),
       rolePickerEnv: ws.querySelector('.rolePickerEnv'),
@@ -776,6 +777,9 @@ function createTab() {
   tab.els.awsEnvPopup.addEventListener('click', (e) => e.stopPropagation());
   tab.els.envLoadBtn.addEventListener('click', () => loadEnvironments(tab));
   tab.els.profileReloadBtn.addEventListener('click', () => loadProfilesOnTab(tab));
+  if (tab.els.claudeVarsBtn) {
+    tab.els.claudeVarsBtn.addEventListener('click', () => syncClaudeVariables(tab));
+  }
   tab.els.rolePickerCancel.addEventListener('click', () => hideRolePicker(tab));
   loadProfilesOnTab(tab);
 
@@ -5215,6 +5219,51 @@ async function loadEnvironments(tab) {
   } finally {
     offLog();
     if (btn) { btn.disabled = false; btn.textContent = prevLabel || 'List accounts ↻'; }
+  }
+}
+
+// Pull the shared config secret out of the dev AWS account into .env. Progress
+// streams to the bash terminal on the same `aws:log` channel the environment
+// switcher uses. Only key NAMES come back — values are written in the main
+// process and never reach the renderer.
+async function syncClaudeVariables(tab) {
+  const btn = tab.els.claudeVarsBtn;
+  const prevLabel = btn ? btn.textContent : '';
+  const target = tab.bash.term;
+  const writeLog = (line) => { if (target) target.write(`\x1b[36m${line}\x1b[0m\r\n`); };
+  const offLog = window.api.aws.onLog(({ line }) => writeLog(line));
+  if (btn) { btn.disabled = true; btn.textContent = 'Syncing…'; }
+  try {
+    const ssoUrl = await ensureSsoUrl();
+    if (!ssoUrl) {
+      writeLog('[claude-cmd-ui] AWS SSO start URL not provided — aborting.');
+      return;
+    }
+    const res = await window.api.aws.syncClaudeVariables();
+    if (!res || !res.ok) {
+      writeLog(`[claude-cmd-ui] ERROR: ${(res && res.error) || 'failed to sync Claude variables'}`);
+      tab.els.statusChip.textContent = 'Claude variables failed';
+      return;
+    }
+    const written = res.written || [];
+    const unchanged = res.unchanged || [];
+    const preserved = res.preserved || [];
+    if (written.length) writeLog(`[claude-cmd-ui] wrote to .env: ${written.join(', ')}`);
+    if (preserved.length) {
+      writeLog(`[claude-cmd-ui] empty in the secret, local value kept: ${preserved.join(', ')}`);
+    }
+    tab.els.statusChip.textContent = written.length
+      ? `Synced ${written.length} variable${written.length === 1 ? '' : 's'} from ${res.secretId}`
+      : `.env already current with ${res.secretId}`;
+    writeLog(
+      `[claude-cmd-ui] done. ${written.length} written, ${unchanged.length} already current` +
+      `${preserved.length ? `, ${preserved.length} local value(s) kept` : ''}` +
+      `${(res.skipped || []).length ? `, ${res.skipped.length} skipped` : ''}. ` +
+      'Restart the app (or reload the affected integration) to pick up new values.'
+    );
+  } finally {
+    offLog();
+    if (btn) { btn.disabled = false; btn.textContent = prevLabel || 'Claude variables ⬇'; }
   }
 }
 
