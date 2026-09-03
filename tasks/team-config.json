@@ -21,7 +21,7 @@
       "status": "in-progress",
       "label": "In Progress",
       "description": "",
-      "agent": "orchestrate-coder",
+      "agent": "coder",
       "instructions": "Implement the ticket to its Acceptance Criteria inside this ticket's isolated worktree/branch. Honour the Additional Context. Follow the conventions of the surrounding code rather than introducing a new style. Keep the change scoped to this ticket — no drive-by refactors of unrelated code. Do not write tests beyond what compilation/wiring needs; the Testing column owns tests. Report the files you changed and anything the tester should know.",
       "system": true
     },
@@ -29,7 +29,7 @@
       "status": "testing",
       "label": "Testing",
       "description": "",
-      "agent": "orchestrate-tester",
+      "agent": "tester",
       "instructions": "Write BOTH e2e cucumber-style node --test scenarios AND unit tests covering every Acceptance Criterion including at least one failure/edge path. Mock all database calls — never open a real connection. Run the full suite under node --test and report pass/fail with the failure output verbatim. A red result returns the ticket for a fix, capped at 3 attempts.",
       "system": true
     },
@@ -37,8 +37,8 @@
       "status": "pr-review",
       "label": "PR review",
       "description": "Tech-lead review of the finished implementation before it reaches Done.",
-      "agent": "orchestrate-tech-lead",
-      "instructions": "Review the finished implementation against the ticket before it reaches Done. Read BOTH the ticket and the code it produced. Verify the tests actually exercise the new code paths (not just that the suite is green), that every Acceptance Criterion is genuinely met, that security is addressed (input validation, authorisation, injection, secrets never logged or committed), and that error and edge paths behave. Report each finding with a severity. Issue a reject-and-rework verdict — sending the ticket back to Testing — ONLY for a critical or high-severity security or correctness finding that must be fixed before this ticket can proceed. Raise every lower-severity finding as its own follow-up To Do ticket carrying a review-of key naming the reviewed ticket, and leave the reviewed ticket's status and frontmatter untouched. Review only — never edit the code yourself.",
+      "agent": null,
+      "instructions": "skip",
       "system": false
     },
     {

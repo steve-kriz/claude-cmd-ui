@@ -2304,6 +2304,41 @@ body {
 }
 .install-banner.hidden { display: none; }
 
+/* Last-prompt strip — sits at the top of the command window, directly above
+   the terminal, carrying the most recent prompt sent to the agent so the user
+   can see what claude is working on without scrolling the pane back. White
+   ground with dark text (a highlighter-pen read against the dark terminal
+   below), one line, ellipsised: the full text is the element's title and lives
+   in full in the Logs panel. */
+.last-prompt-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 10px;
+  background: #ffffff;
+  border-bottom: 1px solid #c8c8c8;
+  color: #1e1e1e;
+  font-size: 12px;
+  cursor: default;
+}
+.last-prompt-bar.hidden { display: none; }
+.last-prompt-label {
+  flex: 0 0 auto;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #555;
+}
+.last-prompt-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Git auth gate — blocks the Git tab until gh is authenticated */
 .git-auth-gate {
   flex: 1 1 auto;
@@ -3337,6 +3372,16 @@ body {
   color: #888;
 }
 .team-section.collapsed .team-section-body { display: none; }
+/* Section footer — action row pinned under the section body (e.g. Board "Save").
+   Hidden along with the body when the section is collapsed. */
+.team-section-footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+  padding-top: 2px;
+}
+.team-section.collapsed .team-section-footer { display: none; }
 .team-section-header .teamAgentsRefresh { margin-left: auto; }
 .team-section-header .teamWorkflowRefresh { margin-left: auto; }
 

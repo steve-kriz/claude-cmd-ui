@@ -124,10 +124,13 @@ test('unit: Each section has a toggle button with aria-expanded="true"', () => {
     htmlSrc.indexOf('</template>', htmlSrc.indexOf('data-view="team"'))
   );
 
-  // Count toggle buttons (TASK-203: Workflow section removed, so only the
-  // Agents and Board sections ship a toggle now).
+  // Every .team-section ships exactly one toggle, whatever the current set of
+  // sections is (TASK-203 removed Workflow; Integrations was added since).
+  const sectionMatches = [...teamPanel.matchAll(/class="team\w*Section team-section"/g)];
   const toggleMatches = [...teamPanel.matchAll(/class="team-section-toggle"/g)];
-  assert.equal(toggleMatches.length, 2, 'Exactly two toggle buttons in Team panel');
+  assert.ok(sectionMatches.length >= 2, 'at least the Agents and Board sections exist');
+  assert.equal(toggleMatches.length, sectionMatches.length,
+    'one toggle button per team section');
 
   // Each should be type="button" and have aria-expanded="true"
   assert.match(teamPanel, /type="button"[^>]*class="team-section-toggle"[^>]*aria-expanded="true"/);

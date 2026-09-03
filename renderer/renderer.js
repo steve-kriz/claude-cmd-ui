@@ -334,6 +334,8 @@ function createTab() {
       splitter: ws.querySelector('.splitter'),
       cmdTerm: ws.querySelector('.cmdTerm'),
       bashTerm: ws.querySelector('.bashTerm'),
+      lastPromptBar: ws.querySelector('.lastPromptBar'),
+      lastPromptText: ws.querySelector('.lastPromptText'),
       agentSelect: ws.querySelector('.agentSelect'),
       usageBar: ws.querySelector('.usageBar'),
       usageBarFill: ws.querySelector('.usageBarFill'),
@@ -608,6 +610,25 @@ function createTab() {
   }
   if (tab.els.teamBoardSaveBtn) {
     tab.els.teamBoardSaveBtn.addEventListener('click', () => saveTeamBoardConfig(tab));
+  }
+  if (tab.els.teamBody) {
+    // Team tab accordion (TASK-144): one delegated listener bound once here, so
+    // the per-section bodies stay free to be re-rendered wholesale by the
+    // refreshers without losing their expand/collapse wiring. Clicks on the
+    // header's own action buttons (Add agent / Refresh) must not toggle the
+    // section, hence the .small-btn bail.
+    tab.els.teamBody.addEventListener('click', (ev) => {
+      if (ev.target.closest('.small-btn')) return;
+      const header = ev.target.closest('.team-section-header');
+      if (!header || !tab.els.teamBody.contains(header)) return;
+      const section = header.parentElement;
+      if (!section || !section.classList.contains('team-section')) return;
+      section.classList.toggle('collapsed');
+      const toggle = header.querySelector('.team-section-toggle');
+      if (toggle) {
+        toggle.setAttribute('aria-expanded', String(!section.classList.contains('collapsed')));
+      }
+    });
   }
   tab.els.tasksInstallSkillBtn.addEventListener('click', () => installOrchestrateSkill(tab));
   tab.els.tasksPlanBtn.addEventListener('click', () => openPlanModal(tab));
@@ -889,7 +910,7 @@ function createTab() {
   });
   tab.els.claudeRecheckBtn.addEventListener('click', () => recheckClaude(tab));
   tab.els.claudeLaunchBtn.addEventListener('click', () => {
-    runInCmdPty(tab, 'claude');
+    runInCmdPty(tab, claudeLaunchCommand());
     tab.els.claudeBanner.classList.add('hidden');
   });
 
@@ -1150,6 +1171,26 @@ async function openFolderInTab(tab, folder) {
   persistSession();
 }
 
+// The cmd pane's xterm theme is dark (TERM_THEME background #1e1e1e), so Claude
+// Code has to paint its TUI with a dark palette. Claude picks its palette from
+// the user's global settings, and a `"theme": "light"` there renders prompt and
+// question text near-black — unreadable on our dark background. `--settings`
+// takes an inline JSON overlay that outranks the user settings file, so the pane
+// pins the dark theme without touching the user's own config. The overlay always
+// has to be quoted: an unquoted `{"theme":"dark"}` loses its double quotes in
+// BOTH shells and Claude rejects the leftover `{theme:dark}` with "Invalid JSON
+// provided to --settings". bash takes single quotes; cmd.exe has no single-quote
+// syntax (it would pass them through as part of the value), so there the inner
+// quotes are backslash-escaped inside a double-quoted argument — cmd hands the
+// token over verbatim and claude.exe's own argv parser unescapes it.
+const CLAUDE_DARK_SETTINGS = '{"theme":"dark"}';
+function claudeLaunchCommand() {
+  const overlay = isWin()
+    ? `"${CLAUDE_DARK_SETTINGS.replace(/"/g, '\\"')}"`
+    : `'${CLAUDE_DARK_SETTINGS}'`;
+  return `claude --settings ${overlay}`;
+}
+
 // (Re)launch the chosen agent in the cmd pane. On Windows Claude runs in
 // cmd.exe and openCode in Git Bash; on macOS/Linux both run in the user's login
 // shell (the platform split lives in lib/pty.js). Switching agents kills the
@@ -1162,6 +1203,10 @@ async function launchCmdAgent(tab) {
     tab.cmd.id = null;
   }
   if (tab.cmd.term) tab.cmd.term.clear();
+  // The pane is starting a fresh session, so the strip has nothing to report
+  // until the next prompt — clearing it alongside the terminal keeps the two
+  // from disagreeing about what the agent is working on.
+  setLastPrompt(tab, '');
 
   if (agent === 'opencode') {
     tab.els.claudeBanner.classList.add('hidden');
@@ -1175,7 +1220,7 @@ async function launchCmdAgent(tab) {
   } else {
     tab.els.opencodeBanner.classList.add('hidden');
     await detectClaude(tab);
-    await spawnTerm(tab, 'cmd', 'cmd', { cliCommand: 'claude' });
+    await spawnTerm(tab, 'cmd', 'cmd', { cliCommand: claudeLaunchCommand() });
   }
   requestAnimationFrame(() => fitTab(tab));
 }
@@ -3507,8 +3552,37 @@ function submitCmdInputBuffer(tab) {
   if (trimmed) logPromptEntry(tab, 'user', trimmed);
 }
 
+// Paint (or clear) the last-prompt strip at the top of the command window.
+// A prompt can be many lines — the strip is one line, so newlines and runs of
+// whitespace collapse to single spaces and CSS ellipsises the overflow; the
+// untruncated text stays available as the element's tooltip. Showing or hiding
+// the strip changes the terminal's height, so the pane is refit on a visibility
+// change (never on a mere text swap, which leaves the layout alone).
+function setLastPrompt(tab, text) {
+  const bar = tab.els.lastPromptBar;
+  const out = tab.els.lastPromptText;
+  if (!bar || !out) return;
+  const oneLine = String(text || '').replace(/\s+/g, ' ').trim();
+  const wasHidden = bar.classList.contains('hidden');
+  if (!oneLine) {
+    out.textContent = '';
+    bar.removeAttribute('title');
+    bar.classList.add('hidden');
+  } else {
+    out.textContent = oneLine;
+    bar.title = String(text);
+    bar.classList.remove('hidden');
+  }
+  if (wasHidden !== bar.classList.contains('hidden')) {
+    requestAnimationFrame(() => fitTab(tab));
+  }
+}
+
 function logPromptEntry(tab, source, text) {
   if (!tab.folder || !text) return;
+  // Every prompt route (typed, queue-dispatched, Slack) funnels through here,
+  // so this is the one place the strip has to be updated.
+  setLastPrompt(tab, text);
   // If a previous prompt is still waiting on Claude's response, finalize it
   // with whatever is in the response buffer before starting a new one.
   if (tab.pendingPromptIndex >= 0) {
@@ -10902,6 +10976,18 @@ function taskStatusCounts(tab) {
   return counts;
 }
 
+// Everything still on the board that isn't finished. Build is offered whenever
+// ANY ticket sits outside `done` — not just `todo`/`failed-testing` — so a board
+// whose remaining work is mid-column (defining, in-progress, testing, or any
+// custom column) can still be kicked off by hand.
+function unfinishedTaskCount(tab) {
+  let n = 0;
+  for (const tk of tab.tasks.tickets.values()) {
+    if (tk.fm.status !== 'done') n++;
+  }
+  return n;
+}
+
 // Reflect Build/Stop state on the toolbar button. When auto-build is running the
 // button becomes a Stop control; otherwise it's enabled only once the skill is
 // installed and there is something to build.
@@ -10918,8 +11004,7 @@ function updateBuildBtn(tab) {
   }
   btn.textContent = 'Build';
   btn.classList.remove('building');
-  const counts = taskStatusCounts(tab);
-  const pending = counts.todo + counts['failed-testing'];
+  const pending = unfinishedTaskCount(tab);
   btn.disabled = !t.skillInstalled || pending === 0;
   btn.title = t.skillInstalled
     ? 'Build queued tickets until the board is clear'
@@ -10955,9 +11040,8 @@ function toggleAutoBuild(tab) {
     return;
   }
   if (!t.skillInstalled) return;
-  const counts = taskStatusCounts(tab);
   // Nothing to do — don't start a loop that would immediately stop itself.
-  if (counts.todo + counts['failed-testing'] === 0) return;
+  if (unfinishedTaskCount(tab) === 0) return;
   t.autoBuild = true;
   updateBuildBtn(tab);
   // Kick the first build directly. Unlike the auto-continuation, this initial

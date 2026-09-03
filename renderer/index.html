@@ -233,6 +233,16 @@
             <button class="opencodeLaunchBtn small-btn" disabled>Launch openCode</button>
           </div>
         </div>
+        <!-- Last prompt sent to the agent: a white highlighted strip pinned to
+             the top of the command window so the user can see at a glance what
+             claude is working on. Fed by logPromptEntry, so it covers every
+             route a prompt can take (typed, queue-dispatched, Slack). Hidden
+             until the first prompt of the session; the full text is on hover
+             and in the Logs panel. -->
+        <div class="lastPromptBar last-prompt-bar hidden">
+          <span class="last-prompt-label">Working on</span>
+          <span class="lastPromptText last-prompt-text"></span>
+        </div>
         <div class="cmdTerm term"></div>
       </section>
 
@@ -752,10 +762,15 @@
                 <div class="team-section-header">
                   <button type="button" class="team-section-toggle" aria-expanded="true">▾</button>
                   <span class="team-section-title">Board</span>
-                  <button class="teamBoardSaveBtn small-btn primary-btn" title="Write the whole team-config.json">Save</button>
                   <button class="teamBoardRefresh small-btn" title="Re-read tasks/team-config.json">Refresh</button>
                 </div>
                 <div class="teamBoardBody team-section-body">(open a folder)</div>
+                <!-- Save lives at the FOOTER of the section (not the header) so it
+                     reads as the commit step for the edits above it. It collapses
+                     with the section body via .team-section.collapsed. -->
+                <div class="team-section-footer">
+                  <button class="teamBoardSaveBtn small-btn primary-btn" title="Write the whole team-config.json">Save</button>
+                </div>
               </div>
             </div>
           </div>

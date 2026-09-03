@@ -1,9 +1,9 @@
 ---
 id: TASK-208
 title: QConnect is not replicating the client notes or contact status correctly
-status: defining
+status: done
 created: 2026-08-07T00:00:00.000Z
-updated: 2026-08-07T01:05:00.000Z
+updated: 2026-08-20T04:46:08.317Z
 jira-key: DEV-14449
 jira-url: https://officehq.atlassian.net/browse/DEV-14449
 jira-status: TODO
@@ -12,6 +12,7 @@ jira-type: Support
 jira-parent: DEV-14213
 jira-links: Relates to JS-230
 imported-from: TASK-207
+resolution: wont-do
 ---
 
 ## Description

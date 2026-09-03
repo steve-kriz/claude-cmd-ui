@@ -227,6 +227,12 @@ a hardcoded phase pipeline:
   way, a **defined** ticket returns to **`todo`** — never straight into
   `in-progress` — so the build column's **claim** (below) is what actually
   picks it up next.
+  - **A defined ticket's `## Acceptance Criteria` are frozen.** Once a ticket
+    leaves `defining`, no agent widens, narrows, or re-words them — only the
+    user does, via an answered `question` or `## Additional Context`. They are
+    the **only** basis on which a later column may fail the work, so a reviewer
+    wanting to add a criterion after the code is written is out of scope by
+    construction (see **Review-type columns: two verdicts**).
   - **Multiple undefined `todo` tickets discovered at once** (a fresh
     re-scan, or several created mid-build) are parked into `defining` and
     dispatched together, in **one message** — never one-at-a-time — subject
@@ -475,6 +481,26 @@ whose agent reviews the ticket and the implementation rather than building it
 severity, and every review dispatch resolves to **exactly one** of two
 verdicts — never both, never neither:
 
+Two structural rules bound **both** verdicts, and you enforce them on every
+review dispatch:
+
+- **A findings budget.** A review agent returns **at most 3 findings, force
+  ranked by severity, highest first** — fewer when fewer survive, and
+  **returning zero findings is a normal and expected outcome**, not a sign the
+  review was shallow. If a report comes back longer than three, keep the three
+  most severe and record the remainder as observations; never let an over-long
+  report expand into extra work.
+- **The Acceptance Criteria are the only failure basis.** A review may fail the
+  work on exactly two grounds: the implementation does not satisfy a **stated**
+  acceptance criterion of that ticket (frozen at `defining`), or it breaks
+  something that previously worked. Style, naming, formatting, code
+  organisation, and hypothetical future refactors are **out of scope** unless
+  they cause a correctness or security problem the reviewer names concretely.
+- **Everything outside those two grounds is an _observation_, not a defect.**
+  Observations live in the run summary and **expire when the ticket reaches
+  `done`** — they never become tickets and nothing downstream is obliged to act
+  on them. Without that expiring bucket every remark becomes work by default.
+
 **(a) Reject-and-rework (blocking).** The reviewer's report carries an
 explicit reject verdict — typically triggered by a `critical` finding the
 reviewer judges must be fixed before this ticket can proceed, but it is the
@@ -514,10 +540,18 @@ column.
 verdict, or for any lower-severity finding, the reviewed ticket's status is
 **not** touched by this path. Instead:
 
-- For a non-blocking `critical`/`high-security` finding, create a **new
-  follow-up `todo` ticket** — you (the orchestrator) create it, the reviewer
-  only reports it — with an id continuing the `TASK-nnn` sequence from the
-  **true maximum** id found across all status subfolders
+- **You are the single gate — no agent creates tickets.** Reviewers report;
+  **you** decide what becomes work. Put the pooled findings through the **last
+  review column's agent as a triage step** (`orchestrate-tech-lead` in the
+  worked example): its output is a **strictly smaller**, force-ranked list, and
+  it is obliged to discard anything not traceable to a stated acceptance
+  criterion, a demonstrable regression, or a concrete security defect. Only
+  what survives triage is eligible to become a ticket. On a board with no
+  review column nothing is eligible — the findings stay observations.
+- For a **surviving** non-blocking `critical`/`high-security` finding, create a
+  **new follow-up `todo` ticket** — you (the orchestrator) create it, the
+  reviewer only reports it — with an id continuing the `TASK-nnn` sequence
+  from the **true maximum** id found across all status subfolders
   (`tasks/*/TASK-*.md`), never reusing an existing id and never skipping
   ahead of the real maximum. That follow-up ticket must:
   - **Carry a `review-of: <reviewed ticket id>` frontmatter key** (e.g.
@@ -528,11 +562,35 @@ verdict, or for any lower-severity finding, the reviewed ticket's status is
     reviewer's short (1–3 sentence) impact statement for that finding — the
     concrete consequence of leaving the issue unfixed, so the user can weigh
     whether to build it.
-- Medium/low/nit findings create **no** ticket — note them in the run summary
-  only.
+- Everything the triage step discarded, and everything over the 3-finding
+  budget, creates **no** ticket. Medium/low/nit findings create **no** ticket —
+  note them in the run summary only, as observations that expire when the
+  reviewed ticket reaches `done`.
 - Either way, creating (or not creating) a follow-up never changes the
   reviewed ticket's status or frontmatter — the reviewed ticket keeps
   advancing through the forward flow untouched by this path.
+
+### Break the recursion (a review follow-up never re-enters the same cycle)
+
+A follow-up ticket raised by a review is **deferred backlog work, not part of
+the current cycle**. In the same `/orchestrate build` run that created it you
+**never** select, claim, or dispatch a ticket carrying a `review-of:` key — no
+matter how many concurrency slots are free. It waits in `todo` until the user
+queues it deliberately on a later run.
+
+This is what stops the pipeline diverging. Without it each generation of review
+follow-ups is itself reviewed, raising the next generation, and three tickets
+become fifteen without ever converging. Batch them instead: at the end of the
+run report **how many follow-ups were raised and which tickets they came from**
+as one list for the user's periodic backlog review, then stop.
+
+Two consequences worth stating plainly:
+
+- **A follow-up is never auto-built.** `selectNextBatch` still counts a `todo`
+  ticket as claimable, so this rule is yours to enforce at selection time:
+  filter `review-of:` tickets out of the batch before you claim anything.
+- **A follow-up never re-opens its parent.** The ticket it was raised against
+  keeps advancing to `done` regardless (see **Reaching done** below).
 
 ### Reaching done (terminal)
 

@@ -521,9 +521,11 @@ test('Scenario: Toggle button is keyboard-accessible', () => {
   const buttonRegex = /<button[^>]*class="team-section-toggle"[^>]*>/g;
   const buttons = [...htmlSrc.matchAll(buttonRegex)];
 
-  // TASK-203: the Workflow section (and its toggle) was removed, so only the
-  // Agents and Board sections ship a toggle now.
-  assert.ok(buttons.length === 2, 'Exactly two toggle buttons exist');
+  // One toggle per .team-section, whatever the current set of sections is
+  // (TASK-203 removed Workflow; Integrations was added since).
+  const sections = [...htmlSrc.matchAll(/class="team\w*Section team-section"/g)];
+  assert.ok(sections.length >= 2, 'at least the Agents and Board sections exist');
+  assert.equal(buttons.length, sections.length, 'one toggle button per team section');
 
   for (const match of buttons) {
     const buttonHtml = match[0];
